@@ -1,0 +1,16 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <p th:text="${bodyText}">Welcome to Catananti Dev!</p>
+ <p th:text="${exploreText}">Here's what you can do:</p>
+ <ul>
+ <li th:text="${item1}">Browse articles</li>
+ <li th:text="${item2}">Leave comments</li>
+ <li th:text="${item3}">Customize your profile</li>
+ </ul>
+ <p th:text="${visitText}">Visit the site:</p>
+ <div class="button-center">
+ <a th:href="${siteUrl}" class="button" style="background: #6366f1;" th:text="${siteUrl}">Visit Site</a>
+ </div>
+ </th:block>
+</th:block>
