@@ -1,0 +1,16 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <p th:text="${bodyText}">Thank you for reaching out! We have received your message.</p>
+ <div class="alert-box alert-info">
+ <strong th:text="${summaryTitle}">Your message</strong>
+ <p style="margin-bottom: 4px;"><strong th:text="${subjectLabel}">Subject:</strong> <span th:text="${messageSubject}">Your subject</span></p>
+ <p style="margin-bottom: 0;" th:text="${messagePreview}">Your message preview...</p>
+ </div>
+ <p th:text="${responseText}">We will review your message and respond as soon as possible.</p>
+ <p th:text="${visitText}">In the meantime, feel free to visit the blog:</p>
+ <div class="button-center">
+ <a th:href="${siteUrl}" class="button" style="background: #0ea5e9;" th:text="${buttonText}">Visit Blog</a>
+ </div>
+ </th:block>
+</th:block>

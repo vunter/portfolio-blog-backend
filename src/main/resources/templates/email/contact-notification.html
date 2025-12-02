@@ -1,0 +1,20 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello Admin,</p>
+ <p th:text="${introText}">A new contact message has been received:</p>
+ <table class="info-table">
+ <tr>
+ <td th:text="${fromLabel}">From</td>
+ <td><span th:text="${senderName}">John Doe</span> (<a th:href="'mailto:' + ${senderEmail}" th:text="${senderEmail}">john@example.com</a>)</td>
+ </tr>
+ <tr>
+ <td th:text="${subjectLabel}">Subject</td>
+ <td th:text="${messageSubject}">Contact Subject</td>
+ </tr>
+ </table>
+ <div class="comment-box">
+ <p th:text="${messageContent}">The contact message content.</p>
+ </div>
+ <p class="small-text" th:text="${footerNote}">This message was sent from the Portfolio Contact Form.</p>
+ </th:block>
+</th:block>

@@ -1,0 +1,12 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello Author,</p>
+ <p th:utext="${bodyText}">Someone commented on your article.</p>
+ <div class="comment-box">
+ <p th:text="${commentContent}">The comment text.</p>
+ </div>
+ <div class="button-center">
+ <a th:href="${articleUrl}" class="button" style="background: #f59e0b; color: #ffffff;" th:text="${viewText}">View Article</a>
+ </div>
+ </th:block>
+</th:block>
