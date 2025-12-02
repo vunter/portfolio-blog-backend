@@ -1,0 +1,20 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <div class="alert-box alert-danger">
+ <strong th:text="${alertTitle}">Security Alert</strong>
+ <p th:text="${alertBody}">Multiple failed login attempts detected.</p>
+ </div>
+ <div class="alert-box alert-info">
+ <strong th:text="${detailsTitle}">Details</strong>
+ <ul style="margin-bottom: 0;">
+ <li th:text="${failedAttemptsText}">Failed attempts: 5</li>
+ <li th:text="${lockDurationText}">Locked for: 15 minutes</li>
+ <li th:text="${sourceIpText}">Source IP: 192.168.1.1</li>
+ </ul>
+ </div>
+ <p><strong th:text="${ifYouText}">If this was you:</strong></p>
+ <p><strong th:text="${ifNotYouText}">If this was not you:</strong></p>
+ <p th:utext="${supportText}">Contact support.</p>
+ </th:block>
+</th:block>

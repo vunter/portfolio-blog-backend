@@ -1,0 +1,13 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <div class="alert-box alert-success">
+ <strong th:text="${reactivatedTitle}">Account Reactivated!</strong>
+ <p style="margin-bottom: 0;" th:text="${reactivatedBody}">Your account has been reactivated. You can now log in again.</p>
+ </div>
+ <p th:text="${accessText}">All your previous content and settings are intact.</p>
+ <div class="button-center">
+ <a th:href="${loginUrl}" class="button" style="background: #10b981;" th:text="${buttonText}">Log In Now</a>
+ </div>
+ </th:block>
+</th:block>

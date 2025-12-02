@@ -1,0 +1,19 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <div class="alert-box alert-danger">
+ <strong th:text="${deactivatedTitle}">Account Deactivated</strong>
+ <p style="margin-bottom: 0;" th:text="${deactivatedBody}">Your account has been deactivated by an administrator.</p>
+ </div>
+ <p th:text="${effectText}">While your account is deactivated:</p>
+ <ul>
+ <li th:text="${effect1}">You will not be able to log in</li>
+ <li th:text="${effect2}">Your content remains saved</li>
+ <li th:text="${effect3}">You can contact support to resolve this</li>
+ </ul>
+ <p th:text="${contactText}">If you believe this was a mistake, please contact:</p>
+ <p>
+ <a th:href="'mailto:' + ${supportEmail}" th:text="${supportEmail}" style="color: #ef4444; font-weight: 600;">support@catananti.dev</a>
+ </p>
+ </th:block>
+</th:block>
