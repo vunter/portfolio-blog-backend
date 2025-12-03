@@ -1,0 +1,23 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <div class="alert-box alert-success">
+ <strong th:text="${approvedTitle}">Role Upgrade Approved!</strong>
+ <p style="margin-bottom: 0;" th:text="${approvedBody}">Your role upgrade request has been approved.</p>
+ </div>
+ <table class="info-table">
+ <tr>
+ <td th:text="${previousRoleLabel}">Previous Role</td>
+ <td th:text="${previousRole}">USER</td>
+ </tr>
+ <tr>
+ <td th:text="${newRoleLabel}">New Role</td>
+ <td><strong th:text="${newRole}">DEV</strong></td>
+ </tr>
+ </table>
+ <p th:text="${effectiveText}">Your new permissions are already active.</p>
+ <div class="button-center">
+ <a th:href="${siteUrl}" class="button" style="background: #10b981;" th:text="${buttonText}">Go to Site</a>
+ </div>
+ </th:block>
+</th:block>

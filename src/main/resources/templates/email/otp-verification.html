@@ -1,0 +1,15 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <p th:text="${bodyText}">Your one-time verification code is:</p>
+ <div class="code-block" th:text="${otpCode}">123456</div>
+ <div class="alert-box alert-warning">
+ <strong> <span th:text="${importantTitle}">Important</span></strong>
+ <ul style="margin-bottom: 0;">
+ <li th:text="${expiresText}">This code expires in 10 minutes</li>
+ <li th:text="${neverShareText}">Never share this code with anyone</li>
+ <li th:text="${ignoreText}">If you didn't request this, ignore this email</li>
+ </ul>
+ </div>
+ </th:block>
+</th:block>

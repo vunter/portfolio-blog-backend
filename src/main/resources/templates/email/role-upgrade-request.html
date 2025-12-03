@@ -1,0 +1,21 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p>Hi Admin,</p>
+ <p>A user has requested a role upgrade:</p>
+ <table class="info-table">
+ <tr>
+ <td>User</td>
+ <td><span th:text="${userName}">User Name</span> (<span th:text="${userEmail}">user@example.com</span>)</td>
+ </tr>
+ <tr>
+ <td>Requested Role</td>
+ <td><strong th:text="${requestedRole}">DEV</strong></td>
+ </tr>
+ <tr>
+ <td>Reason</td>
+ <td th:utext="${reason}">No reason provided</td>
+ </tr>
+ </table>
+ <p>Please review this request in the admin panel under <strong>Users → Role Requests</strong>.</p>
+ </th:block>
+</th:block>

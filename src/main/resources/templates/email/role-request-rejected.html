@@ -1,0 +1,23 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <div class="alert-box alert-warning">
+ <strong th:text="${rejectedTitle}">Role Upgrade Not Approved</strong>
+ <p style="margin-bottom: 0;" th:text="${rejectedBody}">Your role upgrade request was not approved at this time.</p>
+ </div>
+ <table class="info-table">
+ <tr>
+ <td th:text="${requestedRoleLabel}">Requested Role</td>
+ <td th:text="${requestedRole}">DEV</td>
+ </tr>
+ <tr>
+ <td th:text="${currentRoleLabel}">Current Role</td>
+ <td th:text="${currentRole}">USER</td>
+ </tr>
+ </table>
+ <p th:text="${contactText}">If you have questions about this decision, please contact support:</p>
+ <p>
+ <a th:href="'mailto:' + ${supportEmail}" th:text="${supportEmail}" style="color: #6366f1; font-weight: 600;">support@catananti.dev</a>
+ </p>
+ </th:block>
+</th:block>
