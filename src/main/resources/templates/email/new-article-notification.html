@@ -1,0 +1,13 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <p th:text="${introText}">A new article has been published.</p>
+ <div class="article-card">
+ <h2 th:text="${articleTitle}">Article Title</h2>
+ <p th:if="${articleExcerpt}" th:text="${articleExcerpt}">Article excerpt goes here.</p>
+ <div class="button-center" style="margin-bottom: 0;">
+ <a th:href="${articleUrl}" class="button" style="background: #3b82f6;" th:text="${buttonText}">Read Article</a>
+ </div>
+ </div>
+ </th:block>
+</th:block>

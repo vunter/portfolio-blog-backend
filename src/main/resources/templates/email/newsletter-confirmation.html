@@ -1,0 +1,11 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <p th:text="${bodyText}">Thank you for subscribing.</p>
+ <p th:text="${actionText}">Click below to confirm.</p>
+ <div class="button-center">
+ <a th:href="${confirmUrl}" class="button" style="background: #667eea;" th:text="${buttonText}">Confirm Subscription</a>
+ </div>
+ <p class="small-text" th:text="${disclaimer}">This link expires in 48 hours.</p>
+ </th:block>
+</th:block>

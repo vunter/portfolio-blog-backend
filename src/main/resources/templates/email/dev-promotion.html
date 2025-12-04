@@ -1,0 +1,23 @@
+﻿<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p>Hi <span th:text="${displayName}">Developer</span>,</p>
+ <p>Congratulations! You have been promoted and now have a <strong>@catananti.dev</strong> email address:</p>
+ <div class="code-block" th:text="${newEmail}">dev@catananti.dev</div>
+ <p>Emails sent to this address are automatically forwarded to your current email (<strong th:text="${currentEmail}">user@gmail.com</strong>).</p>
+
+ <hr class="divider"/>
+
+ <h3 th:text="'How to send emails FROM ' + ${newEmail} + ' using Gmail:'">Setup Instructions</h3>
+ <ol>
+ <li>Open <a href="https://mail.google.com/mail/u/0/#settings/accounts">Gmail Settings → Accounts</a></li>
+ <li>Under "Send mail as", click <strong>"Add another email address"</strong></li>
+ <li>Enter your name and <strong th:text="${newEmail}">dev@catananti.dev</strong> as the email</li>
+ <li>Uncheck "Treat as an alias" (optional)</li>
+ <li>For SMTP server, use: <strong>smtp.resend.com</strong>, Port <strong>465</strong> (SSL)</li>
+ <li>Username: <strong>resend</strong></li>
+ <li>Password: ask your admin for the Resend API key</li>
+ <li>Click "Add Account" and verify via the confirmation email</li>
+ </ol>
+ <p>You can now select <strong th:text="${newEmail}">dev@catananti.dev</strong> as your "From" address when composing emails in Gmail!</p>
+ </th:block>
+</th:block>
