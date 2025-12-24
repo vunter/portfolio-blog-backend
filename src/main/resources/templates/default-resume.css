@@ -1,0 +1,18 @@
+/* Resume Default Styles */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', Roboto, sans-serif; font-size: 11pt; line-height: 1.5; color: #333; padding: 40px; max-width: 800px; margin: 0 auto; }
+.header { text-align: center; margin-bottom: 24px; border-bottom: 2px solid #3b82f6; padding-bottom: 16px; }
+.header h1 { font-size: 28pt; color: #1e293b; margin-bottom: 8px; }
+.header .subtitle { font-size: 14pt; color: #64748b; }
+.contact-info { display: flex; justify-content: center; gap: 24px; flex-wrap: wrap; margin-top: 12px; font-size: 10pt; }
+.contact-info span { color: #475569; }
+.section { margin-bottom: 20px; }
+.section h2 { font-size: 14pt; color: #3b82f6; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.experience-item, .education-item { margin-bottom: 16px; }
+.experience-item h3, .education-item h3 { font-size: 12pt; color: #1e293b; margin-bottom: 4px; }
+.experience-item .meta, .education-item .meta { font-size: 10pt; color: #64748b; margin-bottom: 8px; }
+.experience-item ul { margin-left: 20px; }
+.experience-item li { margin-bottom: 4px; }
+.skills-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.skill-tag { background: #eff6ff; color: #3b82f6; padding: 4px 12px; border-radius: 4px; font-size: 10pt; }
+@media print { body { padding: 0; } }
