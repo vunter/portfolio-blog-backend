@@ -1,0 +1,329 @@
+# ============================================
+# Portfolio Blog V2 - Cloud Compose (DigitalOcean)
+# Deploy target: Droplet (146.190.67.249)
+# PostgreSQL: local container (replaces rpi5)
+# Secrets: Doppler (replaces HashiCorp Vault)
+# ============================================
+
+services:
+  # PostgreSQL (cloud-only — replaces external rpi5 K3s DB)
+  postgres:
+    image: postgres:17-alpine
+    container_name: blog-postgres
+    environment:
+      - POSTGRES_DB=blog
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_ROOT_PASSWORD}
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+      - ../../src/main/resources/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d blog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"postgresql","service":"blog-postgres"}]'
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Spring Boot API (Java 25 + WebFlux)
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        MAVEN_SETTINGS: ""
+    container_name: portfolio-blog-api
+    environment:
+      - SPRING_PROFILES_ACTIVE=cloud
+      # ── Vault: DISABLED — Doppler replaces Vault for cloud ──
+      - SPRING_CONFIG_IMPORT=
+      - SPRING_CLOUD_VAULT_ENABLED=false
+      # ── Database — Doppler injects DB_USERNAME, DB_PASSWORD ──
+      - DATABASE_URL=r2dbc:postgresql://postgres:5432/blog
+      - DATABASE_USERNAME=${DB_USERNAME:-blogadmin}
+      - DATABASE_PASSWORD=${DB_PASSWORD}
+      # ── Redis ──
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD}
+      - SPRING_CACHE_TYPE=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      # ── JWT (Doppler injects JWT_SECRET) ──
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_COOKIE_SECURE=true
+      - JWT_COOKIE_DOMAIN=${JWT_COOKIE_DOMAIN:-catananti.dev}
+      # ── CORS ──
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://catananti.dev,https://www.catananti.dev}
+      # ── Admin seed (Doppler injects ADMIN_PASSWORD) ──
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@catananti.dev}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # ── reCAPTCHA ──
+      - RECAPTCHA_ENABLED=${RECAPTCHA_ENABLED:-false}
+      - RECAPTCHA_SITE_KEY=${RECAPTCHA_SITE_KEY:-}
+      - RECAPTCHA_SECRET_KEY=${RECAPTCHA_SECRET_KEY:-}
+      # ── Email (Resend SMTP) ──
+      - MAIL_HOST=${MAIL_HOST:-smtp.resend.com}
+      - MAIL_PORT=${MAIL_PORT:-465}
+      - MAIL_USERNAME=${MAIL_USERNAME:-}
+      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
+      - MAIL_FROM=${MAIL_FROM:-noreply@catananti.dev}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Catananti Portfolio}
+      - CONTACT_NOTIFICATION_EMAIL=${CONTACT_NOTIFICATION_EMAIL:-admin@catananti.dev}
+      - EMAIL_SUPPORT=${EMAIL_SUPPORT:-admin@catananti.dev}
+      - MANAGEMENT_HEALTH_MAIL_ENABLED=false
+      # ── App ──
+      - APP_URL=${APP_URL:-https://catananti.dev}
+      - APP_SITE_URL=${APP_SITE_URL:-https://catananti.dev}
+      # ── Cloudflare Email Routing ──
+      - CF_API_TOKEN=${CF_API_TOKEN:-}
+      - CF_ZONE_ID=${CF_ZONE_ID:-}
+      - CF_EMAIL_DOMAIN=${CF_EMAIL_DOMAIN:-catananti.dev}
+      - CF_EMAIL_ROUTING_ENABLED=${CF_EMAIL_ROUTING_ENABLED:-false}
+      # ── Datadog APM ──
+      - DD_AGENT_ENABLED=${DD_AGENT_ENABLED:-true}
+      - DD_AGENT_HOST=datadog-agent
+      - DD_TRACE_AGENT_URL=http://datadog-agent:8126
+      - DD_SERVICE=portfolio-blog-api
+      - DD_ENV=production
+      - DD_VERSION=2.0.0
+      - DD_LOGS_INJECTION=true
+      - DD_PROFILING_ENABLED=false
+      - DD_METRICS_ENABLED=true
+      - DD_API_KEY=${DD_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    volumes:
+      - uploads_data:/app/uploads
+      - app_logs:/app/logs
+    networks:
+      - blog-frontend-network
+      - blog-backend-network
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"java","service":"portfolio-blog-api"}]'
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: blog-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"redis","service":"blog-redis"}]'
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Frontend (Angular SSR)
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY: "https://registry.npmjs.org/"
+    container_name: portfolio-blog-frontend
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:4000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - blog-frontend-network
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+      - /var/cache/nginx:size=64M,uid=101,gid=101
+      - /var/run:size=1M,uid=101,gid=101
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"nginx","service":"portfolio-blog-frontend"}]'
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Nginx Reverse Proxy (SSL termination)
+  nginx:
+    image: nginx:alpine
+    container_name: blog-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx-cloud.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../../nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
+    depends_on:
+      app:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    networks:
+      - blog-frontend-network
+      - blog-backend-network
+    restart: unless-stopped
+    tmpfs:
+      - /tmp:size=64M
+      - /var/cache/nginx:size=128M
+      - /var/run:size=1M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"nginx","service":"blog-nginx"}]'
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Prometheus (metrics — SSH tunnel to local Grafana)
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: blog-prometheus
+    volumes:
+      - ../../prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../prometheus/bearer_token:/etc/prometheus/bearer_token:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+      - '--web.external-url=/prometheus'
+      - '--web.route-prefix=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # Datadog Agent (APM + logs + infra metrics)
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    container_name: datadog-agent
+    pid: host
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE:-us5.datadoghq.com}
+      - DD_APM_ENABLED=true
+      - DD_APM_NON_LOCAL_TRAFFIC=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_CONTAINER_EXCLUDE="name:datadog-agent"
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_PROCESS_AGENT_ENABLED=true
+      - DD_TAGS=env:production,service:portfolio-blog,team:catananti
+      - DD_HOSTNAME=droplet-cloud
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - blog-backend-network
+      - blog-frontend-network
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+networks:
+  blog-frontend-network:
+    driver: bridge
+  blog-backend-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  uploads_data:
+  app_logs:
+  certbot_webroot:
