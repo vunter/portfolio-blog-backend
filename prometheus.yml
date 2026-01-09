@@ -1,0 +1,45 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# F-430: TODO: Add alerting rules and AlertManager configuration
+# rule_files:
+#   - "alert_rules.yml"
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Portfolio Blog API
+  - job_name: 'portfolio-blog-api'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['app:8080']
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    # Authentication: generate a JWT for an ADMIN user and set PROMETHEUS_BEARER_TOKEN env var
+    # Example: use the /api/v1/admin/auth/login endpoint to get a long-lived token
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/bearer_token
+
+  # F-432: TODO: Add node_exporter for host-level metrics (CPU, memory, disk, network)
+  # - job_name: 'node'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']
+
+  # F-433: TODO: Add nginx-prometheus-exporter for HTTP traffic metrics
+  # - job_name: 'nginx'
+  #   static_configs:
+  #     - targets: ['nginx-exporter:9113']
+
+  # Redis Metrics (optional - requires redis_exporter)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
