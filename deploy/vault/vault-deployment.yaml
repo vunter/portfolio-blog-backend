@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  namespace: vault
+  labels:
+    app: vault
+  # F-422: TODO: Scale to 3 replicas with Raft HA for production
+  # F-426: TODO: Replace NodePort with ClusterIP + Ingress to restrict access
+  # TODO F-448: Add HorizontalPodAutoscaler when scaling beyond single replica
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8200"
+        prometheus.io/path: "/v1/sys/metrics"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: minimal-server
+      securityContext:
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.18
+          # F-424: Resource requests/limits for Vault container
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export VAULT_API_ADDR="http://${POD_IP}:8200"
+              export VAULT_CLUSTER_ADDR="https://${POD_IP}:8201"
+              exec vault server -config=/vault/config/vault.hcl
+          ports:
+            - containerPort: 8200
+              name: http
+            - containerPort: 8201
+              name: cluster
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8200"
+            - name: SKIP_CHOWN
+              value: "1"
+            - name: SKIP_SETCAP
+              value: "1"
+            - name: HOME
+              value: "/home/vault"
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
+          volumeMounts:
+            - name: vault-config
+              mountPath: /vault/config
+            - name: vault-data
+              mountPath: /vault/data
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+              port: 8200
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+              port: 8200
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: vault-config
+          configMap:
+            name: vault-config
+        - name: vault-data
+          persistentVolumeClaim:
+            claimName: vault-data

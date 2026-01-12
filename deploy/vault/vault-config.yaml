@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: vault
+data:
+  vault.hcl: |
+    ui = true
+    # F-427: disable_mlock=true allows encryption keys to be swapped to disk.
+    # Acceptable on K3s where IPC_LOCK capability is granted.
+    disable_mlock = true
+
+    storage "raft" {
+      path = "/vault/data"
+      node_id = "vault-0"
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0:8200"
+      # F-420: TODO: Enable TLS when cert-manager is deployed
+      # tls_cert_file = "/vault/tls/tls.crt"
+      # tls_key_file  = "/vault/tls/tls.key"
+      tls_disable = 1
+    }
+
+    # F-421: TODO: Add audit backend for secret access trail
+    # audit "file" {
+    #   file_path = "/vault/logs/audit.log"
+    # }
+
+    telemetry {
+      prometheus_retention_time = "30s"
+      disable_hostname = true
+    }
+
+    # F-425: TODO: Set AppRole secret_id_ttl and secret_id_num_uses to non-zero values
+    # for periodic rotation (e.g., secret_id_ttl=24h, secret_id_num_uses=100)
+
+    # api_addr and cluster_addr set via VAULT_API_ADDR / VAULT_CLUSTER_ADDR env vars
+    # (uses pod IP from K8s downward API for Raft compatibility)
