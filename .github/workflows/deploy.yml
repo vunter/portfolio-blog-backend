@@ -1,0 +1,71 @@
+﻿name: Build & Deploy to Cloud
+
+on:
+ push:
+ branches: [main]
+
+jobs:
+ test:
+ runs-on: ubuntu-latest
+ steps:
+ - uses: actions/checkout@v4
+
+ - uses: actions/setup-java@v4
+ with:
+ java-version: '25'
+ distribution: 'temurin'
+ cache: 'maven'
+
+ - name: Run tests
+ run: chmod +x mvnw && ./mvnw verify -B
+
+ build-and-deploy:
+ needs: test
+ runs-on: ubuntu-latest
+ steps:
+ - uses: actions/checkout@v4
+
+ - name: Build API image
+ run: docker build -t portfolio-blog-api .
+
+ - name: Build Frontend image
+ run: docker build -t portfolio-blog-frontend ./frontend
+
+ - name: Save images
+ run: |
+ docker save portfolio-blog-api | gzip > api.tar.gz
+ docker save portfolio-blog-frontend | gzip > frontend.tar.gz
+
+ - name: Copy images to Droplet
+ uses: appleboy/scp-action@v0.1.7
+ with:
+ host: ${{ secrets.DROPLET_IP }}
+ username: vunter
+ key: ${{ secrets.SSH_PRIVATE_KEY }}
+ source: "api.tar.gz,frontend.tar.gz"
+ target: "/home/vunter/portfolio-blog/"
+
+ - name: Copy source files to Droplet
+ uses: appleboy/scp-action@v0.1.7
+ with:
+ host: ${{ secrets.DROPLET_IP }}
+ username: vunter
+ key: ${{ secrets.SSH_PRIVATE_KEY }}
+ source: "deploy/cloud/,nginx/,prometheus.yml,prometheus/,src/main/resources/"
+ target: "/home/vunter/portfolio-blog/"
+
+ - name: Deploy on Droplet
+ uses: appleboy/ssh-action@v1.0.3
+ with:
+ host: ${{ secrets.DROPLET_IP }}
+ username: vunter
+ key: ${{ secrets.SSH_PRIVATE_KEY }}
+ script: |
+ cd ~/portfolio-blog
+ docker load < api.tar.gz
+ docker load < frontend.tar.gz
+ rm -f api.tar.gz frontend.tar.gz
+ cd deploy/cloud
+ doppler run -- docker compose -f docker-compose.cloud.yml up -d
+ docker image prune -f
+ echo " Deploy complete at $(date)"
