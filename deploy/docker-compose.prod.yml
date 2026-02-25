@@ -1,5 +1,5 @@
 # ============================================
-# Portfolio Blog V2 - Production Compose
+# Portfolio Blog - Production Compose
 # Deploy target: default-server (192.168.1.214)
 # PostgreSQL: rpi5 K3s (192.168.1.235:30432)
 # ============================================

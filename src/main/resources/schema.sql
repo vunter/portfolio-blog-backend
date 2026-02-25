@@ -1,5 +1,5 @@
 -- ============================================
--- Portfolio Blog V2 - Database Schema
+-- Portfolio Blog - Database Schema
 -- Uses BIGINT for IDs (Snowflake ID format)
 -- ============================================
 

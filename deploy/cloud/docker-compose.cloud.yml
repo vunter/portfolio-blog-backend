@@ -1,5 +1,5 @@
 # ============================================
-# Portfolio Blog V2 - Cloud Compose (DigitalOcean)
+# Portfolio Blog - Cloud Compose (DigitalOcean)
 # Deploy target: Droplet (146.190.67.249)
 # PostgreSQL: local container (replaces rpi5)
 # Secrets: Doppler (replaces HashiCorp Vault)

@@ -9,11 +9,11 @@
 		<relativePath/>
 	</parent>
 	<groupId>dev.catananti</groupId>
-	<artifactId>portfolio-blog-v2</artifactId>
+	<artifactId>portfolio-blog-backend</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>portfolio-blog-v2</name>
-	<description>Full-stack portfolio and blog platform with Spring Boot WebFlux, Angular 20 SSR, and PostgreSQL</description>
-	<url>https://github.com/catananti/portfolio-blog-v2</url>
+	<name>portfolio-blog-backend</name>
+	<description>Spring Boot backend for portfolio and blog platform with WebFlux, R2DBC, and PostgreSQL</description>
+	<url>https://github.com/vunter/portfolio-blog-backend</url>
 	<licenses>
 		<license>
 			<name>MIT License</name>
@@ -27,10 +27,10 @@
 		</developer>
 	</developers>
 	<scm>
-		<connection>scm:git:git://github.com/catananti/portfolio-blog-v2.git</connection>
-		<developerConnection>scm:git:ssh://github.com/catananti/portfolio-blog-v2.git</developerConnection>
+		<connection>scm:git:git://github.com/vunter/portfolio-blog-backend.git</connection>
+		<developerConnection>scm:git:ssh://github.com/vunter/portfolio-blog-backend.git</developerConnection>
 		<tag>HEAD</tag>
-		<url>https://github.com/catananti/portfolio-blog-v2</url>
+		<url>https://github.com/vunter/portfolio-blog-backend</url>
 	</scm>
 	<properties>
 		<java.version>25</java.version>

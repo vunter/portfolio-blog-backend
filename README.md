@@ -1,4 +1,4 @@
-# Portfolio Blog V2
+# Portfolio Blog Backend
 
 Fullstack reactive portfolio and blog platform with resume builder, built with Java 25 + Spring Boot 4.1 + Angular 20.
 
