@@ -1,6 +1,7 @@
 package dev.catananti.controller;
 
 import dev.catananti.dto.AnalyticsSummary;
+import dev.catananti.repository.UserRepository;
 import dev.catananti.service.AnalyticsService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -9,6 +10,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextImpl;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -23,8 +28,21 @@ class AdminAnalyticsControllerTest {
     @Mock
     private AnalyticsService analyticsService;
 
+    @Mock
+    private UserRepository userRepository;
+
     @InjectMocks
     private AdminAnalyticsController controller;
+
+    private <T> Mono<T> withAdminAuth(Mono<T> mono) {
+        lenient().when(userRepository.findByEmail("admin@test.com"))
+                .thenReturn(Mono.just(dev.catananti.entity.User.builder()
+                        .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+        var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        return mono.contextWrite(ReactiveSecurityContextHolder.withSecurityContext(
+                Mono.just(new SecurityContextImpl(auth))));
+    }
 
     private AnalyticsSummary buildSummary() {
         return AnalyticsSummary.builder()
@@ -48,7 +66,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(30)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalyticsSummary(30))
+            StepVerifier.create(withAdminAuth(controller.getAnalyticsSummary(30)))
                     .assertNext(result -> {
                         assertThat(result.getTotalViews()).isEqualTo(1000L);
                         assertThat(result.getTotalLikes()).isEqualTo(250L);
@@ -66,7 +84,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(7)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalyticsSummary(7))
+            StepVerifier.create(withAdminAuth(controller.getAnalyticsSummary(7)))
                     .assertNext(result -> assertThat(result.getTotalViews()).isEqualTo(1000L))
                     .verifyComplete();
 
@@ -84,7 +102,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(30)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalytics("30d"))
+            StepVerifier.create(withAdminAuth(controller.getAnalytics("30d")))
                     .assertNext(result -> {
                         assertThat(result.getTotalViews()).isEqualTo(1000L);
                         assertThat(result.getUniqueVisitors()).isEqualTo(700L);
@@ -98,7 +116,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(7)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalytics("7d"))
+            StepVerifier.create(withAdminAuth(controller.getAnalytics("7d")))
                     .assertNext(result -> assertThat(result.getTotalViews()).isEqualTo(1000L))
                     .verifyComplete();
         }
@@ -109,7 +127,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(30)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalytics("invalid"))
+            StepVerifier.create(withAdminAuth(controller.getAnalytics("invalid")))
                     .assertNext(result -> assertThat(result.getTotalViews()).isEqualTo(1000L))
                     .verifyComplete();
         }
@@ -120,7 +138,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(30)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalytics(""))
+            StepVerifier.create(withAdminAuth(controller.getAnalytics("")))
                     .assertNext(result -> assertThat(result.getTotalViews()).isEqualTo(1000L))
                     .verifyComplete();
         }
@@ -131,7 +149,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(365)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalytics("999d"))
+            StepVerifier.create(withAdminAuth(controller.getAnalytics("999d")))
                     .assertNext(result -> assertThat(result.getTotalViews()).isEqualTo(1000L))
                     .verifyComplete();
         }
@@ -142,7 +160,7 @@ class AdminAnalyticsControllerTest {
             AnalyticsSummary summary = buildSummary();
             when(analyticsService.getAnalyticsSummary(14)).thenReturn(Mono.just(summary));
 
-            StepVerifier.create(controller.getAnalytics("14"))
+            StepVerifier.create(withAdminAuth(controller.getAnalytics("14")))
                     .assertNext(result -> assertThat(result.getTotalViews()).isEqualTo(1000L))
                     .verifyComplete();
         }

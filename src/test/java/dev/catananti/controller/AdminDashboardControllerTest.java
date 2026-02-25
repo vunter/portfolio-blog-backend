@@ -17,7 +17,13 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextImpl;
+
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,6 +40,16 @@ class AdminDashboardControllerTest {
 
     @InjectMocks
     private AdminDashboardController controller;
+
+    private <T> Mono<T> withAdminAuth(Mono<T> mono) {
+        lenient().when(userRepository.findByEmail("admin@test.com"))
+                .thenReturn(Mono.just(dev.catananti.entity.User.builder()
+                        .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+        var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        return mono.contextWrite(ReactiveSecurityContextHolder.withSecurityContext(
+                Mono.just(new SecurityContextImpl(auth))));
+    }
 
     @Nested
     @DisplayName("GET /api/v1/admin/dashboard/stats")
@@ -52,7 +68,7 @@ class AdminDashboardControllerTest {
             when(articleRepository.sumViewsCount()).thenReturn(Mono.just(1000L));
             when(tagRepository.count()).thenReturn(Mono.just(10L));
 
-            StepVerifier.create(controller.getDashboardStats())
+            StepVerifier.create(withAdminAuth(controller.getDashboardStats()))
                     .assertNext(stats -> {
                         assertThat(stats.get("totalArticles")).isEqualTo(42L);
                         assertThat(stats.get("publishedArticles")).isEqualTo(30L);
@@ -81,7 +97,7 @@ class AdminDashboardControllerTest {
             when(articleRepository.sumViewsCount()).thenReturn(Mono.just(0L));
             when(tagRepository.count()).thenReturn(Mono.just(0L));
 
-            StepVerifier.create(controller.getDashboardStats())
+            StepVerifier.create(withAdminAuth(controller.getDashboardStats()))
                     .assertNext(stats -> {
                         assertThat(stats.get("totalArticles")).isEqualTo(0L);
                         assertThat(stats.get("totalUsers")).isEqualTo(1L);
@@ -110,7 +126,7 @@ class AdminDashboardControllerTest {
 
             when(articleRepository.findRecentlyUpdated(anyInt())).thenReturn(Flux.just(published, draft));
 
-            StepVerifier.create(controller.getRecentActivity())
+            StepVerifier.create(withAdminAuth(controller.getRecentActivity()))
                     .assertNext(activities -> {
                         assertThat(activities).isNotEmpty();
                         assertThat(activities.size()).isLessThanOrEqualTo(10);
@@ -128,7 +144,7 @@ class AdminDashboardControllerTest {
         void shouldReturnEmptyActivity() {
             when(articleRepository.findRecentlyUpdated(anyInt())).thenReturn(Flux.empty());
 
-            StepVerifier.create(controller.getRecentActivity())
+            StepVerifier.create(withAdminAuth(controller.getRecentActivity()))
                     .assertNext(activities -> assertThat(activities).isEmpty())
                     .verifyComplete();
         }

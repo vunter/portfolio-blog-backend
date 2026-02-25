@@ -2,6 +2,7 @@ package dev.catananti.controller;
 
 import dev.catananti.dto.TagRequest;
 import dev.catananti.dto.TagResponse;
+import dev.catananti.repository.UserRepository;
 import dev.catananti.service.TagService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,11 +12,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextImpl;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -27,8 +33,21 @@ class AdminTagControllerTest {
     @Mock
     private TagService tagService;
 
+    @Mock
+    private UserRepository userRepository;
+
     @InjectMocks
     private AdminTagController controller;
+
+    private <T> Mono<T> withAdminAuth(Mono<T> mono) {
+        lenient().when(userRepository.findByEmail("admin@test.com"))
+                .thenReturn(Mono.just(dev.catananti.entity.User.builder()
+                        .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+        var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        return mono.contextWrite(ReactiveSecurityContextHolder.withSecurityContext(
+                Mono.just(new SecurityContextImpl(auth))));
+    }
 
     private TagResponse javaTag;
     private TagResponse springTag;
@@ -76,7 +95,7 @@ class AdminTagControllerTest {
         void shouldReturnAllTags() {
             when(tagService.getAllTags("en")).thenReturn(Flux.just(javaTag, springTag, angularTag));
 
-            StepVerifier.create(controller.getAllTags("en"))
+            StepVerifier.create(withAdminAuth(controller.getAllTags("en")))
                     .assertNext(tags -> {
                         assertThat(tags).hasSize(3);
                         assertThat(tags.get(0).getSlug()).isEqualTo("java");
@@ -92,7 +111,7 @@ class AdminTagControllerTest {
         void shouldReturnEmptyList() {
             when(tagService.getAllTags("en")).thenReturn(Flux.empty());
 
-            StepVerifier.create(controller.getAllTags("en"))
+            StepVerifier.create(withAdminAuth(controller.getAllTags("en")))
                     .assertNext(tags -> assertThat(tags).isEmpty())
                     .verifyComplete();
         }

@@ -22,13 +22,17 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.server.WebFilter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -620,13 +624,23 @@ class ApiEndpointIntegrationTest {
     class AdminTagCrud {
 
         @Mock private TagService tagService;
+        @Mock private UserRepository userRepository;
         @InjectMocks private AdminTagController adminTagController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
+            lenient().when(userRepository.findByEmail("admin@test.com"))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder()
+                            .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+            var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
+                    List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+            var secCtx = new SecurityContextImpl(auth);
+            WebFilter secFilter = (exchange, chain) -> chain.filter(exchange)
+                    .contextWrite(ReactiveSecurityContextHolder.withSecurityContext(Mono.just(secCtx)));
             client = WebTestClient.bindToController(adminTagController)
+                    .webFilter(secFilter)
                     .configureClient().build();
         }
 
@@ -1055,7 +1069,16 @@ class ApiEndpointIntegrationTest {
 
         @BeforeEach
         void setUp() {
+            lenient().when(userRepository.findByEmail("admin@test.com"))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder()
+                            .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+            var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
+                    List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+            var secCtx = new SecurityContextImpl(auth);
+            WebFilter secFilter = (exchange, chain) -> chain.filter(exchange)
+                    .contextWrite(ReactiveSecurityContextHolder.withSecurityContext(Mono.just(secCtx)));
             client = WebTestClient.bindToController(dashboardController)
+                    .webFilter(secFilter)
                     .configureClient().build();
         }
 
@@ -1118,13 +1141,23 @@ class ApiEndpointIntegrationTest {
     class AdminAnalytics {
 
         @Mock private AnalyticsService analyticsService;
+        @Mock private UserRepository userRepository;
         @InjectMocks private AdminAnalyticsController analyticsController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
+            lenient().when(userRepository.findByEmail("admin@test.com"))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder()
+                            .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+            var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
+                    List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+            var secCtx = new SecurityContextImpl(auth);
+            WebFilter secFilter = (exchange, chain) -> chain.filter(exchange)
+                    .contextWrite(ReactiveSecurityContextHolder.withSecurityContext(Mono.just(secCtx)));
             client = WebTestClient.bindToController(analyticsController)
+                    .webFilter(secFilter)
                     .configureClient().build();
         }
 

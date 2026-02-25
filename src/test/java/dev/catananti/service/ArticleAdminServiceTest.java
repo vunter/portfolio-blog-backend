@@ -21,6 +21,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextImpl;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -74,6 +78,16 @@ class ArticleAdminServiceTest {
     @InjectMocks
     private ArticleAdminService articleAdminService;
 
+    private <T> Mono<T> withAdminAuth(Mono<T> mono) {
+        lenient().when(userRepository.findByEmail("admin@test.com"))
+                .thenReturn(Mono.just(User.builder()
+                        .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+        var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        return mono.contextWrite(ReactiveSecurityContextHolder.withSecurityContext(
+                Mono.just(new SecurityContextImpl(auth))));
+    }
+
     private Article testArticle;
     private ArticleResponse testArticleResponse;
     private Long articleId;
@@ -122,7 +136,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(articleAdminService.getAllArticles(0, 10, null))
+            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null)))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                         assertThat(page.getTotalElements()).isEqualTo(1);
@@ -144,7 +158,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(articleAdminService.getAllArticles(0, 10, "published"))
+            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, "published")))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                     })
@@ -162,7 +176,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(Mono.just(List.of()));
 
             // When & Then
-            StepVerifier.create(articleAdminService.getAllArticles(0, 10, null))
+            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null)))
                     .assertNext(page -> {
                         assertThat(page.getContent()).isEmpty();
                         assertThat(page.getTotalElements()).isZero();
@@ -188,7 +202,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(articleAdminService.getArticleById(articleId))
+            StepVerifier.create(withAdminAuth(articleAdminService.getArticleById(articleId)))
                     .assertNext(response -> {
                         assertThat(response.getSlug()).isEqualTo("test-article");
                     })
