@@ -39,9 +39,14 @@ jobs:
 
       - name: Upload coverage to DeepSource
         if: always()
+        continue-on-error: true
         env:
           DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
         run: |
+          if [ -z "$DEEPSOURCE_DSN" ]; then
+            echo "DEEPSOURCE_DSN not set, skipping"
+            exit 0
+          fi
           curl -sSL https://deepsource.io/cli | sh
           ./bin/deepsource report --analyzer test-coverage --key java --value-file target/site/jacoco/jacoco.xml
 
