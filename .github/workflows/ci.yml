@@ -54,5 +54,7 @@ jobs:
           context: .
           push: false
           tags: portfolio-blog-backend:${{ github.sha }}
+          build-args: |
+            NEXUS_HOST=${{ secrets.NEXUS_HOST }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

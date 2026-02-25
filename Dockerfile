@@ -16,25 +16,31 @@ COPY pom.xml .
 # Make mvnw executable
 RUN chmod +x mvnw
 
-# Maven settings: use Nexus proxy locally, empty for cloud builds
-# Override with --build-arg MAVEN_SETTINGS="" to use Maven Central directly
-ARG MAVEN_SETTINGS="-s .mvn/nexus-settings.xml"
-
-# Download dependencies (cached layer)
-RUN ./mvnw dependency:go-offline -B $MAVEN_SETTINGS
+# Maven settings: use Nexus proxy when NEXUS_HOST is provided.
+# If NEXUS_HOST is empty, Maven falls back to Maven Central directly.
+ARG NEXUS_HOST=""
+ARG MAVEN_SETTINGS=""
+RUN if [ -n "$NEXUS_HOST" ]; then \
+      sed -i "s|__NEXUS_HOST__|${NEXUS_HOST}|g" .mvn/nexus-settings.xml && \
+      MAVEN_SETTINGS="-s .mvn/nexus-settings.xml"; \
+    fi && \
+    ./mvnw dependency:go-offline -B $MAVEN_SETTINGS
 
 # Copy source code
 COPY src ./src
 
 # Build the application (skip tests for faster builds)
-RUN ./mvnw clean package -Dmaven.test.skip=true -B $MAVEN_SETTINGS
+RUN if [ -n "$NEXUS_HOST" ]; then \
+      MAVEN_SETTINGS="-s .mvn/nexus-settings.xml"; \
+    fi && \
+    ./mvnw clean package -Dmaven.test.skip=true -B $MAVEN_SETTINGS
 
 # Deploy SNAPSHOT to Nexus (best-effort, don't fail build)
 ARG NEXUS_USERNAME=""
 ARG NEXUS_PASSWORD=""
-RUN if [ -n "$NEXUS_USERNAME" ]; then \
+RUN if [ -n "$NEXUS_USERNAME" ] && [ -n "$NEXUS_HOST" ]; then \
       NEXUS_USERNAME=$NEXUS_USERNAME NEXUS_PASSWORD=$NEXUS_PASSWORD \
-      ./mvnw deploy -Dmaven.test.skip=true -B $MAVEN_SETTINGS || true; \
+      ./mvnw deploy -Dmaven.test.skip=true -B -s .mvn/nexus-settings.xml || true; \
     fi
 
 # Stage 2: Runtime stage
