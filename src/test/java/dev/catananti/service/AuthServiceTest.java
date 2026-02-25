@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.MessageSource;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.server.ResponseStatusException;
@@ -62,6 +63,9 @@ class AuthServiceTest {
     @Mock
     private EmailService emailService;
 
+    @Mock
+    private ReactiveStringRedisTemplate redisTemplate;
+
     private AuthService authService;
 
     private User testUser;
@@ -72,7 +76,7 @@ class AuthServiceTest {
                 userRepository, passwordEncoder, tokenProvider,
                 refreshTokenService, messageSource, idService,
                 htmlSanitizerService, tokenBlacklistService, emailService,
-                loginAttemptService);
+                redisTemplate, loginAttemptService, null, null);
         // Set jwtExpirationMs via reflection
         try {
             var field = AuthService.class.getDeclaredField("jwtExpirationMs");

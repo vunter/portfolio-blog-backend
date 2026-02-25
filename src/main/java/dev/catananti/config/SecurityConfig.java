@@ -64,7 +64,9 @@ public class SecurityConfig {
             "/api/v1/admin/auth/logout",
             "/api/v1/admin/auth/forgot-password",
             "/api/v1/admin/auth/reset-password",
-            "/api/v1/admin/auth/reset-password/validate"
+            "/api/v1/admin/auth/reset-password/validate",
+            "/api/v1/admin/mfa/verify",
+            "/api/v1/admin/mfa/send-email-otp"
     );
 
     @Bean
@@ -166,9 +168,9 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/analytics/**").permitAll()
                         // Contact form (public)
                         .pathMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
-                        // Actuator - only health and info public, rest requires auth
+                        // Actuator - health/info/prometheus public (prometheus protected by nginx basic auth externally)
                         .pathMatchers("/actuator/health/**", "/actuator/info").permitAll()
-                        .pathMatchers("/actuator/prometheus").hasRole("ADMIN") // Protected; use Prometheus bearer token or internal network
+                        .pathMatchers("/actuator/prometheus").permitAll()
                         .pathMatchers("/actuator/**").hasRole("ADMIN")
                         // Kubernetes probes
                         .pathMatchers("/livez", "/readyz").permitAll()
@@ -183,6 +185,9 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/admin/users/me/**").authenticated()
                         .pathMatchers("/api/v1/admin/users/me").authenticated()
                         .pathMatchers("/api/v1/admin/users/**").hasRole("ADMIN")
+                        // MFA management - any authenticated user can manage their own MFA
+                        .pathMatchers("/api/v1/admin/mfa/setup", "/api/v1/admin/mfa/verify-setup",
+                                      "/api/v1/admin/mfa/disable", "/api/v1/admin/mfa/status").authenticated()
                         // Admin cache, export, settings, newsletter management - ADMIN only
                         .pathMatchers("/api/v1/admin/cache/**").hasRole("ADMIN")
                         .pathMatchers("/api/v1/admin/export/**").hasRole("ADMIN")

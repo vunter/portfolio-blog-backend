@@ -17,7 +17,9 @@ import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 /**
@@ -189,12 +191,245 @@ public class ResumeProfileService {
         existing.setUpdatedAt(LocalDateTime.now());
         existing.setNewRecord(false);
 
-        return deleteChildEntities(existing.getId())
-                .then(profileRepository.save(existing))
-                .flatMap(saved -> saveChildEntities(saved.getId(), request).thenReturn(saved));
+        // F-214: Use merge pattern instead of delete-all/recreate to preserve IDs and reduce DB operations
+        return profileRepository.save(existing)
+                .flatMap(saved -> mergeChildEntities(saved.getId(), request).thenReturn(saved));
     }
 
-    // TODO F-214: Replace delete-all/recreate with upsert pattern for better performance
+    /**
+     * F-214: Merge child entities — update existing, insert new, delete removed.
+     * Uses delegated service merge methods for the 5 service-managed types,
+     * and inline merge logic for the 6 repository-managed types.
+     */
+    private Mono<Void> mergeChildEntities(Long profileId, ResumeProfileRequest request) {
+        List<Mono<Void>> ops = new ArrayList<>();
+
+        // Delegated services with merge support
+        ops.add(educationService.mergeEducations(profileId, request.getEducations()));
+        ops.add(experienceService.mergeExperiences(profileId, request.getExperiences()));
+        ops.add(skillService.mergeSkills(profileId, request.getSkills()));
+        ops.add(languageService.mergeLanguages(profileId, request.getLanguages()));
+        ops.add(certificationService.mergeCertifications(profileId, request.getCertifications()));
+
+        // Inline merge for the 6 repository-managed types
+        ops.add(mergeAdditionalInfo(profileId, request.getAdditionalInfo()));
+        ops.add(mergeHomeCustomization(profileId, request.getHomeCustomization()));
+        ops.add(mergeTestimonials(profileId, request.getTestimonials()));
+        ops.add(mergeProficiencies(profileId, request.getProficiencies()));
+        ops.add(mergeProjects(profileId, request.getProjects()));
+        ops.add(mergeLearningTopics(profileId, request.getLearningTopics()));
+
+        return Mono.when(ops);
+    }
+
+    // ==================== F-214: Inline Merge Methods ====================
+
+    private Mono<Void> mergeAdditionalInfo(Long profileId, List<ResumeProfileRequest.AdditionalInfoEntry> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return additionalInfoRepository.deleteByProfileId(profileId);
+        }
+        return additionalInfoRepository.findByProfileIdOrderBySortOrderAsc(profileId)
+                .collectMap(ResumeAdditionalInfo::getId)
+                .flatMap(existingMap -> {
+                    var now = LocalDateTime.now();
+                    Set<Long> keepIds = new HashSet<>();
+                    List<ResumeAdditionalInfo> toSave = new ArrayList<>();
+                    for (int i = 0; i < incoming.size(); i++) {
+                        var e = incoming.get(i);
+                        Long eid = parseId(e.getId());
+                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
+                        if (eid != null && existingMap.containsKey(eid)) {
+                            var entity = existingMap.get(eid);
+                            entity.setLabel(e.getLabel()); entity.setContent(e.getContent());
+                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                            keepIds.add(eid); toSave.add(entity);
+                        } else {
+                            toSave.add(ResumeAdditionalInfo.builder().id(idService.nextId()).profileId(profileId)
+                                    .label(e.getLabel()).content(e.getContent()).sortOrder(sortOrder)
+                                    .createdAt(now).updatedAt(now).newRecord(true).build());
+                        }
+                    }
+                    return deleteAndSave(existingMap.keySet(), keepIds, additionalInfoRepository, toSave);
+                });
+    }
+
+    private Mono<Void> mergeHomeCustomization(Long profileId, List<ResumeProfileRequest.HomeCustomizationEntry> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return homeCustomizationRepository.deleteByProfileId(profileId);
+        }
+        return homeCustomizationRepository.findByProfileIdOrderBySortOrderAsc(profileId)
+                .collectMap(ResumeHomeCustomization::getId)
+                .flatMap(existingMap -> {
+                    var now = LocalDateTime.now();
+                    Set<Long> keepIds = new HashSet<>();
+                    List<ResumeHomeCustomization> toSave = new ArrayList<>();
+                    for (int i = 0; i < incoming.size(); i++) {
+                        var e = incoming.get(i);
+                        Long eid = parseId(e.getId());
+                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
+                        if (eid != null && existingMap.containsKey(eid)) {
+                            var entity = existingMap.get(eid);
+                            entity.setLabel(e.getLabel()); entity.setContent(e.getContent());
+                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                            keepIds.add(eid); toSave.add(entity);
+                        } else {
+                            toSave.add(ResumeHomeCustomization.builder().id(idService.nextId()).profileId(profileId)
+                                    .label(e.getLabel()).content(e.getContent()).sortOrder(sortOrder)
+                                    .createdAt(now).updatedAt(now).newRecord(true).build());
+                        }
+                    }
+                    return deleteAndSave(existingMap.keySet(), keepIds, homeCustomizationRepository, toSave);
+                });
+    }
+
+    private Mono<Void> mergeTestimonials(Long profileId, List<ResumeProfileRequest.TestimonialEntry> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return testimonialRepository.deleteByProfileId(profileId);
+        }
+        return testimonialRepository.findByProfileIdOrderBySortOrderAsc(profileId)
+                .collectMap(ResumeTestimonial::getId)
+                .flatMap(existingMap -> {
+                    var now = LocalDateTime.now();
+                    Set<Long> keepIds = new HashSet<>();
+                    List<ResumeTestimonial> toSave = new ArrayList<>();
+                    for (int i = 0; i < incoming.size(); i++) {
+                        var e = incoming.get(i);
+                        Long eid = parseId(e.getId());
+                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
+                        if (eid != null && existingMap.containsKey(eid)) {
+                            var entity = existingMap.get(eid);
+                            entity.setAuthorName(e.getAuthorName()); entity.setAuthorRole(e.getAuthorRole());
+                            entity.setAuthorCompany(e.getAuthorCompany()); entity.setAuthorImageUrl(e.getAuthorImageUrl());
+                            entity.setText(e.getText()); entity.setAccentColor(e.getAccentColor());
+                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                            keepIds.add(eid); toSave.add(entity);
+                        } else {
+                            toSave.add(ResumeTestimonial.builder().id(idService.nextId()).profileId(profileId)
+                                    .authorName(e.getAuthorName()).authorRole(e.getAuthorRole())
+                                    .authorCompany(e.getAuthorCompany()).authorImageUrl(e.getAuthorImageUrl())
+                                    .text(e.getText()).accentColor(e.getAccentColor()).sortOrder(sortOrder)
+                                    .createdAt(now).updatedAt(now).newRecord(true).build());
+                        }
+                    }
+                    return deleteAndSave(existingMap.keySet(), keepIds, testimonialRepository, toSave);
+                });
+    }
+
+    private Mono<Void> mergeProficiencies(Long profileId, List<ResumeProfileRequest.ProficiencyEntry> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return proficiencyRepository.deleteByProfileId(profileId);
+        }
+        return proficiencyRepository.findByProfileIdOrderBySortOrderAsc(profileId)
+                .collectMap(ResumeProficiency::getId)
+                .flatMap(existingMap -> {
+                    var now = LocalDateTime.now();
+                    Set<Long> keepIds = new HashSet<>();
+                    List<ResumeProficiency> toSave = new ArrayList<>();
+                    for (int i = 0; i < incoming.size(); i++) {
+                        var e = incoming.get(i);
+                        Long eid = parseId(e.getId());
+                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
+                        if (eid != null && existingMap.containsKey(eid)) {
+                            var entity = existingMap.get(eid);
+                            entity.setCategory(e.getCategory()); entity.setSkillName(e.getSkillName());
+                            entity.setPercentage(e.getPercentage()); entity.setIcon(e.getIcon());
+                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                            keepIds.add(eid); toSave.add(entity);
+                        } else {
+                            toSave.add(ResumeProficiency.builder().id(idService.nextId()).profileId(profileId)
+                                    .category(e.getCategory()).skillName(e.getSkillName())
+                                    .percentage(e.getPercentage()).icon(e.getIcon()).sortOrder(sortOrder)
+                                    .createdAt(now).updatedAt(now).newRecord(true).build());
+                        }
+                    }
+                    return deleteAndSave(existingMap.keySet(), keepIds, proficiencyRepository, toSave);
+                });
+    }
+
+    private Mono<Void> mergeProjects(Long profileId, List<ResumeProfileRequest.ProjectEntry> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return projectRepository.deleteByProfileId(profileId);
+        }
+        return projectRepository.findByProfileIdOrderBySortOrderAsc(profileId)
+                .collectMap(ResumeProject::getId)
+                .flatMap(existingMap -> {
+                    var now = LocalDateTime.now();
+                    Set<Long> keepIds = new HashSet<>();
+                    List<ResumeProject> toSave = new ArrayList<>();
+                    for (int i = 0; i < incoming.size(); i++) {
+                        var e = incoming.get(i);
+                        Long eid = parseId(e.getId());
+                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
+                        String tagsJson = e.getTechTags() != null ? toJsonArray(e.getTechTags()) : "[]";
+                        if (eid != null && existingMap.containsKey(eid)) {
+                            var entity = existingMap.get(eid);
+                            entity.setTitle(e.getTitle()); entity.setDescription(e.getDescription());
+                            entity.setImageUrl(e.getImageUrl()); entity.setProjectUrl(e.getProjectUrl());
+                            entity.setRepoUrl(e.getRepoUrl()); entity.setTechTags(tagsJson);
+                            entity.setFeatured(e.getFeatured());
+                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                            keepIds.add(eid); toSave.add(entity);
+                        } else {
+                            toSave.add(ResumeProject.builder().id(idService.nextId()).profileId(profileId)
+                                    .title(e.getTitle()).description(e.getDescription())
+                                    .imageUrl(e.getImageUrl()).projectUrl(e.getProjectUrl())
+                                    .repoUrl(e.getRepoUrl()).techTags(tagsJson).featured(e.getFeatured())
+                                    .sortOrder(sortOrder).createdAt(now).updatedAt(now).newRecord(true).build());
+                        }
+                    }
+                    return deleteAndSave(existingMap.keySet(), keepIds, projectRepository, toSave);
+                });
+    }
+
+    private Mono<Void> mergeLearningTopics(Long profileId, List<ResumeProfileRequest.LearningTopicEntry> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return learningTopicRepository.deleteByProfileId(profileId);
+        }
+        return learningTopicRepository.findByProfileIdOrderBySortOrderAsc(profileId)
+                .collectMap(ResumeLearningTopic::getId)
+                .flatMap(existingMap -> {
+                    var now = LocalDateTime.now();
+                    Set<Long> keepIds = new HashSet<>();
+                    List<ResumeLearningTopic> toSave = new ArrayList<>();
+                    for (int i = 0; i < incoming.size(); i++) {
+                        var e = incoming.get(i);
+                        Long eid = parseId(e.getId());
+                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
+                        if (eid != null && existingMap.containsKey(eid)) {
+                            var entity = existingMap.get(eid);
+                            entity.setTitle(e.getTitle()); entity.setEmoji(e.getEmoji());
+                            entity.setDescription(e.getDescription()); entity.setColorTheme(e.getColorTheme());
+                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                            keepIds.add(eid); toSave.add(entity);
+                        } else {
+                            toSave.add(ResumeLearningTopic.builder().id(idService.nextId()).profileId(profileId)
+                                    .title(e.getTitle()).emoji(e.getEmoji()).description(e.getDescription())
+                                    .colorTheme(e.getColorTheme()).sortOrder(sortOrder)
+                                    .createdAt(now).updatedAt(now).newRecord(true).build());
+                        }
+                    }
+                    return deleteAndSave(existingMap.keySet(), keepIds, learningTopicRepository, toSave);
+                });
+    }
+
+    /**
+     * Generic helper: delete removed entities and save updated/new entities.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> Mono<Void> deleteAndSave(Set<Long> existingIds, Set<Long> keepIds,
+                                          org.springframework.data.repository.reactive.ReactiveCrudRepository<T, Long> repo,
+                                          List<T> toSave) {
+        List<Long> toDelete = existingIds.stream().filter(id -> !keepIds.contains(id)).toList();
+        Mono<Void> deleteMono = toDelete.isEmpty() ? Mono.empty() : repo.deleteAllById(toDelete).then();
+        return deleteMono.then(repo.saveAll(toSave).then());
+    }
+
+    private static Long parseId(String id) {
+        if (id == null || id.isBlank()) return null;
+        try { return Long.parseLong(id); } catch (NumberFormatException e) { return null; }
+    }
+
+    // TODO F-214: Replace delete-all/recreate with upsert pattern for better performance — DONE
     private Mono<Void> deleteChildEntities(Long profileId) {
         return Mono.when(
                 educationService.deleteByProfileId(profileId),

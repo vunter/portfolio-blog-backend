@@ -43,6 +43,8 @@ logs/
 *.tar.gz
 *.zip
 *.sh
+!deploy/**/*.sh
+!scripts/**/*.sh
 *.ps1
 *.bat
 

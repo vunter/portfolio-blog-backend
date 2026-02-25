@@ -15,18 +15,19 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
-@Table("users")
+/**
+ * Entity representing a user's MFA (Multi-Factor Authentication) configuration.
+ * Supports TOTP (authenticator apps) and EMAIL (email-based OTP).
+ */
+@Table("user_mfa_config")
 @Getter
 @Setter
-@ToString(exclude = {"passwordHash"})
+@ToString(exclude = {"secretEncrypted"})
 @EqualsAndHashCode(of = "id")
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class User implements Persistable<Long>, NewRecordAware {
-
-    // TODO F-259: Persist lockout state (accountLockedUntil, failedAttempts) in DB instead of in-memory LoginAttemptService
-    // TODO F-260: Add emailVerified boolean field to enforce email verification on registration
+public class UserMfaConfig implements Persistable<Long>, NewRecordAware {
 
     @Id
     private Long id;
@@ -39,41 +40,32 @@ public class User implements Persistable<Long>, NewRecordAware {
     public boolean isNew() {
         return newRecord;
     }
-    
-    private String email;
-    
-    @Column("password_hash")
-    private String passwordHash;
-    
-    private String name;
 
-    private String username;
+    @Column("user_id")
+    private Long userId;
 
-    @Column("avatar_url")
-    private String avatarUrl;
-
-    private String bio;
-    
+    /**
+     * MFA method: "TOTP" or "EMAIL"
+     */
     @Builder.Default
-    private String role = "VIEWER";
+    private String method = "TOTP";
 
+    /**
+     * AES-encrypted TOTP secret (Base32-encoded before encryption).
+     * Null for EMAIL method (OTP is generated on-the-fly and stored in Redis).
+     */
+    @Column("secret_encrypted")
+    private String secretEncrypted;
+
+    /**
+     * Whether the user has completed initial verification of this MFA method.
+     */
     @Builder.Default
-    private Boolean active = true;
+    private Boolean verified = false;
 
-    @Column("cf_email_rule_id")
-    private String cfEmailRuleId;
-
-    @Column("mfa_enabled")
-    @Builder.Default
-    private Boolean mfaEnabled = false;
-
-    @Column("mfa_preferred_method")
-    @Builder.Default
-    private String mfaPreferredMethod = "TOTP";
-    
     @Column("created_at")
     private LocalDateTime createdAt;
-    
+
     @Column("updated_at")
     private LocalDateTime updatedAt;
 }

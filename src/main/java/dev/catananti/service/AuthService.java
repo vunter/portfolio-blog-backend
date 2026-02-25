@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.MessageSource;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,10 +21,12 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -40,6 +43,12 @@ public class AuthService {
     private final HtmlSanitizerService htmlSanitizerService;
     private final TokenBlacklistService tokenBlacklistService;
     private final EmailService emailService;
+    private final Optional<MfaService> mfaService;
+    private final Optional<EmailOtpService> emailOtpService;
+    private final ReactiveStringRedisTemplate redisTemplate;
+
+    private static final String MFA_TOKEN_PREFIX = "mfa:token:";
+    private static final Duration MFA_TOKEN_TTL = Duration.ofMinutes(5);
 
     @Value("${jwt.expiration:86400000}")
     private long jwtExpirationMs;
@@ -54,7 +63,10 @@ public class AuthService {
                        HtmlSanitizerService htmlSanitizerService,
                        TokenBlacklistService tokenBlacklistService,
                        EmailService emailService,
-                       @Autowired(required = false) LoginAttemptService loginAttemptService) {
+                       ReactiveStringRedisTemplate redisTemplate,
+                       @Autowired(required = false) LoginAttemptService loginAttemptService,
+                       @Autowired(required = false) MfaService mfaService,
+                       @Autowired(required = false) EmailOtpService emailOtpService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenProvider = tokenProvider;
@@ -64,7 +76,10 @@ public class AuthService {
         this.htmlSanitizerService = htmlSanitizerService;
         this.tokenBlacklistService = tokenBlacklistService;
         this.emailService = emailService;
+        this.redisTemplate = redisTemplate;
         this.loginAttemptService = Optional.ofNullable(loginAttemptService);
+        this.mfaService = Optional.ofNullable(mfaService);
+        this.emailOtpService = Optional.ofNullable(emailOtpService);
     }
 
     // Helper methods for optional LoginAttemptService
@@ -161,20 +176,96 @@ public class AuthService {
     private Mono<TokenResponse> performLoginWithRefreshToken(LoginRequest request, String loginKey, String clientIp) {
         return verifyCredentials(loginKey, request.getPassword(), clientIp)
                 .flatMap(user -> {
-                    String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
-                    return refreshTokenService.createRefreshToken(user.getId())
-                            .map(refreshToken -> {
-                                log.debug("User logged in with refresh token: {} from IP: {}", user.getEmail(), clientIp);
-                                return TokenResponse.builder()
-                                        .accessToken(accessToken)
-                                        .refreshToken(refreshToken.getToken())
-                                        .tokenType("Bearer")
-                                        .expiresIn(jwtExpirationMs / 1000)
-                                        .email(user.getEmail())
-                                        .name(user.getName())
-                                        .build();
-                            });
+                    // Check if MFA is enabled for this user
+                    if (Boolean.TRUE.equals(user.getMfaEnabled())) {
+                        return issueMfaChallenge(user);
+                    }
+                    return issueFullTokens(user, clientIp);
                 });
+    }
+
+    private Mono<TokenResponse> issueFullTokens(User user, String clientIp) {
+        String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
+        return refreshTokenService.createRefreshToken(user.getId())
+                .map(refreshToken -> {
+                    log.debug("User logged in with refresh token: {} from IP: {}", user.getEmail(), clientIp);
+                    return TokenResponse.builder()
+                            .accessToken(accessToken)
+                            .refreshToken(refreshToken.getToken())
+                            .tokenType("Bearer")
+                            .expiresIn(jwtExpirationMs / 1000)
+                            .email(user.getEmail())
+                            .name(user.getName())
+                            .build();
+                });
+    }
+
+    /**
+     * Issue an MFA challenge: return a temporary mfaToken (stored in Redis) instead of real JWT.
+     * The client must call /api/v1/admin/mfa/verify with this token + OTP code.
+     */
+    private Mono<TokenResponse> issueMfaChallenge(User user) {
+        String mfaToken = UUID.randomUUID().toString();
+        String redisKey = MFA_TOKEN_PREFIX + mfaToken;
+        // Store userId in Redis with short TTL
+        return redisTemplate.opsForValue()
+                .set(redisKey, String.valueOf(user.getId()), MFA_TOKEN_TTL)
+                .then(sendMfaCodeIfEmail(user))
+                .thenReturn(TokenResponse.builder()
+                        .mfaRequired(true)
+                        .mfaToken(mfaToken)
+                        .email(user.getEmail())
+                        .name(user.getName())
+                        .build());
+    }
+
+    /**
+     * If the user's preferred MFA method is EMAIL, automatically send the OTP.
+     */
+    private Mono<Void> sendMfaCodeIfEmail(User user) {
+        if ("EMAIL".equals(user.getMfaPreferredMethod()) && emailOtpService.isPresent()) {
+            return emailOtpService.get().sendOtp(user.getId());
+        }
+        return Mono.empty();
+    }
+
+    /**
+     * Complete MFA login: verify the OTP code, then issue real JWT tokens.
+     */
+    public Mono<TokenResponse> completeMfaLogin(String mfaToken, String code, String method) {
+        String redisKey = MFA_TOKEN_PREFIX + mfaToken;
+        return redisTemplate.opsForValue().get(redisKey)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "MFA token expired or invalid")))
+                .flatMap(userIdStr -> {
+                    Long userId = Long.valueOf(userIdStr);
+                    Mono<Boolean> verifyMono = switch (method) {
+                        case "TOTP" -> mfaService.map(svc -> svc.verifyTotp(userId, code))
+                                .orElse(Mono.just(false));
+                        case "EMAIL" -> emailOtpService.map(svc -> svc.verifyOtp(userId, code))
+                                .orElse(Mono.just(false));
+                        default -> Mono.just(false);
+                    };
+                    return verifyMono.flatMap(valid -> {
+                        if (!valid) {
+                            return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid MFA code"));
+                        }
+                        // Delete mfaToken from Redis (one-time use)
+                        return redisTemplate.delete(redisKey)
+                                .then(userRepository.findById(userId))
+                                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
+                                .flatMap(user -> issueFullTokens(user, "mfa-verified"));
+                    });
+                });
+    }
+
+    /**
+     * Resolve an mfaToken to the associated userId (for sending email OTP during login).
+     */
+    public Mono<Long> resolveMfaTokenUserId(String mfaToken) {
+        String redisKey = MFA_TOKEN_PREFIX + mfaToken;
+        return redisTemplate.opsForValue().get(redisKey)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "MFA token expired or invalid")))
+                .map(Long::valueOf);
     }
 
     public Mono<TokenResponse> refreshAccessToken(String refreshToken) {

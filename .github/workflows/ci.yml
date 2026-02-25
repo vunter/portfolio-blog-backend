@@ -28,6 +28,23 @@ jobs:
       - name: Run tests
         run: ./mvnw verify -B
 
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/site/jacoco/jacoco.xml
+          flags: backend
+          fail_ci_if_error: false
+
+      - name: Upload coverage to DeepSource
+        if: always()
+        env:
+          DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
+        run: |
+          curl -sSL https://deepsource.io/cli | sh
+          ./bin/deepsource report --analyzer test-coverage --key java --value-file target/site/jacoco/jacoco.xml
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
