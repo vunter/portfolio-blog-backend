@@ -171,14 +171,14 @@ class LoginAttemptServiceTest {
         }
 
         @Test
-        @DisplayName("Should return 0 on Redis error")
+        @DisplayName("Should fall back to local cache on Redis error")
         void shouldReturnZero_OnRedisError() {
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
             when(valueOps.increment("login_attempt:user@test.com"))
                     .thenReturn(Mono.error(new RuntimeException("Redis down")));
 
             StepVerifier.create(loginAttemptService.recordFailedAttempt("user@test.com"))
-                    .expectNext(0)
+                    .expectNext(1)
                     .verifyComplete();
         }
     }

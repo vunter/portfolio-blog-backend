@@ -12,7 +12,10 @@ import reactor.core.publisher.Mono;
 import dev.catananti.util.ResumeDateSorter;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 /**
@@ -62,6 +65,67 @@ public class ResumeEducationService {
     public Mono<Void> deleteByProfileId(Long profileId) {
         log.info("Deleting all education entries for profileId={}", profileId);
         return educationRepository.deleteByProfileId(profileId);
+    }
+
+    /**
+     * F-214: Merge education entries — update existing, insert new, delete removed.
+     * Preserves IDs for entries the client sends back, avoiding unnecessary deletes.
+     */
+    public Mono<Void> mergeEducations(Long profileId, List<ResumeProfileRequest.EducationEntry> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return deleteByProfileId(profileId);
+        }
+        return educationRepository.findByProfileIdOrderBySortOrderAsc(profileId)
+                .collectMap(ResumeEducation::getId)
+                .flatMap(existingMap -> {
+                    var now = LocalDateTime.now();
+                    Set<Long> keepIds = new HashSet<>();
+                    List<ResumeEducation> toSave = new ArrayList<>();
+
+                    for (int i = 0; i < incoming.size(); i++) {
+                        var entry = incoming.get(i);
+                        Long existingId = parseId(entry.getId());
+                        int sortOrder = entry.getSortOrder() != null ? entry.getSortOrder() : i;
+
+                        if (existingId != null && existingMap.containsKey(existingId)) {
+                            var entity = existingMap.get(existingId);
+                            entity.setInstitution(entry.getInstitution());
+                            entity.setLocation(entry.getLocation());
+                            entity.setDegree(entry.getDegree());
+                            entity.setFieldOfStudy(entry.getFieldOfStudy());
+                            entity.setStartDate(entry.getStartDate());
+                            entity.setEndDate(entry.getEndDate());
+                            entity.setDescription(entry.getDescription());
+                            entity.setSortOrder(sortOrder);
+                            entity.setUpdatedAt(now);
+                            entity.setNewRecord(false);
+                            keepIds.add(existingId);
+                            toSave.add(entity);
+                        } else {
+                            toSave.add(ResumeEducation.builder()
+                                    .id(idService.nextId()).profileId(profileId)
+                                    .institution(entry.getInstitution()).location(entry.getLocation())
+                                    .degree(entry.getDegree()).fieldOfStudy(entry.getFieldOfStudy())
+                                    .startDate(entry.getStartDate()).endDate(entry.getEndDate())
+                                    .description(entry.getDescription()).sortOrder(sortOrder)
+                                    .createdAt(now).updatedAt(now).newRecord(true)
+                                    .build());
+                        }
+                    }
+
+                    List<Long> toDelete = existingMap.keySet().stream()
+                            .filter(id -> !keepIds.contains(id)).toList();
+                    Mono<Void> deleteMono = toDelete.isEmpty()
+                            ? Mono.empty()
+                            : educationRepository.deleteAllById(toDelete).then();
+
+                    return deleteMono.then(educationRepository.saveAll(toSave).then());
+                });
+    }
+
+    private static Long parseId(String id) {
+        if (id == null || id.isBlank()) return null;
+        try { return Long.parseLong(id); } catch (NumberFormatException e) { return null; }
     }
 
     /**

@@ -23,11 +23,8 @@ scrape_configs:
       - targets: ['app:8080']
     scrape_interval: 10s
     scrape_timeout: 5s
-    # Authentication: generate a JWT for an ADMIN user and set PROMETHEUS_BEARER_TOKEN env var
-    # Example: use the /api/v1/admin/auth/login endpoint to get a long-lived token
-    authorization:
-      type: Bearer
-      credentials_file: /etc/prometheus/bearer_token
+    # No auth needed: Prometheus scrapes directly within Docker network
+    # External access is protected by nginx basic auth
 
   # F-432: TODO: Add node_exporter for host-level metrics (CPU, memory, disk, network)
   # - job_name: 'node'

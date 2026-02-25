@@ -17,4 +17,11 @@ public class TokenResponse {
     private long expiresIn; // seconds
     private String email;
     private String name;
+
+    /** True when credentials are valid but MFA verification is still required. */
+    @Builder.Default
+    private Boolean mfaRequired = false;
+
+    /** Temporary token used to complete the MFA challenge (only set when mfaRequired=true). */
+    private String mfaToken;
 }

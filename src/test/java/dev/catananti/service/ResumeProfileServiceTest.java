@@ -391,6 +391,27 @@ class ResumeProfileServiceTest {
             lenient().when(certificationService.saveCertifications(eq(profId), any())).thenReturn(Mono.empty());
         }
 
+        /**
+         * F-214: Mock merge methods for update path.
+         * When incoming lists are null (as in buildTestRequest), merge methods
+         * delegate to deleteByProfileId, so we mock both.
+         */
+        private void mockMergeChildEntities(Long profId) {
+            // Merge methods on delegated services (null incoming → delete)
+            when(educationService.mergeEducations(eq(profId), any())).thenReturn(Mono.empty());
+            when(experienceService.mergeExperiences(eq(profId), any())).thenReturn(Mono.empty());
+            when(skillService.mergeSkills(eq(profId), any())).thenReturn(Mono.empty());
+            when(languageService.mergeLanguages(eq(profId), any())).thenReturn(Mono.empty());
+            when(certificationService.mergeCertifications(eq(profId), any())).thenReturn(Mono.empty());
+            // Inline merge for repository-managed types (null incoming → delete)
+            when(additionalInfoRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            when(homeCustomizationRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            when(testimonialRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            when(proficiencyRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            when(projectRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            when(learningTopicRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+        }
+
         @Test
         @DisplayName("Should create new profile when none exists")
         void shouldCreateNewProfile() {
@@ -421,18 +442,14 @@ class ResumeProfileServiceTest {
 
             when(profileRepository.findByOwnerIdAndLocale(ownerId, "en"))
                     .thenReturn(Mono.just(testProfile));
-            mockDeleteChildEntities(profileId);
+            mockMergeChildEntities(profileId);
             when(profileRepository.save(any(ResumeProfile.class)))
                     .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-            mockSaveChildEntities(profileId);
             mockBuildFullResponse(profileId);
 
             StepVerifier.create(resumeProfileService.saveProfile(ownerId, request, "en"))
                     .assertNext(response -> assertThat(response.getFullName()).isEqualTo("Jane Doe"))
                     .verifyComplete();
-
-            verify(educationService).deleteByProfileId(profileId);
-            verify(experienceService).deleteByProfileId(profileId);
         }
     }
 

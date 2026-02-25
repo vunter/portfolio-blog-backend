@@ -90,6 +90,11 @@ services:
       - CF_EMAIL_ROUTING_ENABLED=${CF_EMAIL_ROUTING_ENABLED:-false}
       # Datadog APM (disabled)
       - DD_AGENT_ENABLED=false
+      # Sentry Error Tracking
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=production
+      # MFA
+      - MFA_ENCRYPTION_KEY=${MFA_ENCRYPTION_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -224,7 +229,6 @@ services:
     container_name: blog-prometheus
     volumes:
       - ../../prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ../../prometheus/bearer_token:/etc/prometheus/bearer_token:ro
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
