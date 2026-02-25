@@ -1,4 +1,4 @@
-﻿package dev.catananti.service;
+package dev.catananti.service;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
