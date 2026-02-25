@@ -68,11 +68,14 @@ jobs:
           username: vunter
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
             cd ~/portfolio-blog
+            echo "Loading Docker images..."
             docker load < api.tar.gz
             docker load < frontend.tar.gz
             rm -f api.tar.gz frontend.tar.gz
             cd deploy/cloud
-            doppler run -- docker compose -f docker-compose.cloud.yml up -d
+            echo "Recreating containers with new images..."
+            docker compose -f docker-compose.cloud.yml --env-file .env up -d --force-recreate
             docker image prune -f
             echo "Deploy complete at $(date)"
