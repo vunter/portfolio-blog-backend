@@ -26,19 +26,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: vunter/portfolio-blog-frontend
+          path: frontend
+
       - name: Build API image
         run: docker build --build-arg NEXUS_HOST="${{ secrets.NEXUS_HOST }}" -t portfolio-blog-api .
 
-      - name: Save image
-        run: docker save portfolio-blog-api | gzip > api.tar.gz
+      - name: Build Frontend image
+        run: docker build -t portfolio-blog-frontend frontend/
 
-      - name: Copy image to Droplet
+      - name: Save images
+        run: |
+          docker save portfolio-blog-api | gzip > api.tar.gz
+          docker save portfolio-blog-frontend | gzip > frontend.tar.gz
+
+      - name: Copy images to Droplet
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: vunter
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "api.tar.gz"
+          source: "api.tar.gz,frontend.tar.gz"
           target: "/home/vunter/portfolio-blog/"
 
       - name: Copy source files to Droplet
@@ -59,7 +70,8 @@ jobs:
           script: |
             cd ~/portfolio-blog
             docker load < api.tar.gz
-            rm -f api.tar.gz
+            docker load < frontend.tar.gz
+            rm -f api.tar.gz frontend.tar.gz
             cd deploy/cloud
             docker compose --env-file .env -f docker-compose.cloud.yml up -d
             docker image prune -f

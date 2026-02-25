@@ -150,6 +150,37 @@ services:
         limits:
           memory: 512M
 
+  # Frontend (Angular SPA)
+  frontend:
+    image: portfolio-blog-frontend
+    container_name: portfolio-blog-frontend
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - blog-network
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+      - /var/cache/nginx:size=64M,uid=101,gid=101
+      - /var/run:size=1M,uid=101,gid=101
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
   # Nginx Reverse Proxy (SSL termination)
   nginx:
     image: nginx:alpine
@@ -165,6 +196,8 @@ services:
       - certbot_webroot:/var/www/certbot:ro
     depends_on:
       app:
+        condition: service_healthy
+      frontend:
         condition: service_healthy
       prometheus:
         condition: service_started
