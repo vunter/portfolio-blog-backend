@@ -73,6 +73,6 @@ jobs:
             docker load < frontend.tar.gz
             rm -f api.tar.gz frontend.tar.gz
             cd deploy/cloud
-            docker compose --env-file .env -f docker-compose.cloud.yml up -d
+            doppler run -- docker compose -f docker-compose.cloud.yml up -d
             docker image prune -f
             echo "Deploy complete at $(date)"

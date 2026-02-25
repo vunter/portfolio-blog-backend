@@ -2,7 +2,7 @@
 # Portfolio Blog - Cloud Compose (DigitalOcean)
 # Deploy target: Droplet (146.190.67.249)
 # PostgreSQL: local container
-# Secrets: .env file
+# Secrets: Doppler (doppler run --)
 # ============================================
 
 services:
@@ -11,9 +11,9 @@ services:
     image: postgres:17-alpine
     container_name: blog-postgres
     environment:
-      - POSTGRES_DB=blog
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=${DB_ROOT_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-blog}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-${DB_ROOT_PASSWORD}}
       - DB_PASSWORD=${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
