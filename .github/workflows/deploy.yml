@@ -63,15 +63,13 @@ jobs:
 
       - name: Deploy on Droplet
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: vunter
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: DOPPLER_TOKEN
           script: |
             set -e
+            source ~/.doppler_token
             cd ~/portfolio-blog
             echo "Loading Docker images..."
             docker load < api.tar.gz
