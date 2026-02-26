@@ -63,10 +63,13 @@ jobs:
 
       - name: Deploy on Droplet
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: vunter
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DOPPLER_TOKEN
           script: |
             set -e
             cd ~/portfolio-blog
@@ -75,7 +78,7 @@ jobs:
             docker load < frontend.tar.gz
             rm -f api.tar.gz frontend.tar.gz
             cd deploy/cloud
-            echo "Recreating containers with new images..."
-            docker compose -f docker-compose.cloud.yml --env-file .env up -d --force-recreate
+            echo "Recreating containers with Doppler secrets..."
+            doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate
             docker image prune -f
             echo "Deploy complete at $(date)"

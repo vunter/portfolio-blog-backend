@@ -38,6 +38,8 @@ services:
       resources:
         limits:
           memory: 512M
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"postgresql","service":"blog-postgres"}]'
 
   # Spring Boot API (Java 25 + WebFlux)
   app:
@@ -88,8 +90,18 @@ services:
       - CF_ZONE_ID=${CF_ZONE_ID:-}
       - CF_EMAIL_DOMAIN=${CF_EMAIL_DOMAIN:-catananti.dev}
       - CF_EMAIL_ROUTING_ENABLED=${CF_EMAIL_ROUTING_ENABLED:-false}
-      # Datadog APM (disabled)
-      - DD_AGENT_ENABLED=false
+      # Datadog APM (agent sidecar)
+      - DD_AGENT_ENABLED=${DD_AGENT_ENABLED:-true}
+      - DD_AGENT_HOST=datadog-agent
+      - DD_TRACE_AGENT_URL=http://datadog-agent:8126
+      - DD_SERVICE=portfolio-blog-api
+      - DD_ENV=production
+      - DD_VERSION=2.0.0
+      - DD_LOGS_INJECTION=true
+      - DD_TRACE_SAMPLE_RATE=1.0
+      - DD_PROFILING_ENABLED=false
+      - DD_METRICS_ENABLED=${DD_METRICS_ENABLED:-true}
+      - DD_API_KEY=${DD_API_KEY:-}
       # Sentry Error Tracking
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=production
@@ -125,6 +137,9 @@ services:
         limits:
           memory: 2G
 
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"java","service":"portfolio-blog-api"}]'
+
   # Redis Cache
   redis:
     image: redis:7-alpine
@@ -154,6 +169,8 @@ services:
       resources:
         limits:
           memory: 512M
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"redis","service":"blog-redis"}]'
 
   # Frontend (Angular SPA)
   frontend:
@@ -222,6 +239,8 @@ services:
       resources:
         limits:
           memory: 256M
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"nginx","service":"blog-nginx"}]'
 
   # Prometheus (metrics)
   prometheus:
@@ -251,6 +270,41 @@ services:
       options:
         max-size: "5m"
         max-file: "3"
+
+  # Datadog Agent (APM + log collection + infrastructure metrics)
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    container_name: datadog-agent
+    pid: host
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE:-us5.datadoghq.com}
+      - DD_APM_ENABLED=true
+      - DD_APM_NON_LOCAL_TRAFFIC=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_CONTAINER_EXCLUDE="name:datadog-agent"
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_PROCESS_AGENT_ENABLED=false
+      - DD_TAGS=env:production,service:portfolio-blog,team:catananti
+      - DD_HOSTNAME=${DD_HOSTNAME:-catananti-droplet}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - blog-network
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
 networks:
   blog-network:
