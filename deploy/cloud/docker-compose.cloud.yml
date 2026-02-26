@@ -171,6 +171,11 @@ services:
           memory: 512M
     labels:
       com.datadoghq.ad.logs: '[{"source":"redis","service":"blog-redis"}]'
+      com.datadoghq.ad.check_names: '["redisdb"]'
+      com.datadoghq.ad.init_configs: '[{}]'
+      com.datadoghq.ad.instances: '[{"host":"%%host%%","port":"6379","password":"%%env_REDIS_PASSWORD%%"}]'
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
 
   # Frontend (Angular SPA)
   frontend:
