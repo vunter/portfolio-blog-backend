@@ -15,9 +15,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.ReactiveValueOperations;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,11 +43,19 @@ class ArticlePublishSchedulerTest {
     @Mock
     private EmailService emailService;
 
+    @Mock
+    private ReactiveStringRedisTemplate redisTemplate;
+
+    @Mock
+    private ReactiveValueOperations<String, String> valueOps;
+
     private ArticlePublishScheduler scheduler;
 
     @BeforeEach
     void setUp() {
-        scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService);
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        lenient().when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+        scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService, redisTemplate);
     }
 
     @Nested

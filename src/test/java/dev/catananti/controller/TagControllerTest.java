@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.TagResponse;
 import dev.catananti.service.TagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,10 +11,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,41 +63,44 @@ class TagControllerTest {
         @Test
         @DisplayName("Should return all tags with locale")
         void shouldReturnAllTagsWithLocale() {
-            when(tagService.getAllTags("pt")).thenReturn(Flux.just(javaTag, springTag));
+            PageResponse<TagResponse> page = PageResponse.of(List.of(javaTag, springTag), 0, 50, 2);
+            when(tagService.getAllTagsPaginated("pt", 0, 50)).thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getAllTags("pt"))
-                    .assertNext(tags -> {
-                        assertThat(tags).hasSize(2);
-                        assertThat(tags.get(0).getName()).isEqualTo("Java");
-                        assertThat(tags.get(1).getSlug()).isEqualTo("spring-boot");
+            StepVerifier.create(controller.getAllTags("pt", 0, 50))
+                    .assertNext(result -> {
+                        assertThat(result.getContent()).hasSize(2);
+                        assertThat(result.getContent().get(0).getName()).isEqualTo("Java");
+                        assertThat(result.getContent().get(1).getSlug()).isEqualTo("spring-boot");
                     })
                     .verifyComplete();
 
-            verify(tagService).getAllTags("pt");
+            verify(tagService).getAllTagsPaginated("pt", 0, 50);
         }
 
         @Test
         @DisplayName("Should return all tags without locale")
         void shouldReturnAllTagsWithoutLocale() {
-            when(tagService.getAllTags(null)).thenReturn(Flux.just(javaTag, springTag));
+            PageResponse<TagResponse> page = PageResponse.of(List.of(javaTag, springTag), 0, 50, 2);
+            when(tagService.getAllTagsPaginated(null, 0, 50)).thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getAllTags(null))
-                    .assertNext(tags -> {
-                        assertThat(tags).hasSize(2);
-                        assertThat(tags.get(0).getArticleCount()).isEqualTo(15);
+            StepVerifier.create(controller.getAllTags(null, 0, 50))
+                    .assertNext(result -> {
+                        assertThat(result.getContent()).hasSize(2);
+                        assertThat(result.getContent().get(0).getArticleCount()).isEqualTo(15);
                     })
                     .verifyComplete();
 
-            verify(tagService).getAllTags(null);
+            verify(tagService).getAllTagsPaginated(null, 0, 50);
         }
 
         @Test
         @DisplayName("Should return empty list when no tags exist")
         void shouldReturnEmptyListWhenNoTags() {
-            when(tagService.getAllTags(null)).thenReturn(Flux.empty());
+            PageResponse<TagResponse> page = PageResponse.of(List.of(), 0, 50, 0);
+            when(tagService.getAllTagsPaginated(null, 0, 50)).thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getAllTags(null))
-                    .assertNext(tags -> assertThat(tags).isEmpty())
+            StepVerifier.create(controller.getAllTags(null, 0, 50))
+                    .assertNext(result -> assertThat(result.getContent()).isEmpty())
                     .verifyComplete();
         }
     }

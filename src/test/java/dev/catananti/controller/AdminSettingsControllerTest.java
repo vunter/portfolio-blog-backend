@@ -8,6 +8,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.core.Authentication;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -23,6 +24,9 @@ class AdminSettingsControllerTest {
 
     @Mock
     private SiteSettingsService settingsService;
+
+    @Mock
+    private Authentication authentication;
 
     @InjectMocks
     private AdminSettingsController controller;
@@ -74,7 +78,7 @@ class AdminSettingsControllerTest {
 
             when(settingsService.updateSettings(anyMap())).thenReturn(Mono.just(updated));
 
-            StepVerifier.create(controller.updateSettings(input))
+            StepVerifier.create(controller.updateSettings(input, authentication))
                     .assertNext(result -> {
                         assertThat(result).containsEntry("siteName", "Updated Blog");
                         assertThat(result).containsEntry("postsPerPage", 15);
@@ -90,7 +94,7 @@ class AdminSettingsControllerTest {
                 tooMany.put("key" + i, "value" + i);
             }
 
-            StepVerifier.create(controller.updateSettings(tooMany))
+            StepVerifier.create(controller.updateSettings(tooMany, authentication))
                     .expectErrorMatches(ex -> ex instanceof IllegalArgumentException
                             && ex.getMessage().contains("Too many settings entries"))
                     .verify();
