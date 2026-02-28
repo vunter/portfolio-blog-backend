@@ -53,6 +53,7 @@ public class MediaController {
 
         return resolveUploaderId(userDetails)
                 .flatMap(uploaderId -> mediaService.upload(file, purpose, altText, uploaderId))
+                .switchIfEmpty(Mono.defer(() -> mediaService.upload(file, purpose, altText, null)))
                 .map(MediaAssetResponse::from);
     }
 
@@ -157,9 +158,8 @@ public class MediaController {
     // ============================
 
     private Mono<Long> resolveUploaderId(UserDetails userDetails) {
-        if (userDetails == null) return Mono.just(0L);
+        if (userDetails == null) return Mono.empty();
         return userRepository.findByEmail(userDetails.getUsername())
-                .map(user -> user.getId())
-                .defaultIfEmpty(0L);
+                .map(user -> user.getId());
     }
 }
