@@ -74,7 +74,10 @@ public class ResumeExperienceService {
      * F-214: Merge experience entries — update existing, insert new, delete removed.
      */
     public Mono<Void> mergeExperiences(Long profileId, List<ResumeProfileRequest.ExperienceEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return deleteByProfileId(profileId);
         }
         return experienceRepository.findByProfileIdOrderBySortOrderAsc(profileId)

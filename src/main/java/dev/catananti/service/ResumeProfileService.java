@@ -195,9 +195,10 @@ public class ResumeProfileService {
         existing.setLocation(request.getLocation());
         existing.setProfessionalSummary(request.getProfessionalSummary());
         existing.setInterests(request.getInterests());
-        existing.setWorkMode(request.getWorkMode());
-        existing.setTimezone(request.getTimezone());
-        existing.setEmploymentType(request.getEmploymentType());
+        // Only update HC-managed fields if explicitly sent (null = skip)
+        if (request.getWorkMode() != null) existing.setWorkMode(request.getWorkMode());
+        if (request.getTimezone() != null) existing.setTimezone(request.getTimezone());
+        if (request.getEmploymentType() != null) existing.setEmploymentType(request.getEmploymentType());
         existing.setUpdatedAt(LocalDateTime.now());
         existing.setNewRecord(false);
 
@@ -235,7 +236,10 @@ public class ResumeProfileService {
     // ==================== F-214: Inline Merge Methods ====================
 
     private Mono<Void> mergeAdditionalInfo(Long profileId, List<ResumeProfileRequest.AdditionalInfoEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return additionalInfoRepository.deleteByProfileId(profileId);
         }
         return additionalInfoRepository.findByProfileIdOrderBySortOrderAsc(profileId)
@@ -264,7 +268,10 @@ public class ResumeProfileService {
     }
 
     private Mono<Void> mergeHomeCustomization(Long profileId, List<ResumeProfileRequest.HomeCustomizationEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return homeCustomizationRepository.deleteByProfileId(profileId);
         }
         return homeCustomizationRepository.findByProfileIdOrderBySortOrderAsc(profileId)
@@ -293,7 +300,10 @@ public class ResumeProfileService {
     }
 
     private Mono<Void> mergeTestimonials(Long profileId, List<ResumeProfileRequest.TestimonialEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return testimonialRepository.deleteByProfileId(profileId);
         }
         return testimonialRepository.findByProfileIdOrderBySortOrderAsc(profileId)
@@ -326,7 +336,10 @@ public class ResumeProfileService {
     }
 
     private Mono<Void> mergeProficiencies(Long profileId, List<ResumeProfileRequest.ProficiencyEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return proficiencyRepository.deleteByProfileId(profileId);
         }
         return proficiencyRepository.findByProfileIdOrderBySortOrderAsc(profileId)
@@ -357,7 +370,10 @@ public class ResumeProfileService {
     }
 
     private Mono<Void> mergeProjects(Long profileId, List<ResumeProfileRequest.ProjectEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return projectRepository.deleteByProfileId(profileId);
         }
         return projectRepository.findByProfileIdOrderBySortOrderAsc(profileId)
@@ -392,7 +408,10 @@ public class ResumeProfileService {
     }
 
     private Mono<Void> mergeLearningTopics(Long profileId, List<ResumeProfileRequest.LearningTopicEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return learningTopicRepository.deleteByProfileId(profileId);
         }
         return learningTopicRepository.findByProfileIdOrderBySortOrderAsc(profileId)

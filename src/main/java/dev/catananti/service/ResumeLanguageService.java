@@ -64,7 +64,10 @@ public class ResumeLanguageService {
      * F-214: Merge language entries — update existing, insert new, delete removed.
      */
     public Mono<Void> mergeLanguages(Long profileId, List<ResumeProfileRequest.LanguageEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return deleteByProfileId(profileId);
         }
         return languageRepository.findByProfileIdOrderBySortOrderAsc(profileId)

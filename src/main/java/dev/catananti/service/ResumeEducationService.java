@@ -72,7 +72,10 @@ public class ResumeEducationService {
      * Preserves IDs for entries the client sends back, avoiding unnecessary deletes.
      */
     public Mono<Void> mergeEducations(Long profileId, List<ResumeProfileRequest.EducationEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return deleteByProfileId(profileId);
         }
         return educationRepository.findByProfileIdOrderBySortOrderAsc(profileId)

@@ -68,7 +68,10 @@ public class ResumeCertificationService {
      * F-214: Merge certification entries — update existing, insert new, delete removed.
      */
     public Mono<Void> mergeCertifications(Long profileId, List<ResumeProfileRequest.CertificationEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return deleteByProfileId(profileId);
         }
         return certificationRepository.findByProfileIdOrderBySortOrderAsc(profileId)
