@@ -87,8 +87,9 @@ COPY --from=builder /app/target/*.jar app.jar
 # Change ownership to non-root user
 RUN chown -R appuser:appgroup /app
 
-# F-411: Read-only filesystem — app only needs /app/uploads and /tmp
-RUN mkdir -p /tmp && chown appuser:appgroup /tmp
+# F-411: Read-only filesystem — app only needs /app/uploads, /app/logs, and /tmp
+RUN mkdir -p /app/uploads /app/logs /tmp && \
+    chown -R appuser:appgroup /app/uploads /app/logs /tmp
 
 # Switch to non-root user
 USER appuser
