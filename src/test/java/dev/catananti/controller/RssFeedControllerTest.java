@@ -62,7 +62,7 @@ class RssFeedControllerTest {
             when(articleService.findAllPublishedForFeed()).thenReturn(Flux.empty());
 
             StepVerifier.create(controller.getRssFeed())
-                    .assertNext(result -> assertThat(result).isEqualTo("<rss>cached</rss>"))
+                    .assertNext(result -> assertThat(result.getBody()).isEqualTo("<rss>cached</rss>"))
                     .verifyComplete();
         }
 
@@ -77,12 +77,13 @@ class RssFeedControllerTest {
 
             StepVerifier.create(controller.getRssFeed())
                     .assertNext(result -> {
-                        assertThat(result).contains("<?xml version=\"1.0\"");
-                        assertThat(result).contains("<rss version=\"2.0\"");
-                        assertThat(result).contains("<title>Portfolio Blog</title>");
-                        assertThat(result).contains("<title>Test Article</title>");
-                        assertThat(result).contains("/blog/test-article");
-                        assertThat(result).contains("Test excerpt");
+                        String body = result.getBody();
+                        assertThat(body).contains("<?xml version=\"1.0\"");
+                        assertThat(body).contains("<rss version=\"2.0\"");
+                        assertThat(body).contains("<title>Portfolio Blog</title>");
+                        assertThat(body).contains("<title>Test Article</title>");
+                        assertThat(body).contains("/blog/test-article");
+                        assertThat(body).contains("Test excerpt");
                     })
                     .verifyComplete();
         }
@@ -96,9 +97,10 @@ class RssFeedControllerTest {
 
             StepVerifier.create(controller.getRssFeed())
                     .assertNext(result -> {
-                        assertThat(result).contains("<rss version=\"2.0\"");
-                        assertThat(result).contains("</rss>");
-                        assertThat(result).doesNotContain("<item>");
+                        String body = result.getBody();
+                        assertThat(body).contains("<rss version=\"2.0\"");
+                        assertThat(body).contains("</rss>");
+                        assertThat(body).doesNotContain("<item>");
                     })
                     .verifyComplete();
         }
@@ -112,9 +114,10 @@ class RssFeedControllerTest {
 
             StepVerifier.create(controller.getRssFeed())
                     .assertNext(result -> {
-                        assertThat(result).contains("<link>https://catananti.dev</link>");
-                        assertThat(result).contains("<description>Developer blog</description>");
-                        assertThat(result).contains("<language>en-us</language>");
+                        String body = result.getBody();
+                        assertThat(body).contains("<link>https://catananti.dev</link>");
+                        assertThat(body).contains("<description>Developer blog</description>");
+                        assertThat(body).contains("<language>en-us</language>");
                     })
                     .verifyComplete();
         }
@@ -129,7 +132,7 @@ class RssFeedControllerTest {
             when(cacheService.set(eq("rss:feed"), anyString(), any())).thenReturn(Mono.just(true));
 
             StepVerifier.create(controller.getRssFeed())
-                    .assertNext(result -> assertThat(result).contains("<lastBuildDate>"))
+                    .assertNext(result -> assertThat(result.getBody()).contains("<lastBuildDate>"))
                     .verifyComplete();
         }
     }
