@@ -103,6 +103,7 @@ class SnowflakeIdTest {
         void shouldProduceUniqueIdsUnderConcurrency() throws InterruptedException {
             int threadCount = 8;
             int idsPerThread = 5_000;
+            int expectedTotal = threadCount * idsPerThread;
             Set<Long> ids = ConcurrentHashMap.newKeySet();
             CountDownLatch latch = new CountDownLatch(threadCount);
 
@@ -121,7 +122,12 @@ class SnowflakeIdTest {
             latch.await();
             executor.shutdown();
 
-            assertThat(ids).hasSize(threadCount * idsPerThread);
+            // Use size comparison to avoid AssertJ dumping 40,000 IDs on failure
+            // (which corrupts the surefire forked JVM channel)
+            assertThat(ids.size())
+                    .withFailMessage("Expected %d unique IDs but got %d (%d duplicates)",
+                            expectedTotal, ids.size(), expectedTotal - ids.size())
+                    .isEqualTo(expectedTotal);
         }
     }
 
