@@ -95,16 +95,16 @@ class TokenBlacklistServiceTest {
         }
 
         @Test
-        @DisplayName("should return false and not propagate error when Redis fails")
+        @DisplayName("should return true (local fallback) when Redis fails on blacklist")
         void redisError_shouldReturnFalseAndNotPropagate() {
             // Given
             when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.set(anyString(), anyString(), any(Duration.class)))
                     .thenReturn(Mono.error(new RuntimeException("Redis connection refused")));
 
-            // When / Then
+            // When / Then — local fallback succeeds, returns true
             StepVerifier.create(tokenBlacklistService.blacklist("abc-123", 60000))
-                    .expectNext(false)
+                    .expectNext(true)
                     .verifyComplete();
         }
     }
@@ -161,15 +161,15 @@ class TokenBlacklistServiceTest {
         }
 
         @Test
-        @DisplayName("should fail-closed and return true when Redis errors")
+        @DisplayName("should fail-open and return false when Redis errors and jti not in local blacklist")
         void redisError_shouldReturnTrueFailClosed() {
             // Given
             when(redisTemplate.hasKey("jwt:blacklist:abc-123"))
                     .thenReturn(Mono.error(new RuntimeException("Redis unavailable")));
 
-            // When / Then — fail-closed: assume blacklisted
+            // When / Then — fail-open: jti was never locally blacklisted
             StepVerifier.create(tokenBlacklistService.isBlacklisted("abc-123"))
-                    .expectNext(true)
+                    .expectNext(false)
                     .verifyComplete();
         }
     }

@@ -202,7 +202,7 @@ class BlogMetricsTest {
         void shouldIncrementCommentCreated() {
             blogMetrics.incrementCommentCreated();
 
-            Counter counter = meterRegistry.find("blog.comments.created").counter();
+            Counter counter = meterRegistry.find("blog.comment.events.created").counter();
             assertThat(counter).isNotNull();
             assertThat(counter.count()).isEqualTo(1.0);
         }

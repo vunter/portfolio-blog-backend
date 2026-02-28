@@ -343,35 +343,7 @@ class TranslationServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("urlEncode (private)")
-    class UrlEncode {
-
-        private String invokeUrlEncode(String value) throws Exception {
-            TranslationService service = createService("key");
-            Method method = TranslationService.class.getDeclaredMethod("urlEncode", String.class);
-            method.setAccessible(true);
-            return (String) method.invoke(service, value);
-        }
-
-        @Test
-        @DisplayName("should encode spaces as +")
-        void shouldEncodeSpaces() throws Exception {
-            assertThat(invokeUrlEncode("hello world")).isEqualTo("hello+world");
-        }
-
-        @Test
-        @DisplayName("should encode special characters")
-        void shouldEncodeSpecialChars() throws Exception {
-            assertThat(invokeUrlEncode("a&b=c")).contains("%26").contains("%3D");
-        }
-
-        @Test
-        @DisplayName("should pass through plain text unchanged")
-        void shouldPassThroughPlainText() throws Exception {
-            assertThat(invokeUrlEncode("hello")).isEqualTo("hello");
-        }
-    }
+    // urlEncode method was removed — form encoding handled by BodyInserters.fromFormData
 
     @Nested
     @DisplayName("isAvailable with Pro setting")
@@ -406,7 +378,7 @@ class TranslationServiceTest {
             Mockito.when(webClient.post()).thenReturn(uriSpec);
             Mockito.when(uriSpec.header(ArgumentMatchers.anyString(), ArgumentMatchers.<String>any())).thenReturn(bodySpec);
             Mockito.when(bodySpec.contentType(ArgumentMatchers.any())).thenReturn(bodySpec);
-            Mockito.when(bodySpec.bodyValue(ArgumentMatchers.any())).thenReturn(headersSpec);
+            Mockito.when(bodySpec.body(ArgumentMatchers.any())).thenReturn(headersSpec);
             Mockito.when(headersSpec.retrieve()).thenReturn(responseSpec);
             Mockito.doReturn(bodyToMonoResponse).when(responseSpec).bodyToMono(ArgumentMatchers.<Class>any());
 

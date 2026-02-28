@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.service.AuditService;
 import dev.catananti.service.SiteSettingsService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -24,6 +25,9 @@ class AdminSettingsControllerTest {
 
     @Mock
     private SiteSettingsService settingsService;
+
+    @Mock
+    private AuditService auditService;
 
     @Mock
     private Authentication authentication;
@@ -77,6 +81,9 @@ class AdminSettingsControllerTest {
             );
 
             when(settingsService.updateSettings(anyMap())).thenReturn(Mono.just(updated));
+            when(authentication.getName()).thenReturn("admin@test.com");
+            when(auditService.logAction(anyString(), anyString(), anyString(), nullable(Long.class), anyString(), anyString()))
+                    .thenReturn(Mono.empty());
 
             StepVerifier.create(controller.updateSettings(input, authentication))
                     .assertNext(result -> {

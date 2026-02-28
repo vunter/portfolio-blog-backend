@@ -131,7 +131,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("CREATE");
+            assertThat(captor.getValue().getAction()).isEqualTo("USER_CREATE");
             assertThat(captor.getValue().getEntityType()).isEqualTo("USER");
             assertThat(captor.getValue().getDetails()).contains("user@example.com");
         }
@@ -145,7 +145,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("UPDATE_ROLE");
+            assertThat(captor.getValue().getAction()).isEqualTo("USER_UPDATE_ROLE");
             assertThat(captor.getValue().getDetails()).contains("EDITOR").contains("ADMIN");
         }
 
@@ -157,7 +157,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("CREATE");
+            assertThat(captor.getValue().getAction()).isEqualTo("ARTICLE_CREATE");
             assertThat(captor.getValue().getEntityType()).isEqualTo("ARTICLE");
             assertThat(captor.getValue().getDetails()).contains("my-article");
         }
@@ -182,7 +182,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("INVALIDATE_CACHE");
+            assertThat(captor.getValue().getAction()).isEqualTo("CACHE_INVALIDATE");
             assertThat(captor.getValue().getEntityType()).isEqualTo("CACHE");
             assertThat(captor.getValue().getDetails()).contains("articles");
         }
@@ -195,7 +195,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("DELETE");
+            assertThat(captor.getValue().getAction()).isEqualTo("USER_DELETE");
             assertThat(captor.getValue().getEntityType()).isEqualTo("USER");
         }
 
@@ -360,7 +360,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("DELETE");
+            assertThat(captor.getValue().getAction()).isEqualTo("ARTICLE_DELETE");
             assertThat(captor.getValue().getEntityType()).isEqualTo("ARTICLE");
             assertThat(captor.getValue().getDetails()).contains("my-article");
         }
@@ -373,7 +373,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("RESTORE");
+            assertThat(captor.getValue().getAction()).isEqualTo("ARTICLE_RESTORE");
             assertThat(captor.getValue().getDetails()).contains("version 3");
         }
 
@@ -385,7 +385,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("EXPORT");
+            assertThat(captor.getValue().getAction()).isEqualTo("DATA_EXPORT");
             assertThat(captor.getValue().getEntityType()).isEqualTo("DATA");
         }
 
@@ -397,7 +397,7 @@ class AuditServiceTest {
 
             ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
             verify(auditLogRepository).save(captor.capture());
-            assertThat(captor.getValue().getAction()).isEqualTo("IMPORT");
+            assertThat(captor.getValue().getAction()).isEqualTo("DATA_IMPORT");
             assertThat(captor.getValue().getDetails()).contains("15 articles");
             assertThat(captor.getValue().getDetails()).contains("8 tags");
         }
