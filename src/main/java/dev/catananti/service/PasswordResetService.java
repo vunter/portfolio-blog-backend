@@ -4,9 +4,11 @@ import dev.catananti.entity.PasswordResetToken;
 import dev.catananti.repository.PasswordResetTokenRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.util.DigestUtils;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -20,10 +22,8 @@ import java.util.Base64;
 
 /**
  * Service for handling password reset functionality with security best practices.
- * TODO F-200: Add rate limiting per email address for password reset requests (not just global)
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class PasswordResetService {
 
@@ -33,61 +33,106 @@ public class PasswordResetService {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final IdService idService;
+    private final ReactiveRedisTemplate<String, String> redisTemplate;
 
     private static final Duration TOKEN_VALIDITY = Duration.ofHours(1);
     private static final int MAX_TOKENS_PER_HOUR = 3;
     private static final int TOKEN_LENGTH = 32;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final String RATE_LIMIT_PREFIX = "pwd_reset_rate:";
 
     @Value("${app.url:http://localhost:8080}")
     private String appUrl;
+
+    public PasswordResetService(PasswordResetTokenRepository tokenRepository,
+                                 UserRepository userRepository,
+                                 EmailService emailService,
+                                 PasswordEncoder passwordEncoder,
+                                 AuditService auditService,
+                                 IdService idService,
+                                 @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate) {
+        this.tokenRepository = tokenRepository;
+        this.userRepository = userRepository;
+        this.emailService = emailService;
+        this.passwordEncoder = passwordEncoder;
+        this.auditService = auditService;
+        this.idService = idService;
+        this.redisTemplate = redisTemplate;
+    }
 
     /**
      * Request a password reset. Always returns success to prevent email enumeration.
      */
     @Transactional
     public Mono<Void> requestPasswordReset(String email) {
-        // Always return success to prevent email enumeration attacks
-        return userRepository.findByEmail(email.toLowerCase().trim())
-                .flatMap(user -> {
-                    // Check rate limiting: max 3 tokens per hour per user
-                    LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
-                    return tokenRepository.countRecentTokensByUserId(user.getId(), oneHourAgo)
-                            .flatMap(count -> {
-                                if (count >= MAX_TOKENS_PER_HOUR) {
-                                    log.warn("Password reset rate limit exceeded for: {}", email);
-                                    return Mono.empty(); // Silently ignore
-                                }
+        String normalizedEmail = email.toLowerCase().trim();
+        // F-200: Per-email rate limiting via Redis
+        Mono<Boolean> rateLimitCheck = checkEmailRateLimit(normalizedEmail);
 
-                                // Generate secure token
-                                String plainToken = generateSecureToken();
-                                // SEC-05: Store SHA-256 hash of the token in the database
-                                String hashedToken = hashToken(plainToken);
+        return rateLimitCheck.flatMap(allowed -> {
+            if (!allowed) {
+                log.warn("Password reset rate limit exceeded for email: {}", normalizedEmail);
+                return Mono.empty();
+            }
+            return userRepository.findByEmail(normalizedEmail)
+                    .flatMap(user -> {
+                        // Check rate limiting: max 3 tokens per hour per user
+                        LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
+                        return tokenRepository.countRecentTokensByUserId(user.getId(), oneHourAgo)
+                                .flatMap(count -> {
+                                    if (count >= MAX_TOKENS_PER_HOUR) {
+                                        log.warn("Password reset rate limit exceeded for: {}", email);
+                                        return Mono.empty(); // Silently ignore
+                                    }
 
-                                PasswordResetToken resetToken = PasswordResetToken.builder()
-                                        .id(idService.nextId())
-                                        .userId(user.getId())
-                                        .token(hashedToken)
-                                        .expiresAt(LocalDateTime.now().plus(TOKEN_VALIDITY))
-                                        .used(false)
-                                        .createdAt(LocalDateTime.now())
-                                        .build();
+                                    // Generate secure token
+                                    String plainToken = generateSecureToken();
+                                    // SEC-05: Store SHA-256 hash of the token in the database
+                                    String hashedToken = hashToken(plainToken);
 
-                                return tokenRepository.save(resetToken)
-                                        .flatMap(saved -> emailService.sendPasswordResetEmail(
-                                                user.getEmail(),
-                                                user.getName(),
-                                                plainToken // Send plain token in email
-                                        ))
-                                        .doOnSuccess(v -> log.debug("Password reset email sent to: {}", email))
-                                        .doOnError(e -> log.error("Failed to process password reset for {}: {}", email, e.getMessage()));
-                            });
+                                    PasswordResetToken resetToken = PasswordResetToken.builder()
+                                            .id(idService.nextId())
+                                            .userId(user.getId())
+                                            .token(hashedToken)
+                                            .expiresAt(LocalDateTime.now().plus(TOKEN_VALIDITY))
+                                            .used(false)
+                                            .createdAt(LocalDateTime.now())
+                                            .build();
+
+                                    return tokenRepository.save(resetToken)
+                                            .flatMap(saved -> emailService.sendPasswordResetEmail(
+                                                    user.getEmail(),
+                                                    user.getName(),
+                                                    plainToken // Send plain token in email
+                                            ))
+                                            .doOnSuccess(v -> log.debug("Password reset email sent to: {}", email))
+                                            .doOnError(e -> log.error("Failed to process password reset for {}: {}", email, e.getMessage()));
+                                });
+                    })
+                    .onErrorResume(e -> {
+                        log.warn("Password reset error for {}: {}", email, e.getMessage());
+                        return Mono.empty();
+                    })
+                    .then();
+        });
+    }
+
+    /**
+     * F-200: Check per-email rate limit using Redis INCR + EXPIRE pattern.
+     * Allows max 3 requests per email per hour. Falls back to allow if Redis unavailable.
+     */
+    private Mono<Boolean> checkEmailRateLimit(String email) {
+        if (redisTemplate == null) return Mono.just(true);
+        String key = RATE_LIMIT_PREFIX + email;
+        return redisTemplate.opsForValue().increment(key)
+                .flatMap(count -> {
+                    if (count == 1) {
+                        return redisTemplate.expire(key, Duration.ofHours(1)).thenReturn(count);
+                    }
+                    return Mono.just(count);
                 })
-                .onErrorResume(e -> {
-                    log.warn("Password reset error for {}: {}", email, e.getMessage());
-                    return Mono.empty();
-                })
-                .then();
+                .map(count -> count <= MAX_TOKENS_PER_HOUR)
+                .onErrorReturn(true);
     }
 
     /**

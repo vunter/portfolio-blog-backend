@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit;
  * Uses Caffeine for caches with TTL (like resumeHtml).
  */
 @Configuration(proxyBeanMethods = false)
-@Profile({"dev", "local"})
+@Profile({"dev", "local", "e2e"})
 public class DevCacheConfig {
 
     @Bean

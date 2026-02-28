@@ -5,6 +5,7 @@ import dev.catananti.entity.LocalizedText;
 import dev.catananti.entity.ResumeTemplate;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ResumeTemplateRepository;
+import dev.catananti.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -34,6 +35,12 @@ class PublicResumeServiceTest {
     @Mock
     private ResumeProfileService resumeProfileService;
 
+    @Mock
+    private UserRepository userRepository;
+
+    @Mock
+    private HtmlSanitizerService htmlSanitizerService;
+
     @InjectMocks
     private PublicResumeService publicResumeService;
 
@@ -54,6 +61,9 @@ class PublicResumeServiceTest {
                 .status("ACTIVE")
                 .ownerId(ownerId)
                 .build();
+
+        // HtmlSanitizerService passes through content in tests
+        lenient().when(htmlSanitizerService.sanitize(anyString())).thenAnswer(inv -> inv.getArgument(0));
     }
 
     // ============================

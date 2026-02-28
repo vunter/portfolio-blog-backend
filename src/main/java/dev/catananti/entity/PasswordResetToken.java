@@ -14,7 +14,6 @@ import java.time.LocalDateTime;
 
 /**
  * Entity representing a password reset token for secure password recovery.
- * TODO F-254: Ensure DB index on 'token' column for fast lookup (CREATE INDEX idx_prt_token ON password_reset_tokens(token))
  */
 @Data
 @Builder

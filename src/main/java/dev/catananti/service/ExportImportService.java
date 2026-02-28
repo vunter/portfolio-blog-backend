@@ -30,7 +30,6 @@ import java.util.stream.Collectors;
 
 /**
  * Service for exporting and importing blog data.
- * TODO F-176: Add progress feedback for long-running export/import operations (e.g., SSE or polling)
  */
 @Service
 @RequiredArgsConstructor
@@ -48,10 +47,14 @@ public class ExportImportService {
      * Export all blog data to JSON format.
      */
     public Mono<BlogExport> exportAll(String exportedBy) {
+        log.info("Export started by {}", exportedBy);
         return Mono.zip(
-                exportArticles().collectList(),
-                exportTags().collectList(),
+                exportArticles().collectList()
+                        .doOnSuccess(a -> log.info("Export progress: {} articles exported", a.size())),
+                exportTags().collectList()
+                        .doOnSuccess(t -> log.info("Export progress: {} tags exported", t.size())),
                 getBlogStats()
+                        .doOnSuccess(s -> log.info("Export progress: stats computed"))
         ).map(tuple -> {
             List<ArticleExportData> articles = tuple.getT1();
             List<TagExportData> tags = tuple.getT2();
@@ -227,9 +230,14 @@ public class ExportImportService {
      */
     @Transactional
     public Mono<ImportResult> importData(BlogExport export, boolean overwrite) {
+        int totalTags = export.getTags() != null ? export.getTags().size() : 0;
+        int totalArticles = export.getArticles() != null ? export.getArticles().size() : 0;
+        log.info("Import started: {} tags, {} articles to process", totalTags, totalArticles);
+
         return importTags(export.getTags(), overwrite)
+                .doOnSuccess(v -> log.info("Import progress: 50% — tags imported"))
                 .then(importArticles(export.getArticles(), overwrite))
-                .doOnSuccess(result -> log.info("Import completed: {} articles, {} tags", 
+                .doOnSuccess(result -> log.info("Import progress: 100% — {} articles, {} tags completed", 
                         result.articlesImported(), result.tagsImported()));
     }
 

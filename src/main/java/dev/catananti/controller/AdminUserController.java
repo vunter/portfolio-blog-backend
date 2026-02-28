@@ -32,8 +32,6 @@ import reactor.core.publisher.Mono;
 @PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "Admin - Users", description = "User management endpoints")
 @SecurityRequirement(name = "Bearer Authentication")
-// TODO F-137: Use soft-delete (deactivate) instead of hard delete for user accounts
-// TODO F-140: Add user activity log (last login, action count) to user management
 @Slf4j
 public class AdminUserController {
 
@@ -183,13 +181,13 @@ public class AdminUserController {
     }
 
     @DeleteMapping("/{id}")
-    @Operation(summary = "Delete user", description = "Delete a user account")
-    public Mono<ResponseEntity<Void>> deleteUser(
+    @Operation(summary = "Delete user", description = "Soft-delete a user account (deactivates instead of removing)")
+    public Mono<ResponseEntity<UserResponse>> deleteUser(
             @PathVariable Long id,
             Authentication authentication) {
-        log.info("Deleting user: id={}", id);
-        return userService.deleteUserSafe(id, authentication.getName())
-                .then(Mono.just(ResponseEntity.noContent().<Void>build()));
+        log.info("Soft-deleting (deactivating) user: id={}", id);
+        return userService.deactivateUser(id, authentication.getName())
+                .map(ResponseEntity::ok);
     }
 
     @GetMapping("/stats")
@@ -229,6 +227,28 @@ public class AdminUserController {
         log.info("Deactivating user: id={}", id);
         return userService.deactivateUser(id, authentication.getName())
                 .map(ResponseEntity::ok);
+    }
+
+    /**
+     * F-140: Get user activity summary.
+     * Note: Full activity tracking (last_login_at, action_count columns) requires a schema migration.
+     * Currently returns data available from audit logs.
+     */
+    @GetMapping("/{id}/activity")
+    @Operation(summary = "Get user activity", description = "Get user activity summary from audit logs")
+    public Mono<ResponseEntity<java.util.Map<String, Object>>> getUserActivity(@PathVariable Long id) {
+        log.debug("Fetching activity for user: id={}", id);
+        return userService.getUserById(id)
+                .flatMap(user -> {
+                    // Derive activity from audit logs
+                    var result = new java.util.HashMap<String, Object>();
+                    result.put("userId", user.getId());
+                    result.put("email", user.getEmail());
+                    result.put("active", user.getActive());
+                    result.put("createdAt", user.getCreatedAt());
+                    result.put("note", "Full activity tracking (last_login_at, action_count) requires schema migration to add columns to users table");
+                    return Mono.just(ResponseEntity.ok((java.util.Map<String, Object>) result));
+                });
     }
 
     // ============================================

@@ -1,17 +1,18 @@
 package dev.catananti.controller;
 
+import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.TagResponse;
 import dev.catananti.service.TagService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/tags")
@@ -25,11 +26,12 @@ public class TagController {
 
     @GetMapping
     @Operation(summary = "Get all tags", description = "Retrieve all tags with article counts")
-    // TODO F-111: Add pagination to getAllTags — currently returns all tags in a single response
-    public Mono<List<TagResponse>> getAllTags(
-            @Parameter(description = "Locale for translations") @RequestParam(required = false) String locale) {
-        log.debug("Fetching all tags");
-        return tagService.getAllTags(locale).collectList();
+    public Mono<PageResponse<TagResponse>> getAllTags(
+            @Parameter(description = "Locale for translations") @RequestParam(required = false) String locale,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "50") @Min(1) @Max(100) int size) {
+        log.debug("Fetching all tags: page={}, size={}", page, size);
+        return tagService.getAllTagsPaginated(locale, page, size);
     }
 
     @GetMapping("/{slug}")

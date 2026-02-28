@@ -32,7 +32,6 @@ public class SearchController {
 
     @GetMapping
     @Operation(summary = "Search articles", description = "Search published articles with filters and pagination")
-    // TODO F-106: Log search queries to analytics for popular search terms reporting
     public Mono<PageResponse<ArticleResponse>> search(
             @RequestParam(required = false) @Size(max = 500, message = "Query too long") String q,
             @RequestParam(required = false) @Size(max = 10, message = "Maximum 10 tags") List<String> tags,
@@ -44,6 +43,7 @@ public class SearchController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) {
         log.info("Search request: query='{}', page={}, size={}", q, page, size);
+        log.info("[search-analytics] term='{}' tags={} sortBy={} page={}", q, tags, sortBy, page);
 
         SearchRequest request = SearchRequest.builder()
                 .query(q)

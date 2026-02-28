@@ -2,7 +2,9 @@ package dev.catananti.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -18,7 +20,6 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * API information and health endpoints.
- * TODO F-073: Read version from build-info or pom.xml instead of @Value to avoid drift
  */
 @RestController
 @RequestMapping("/api")
@@ -26,14 +27,24 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class ApiInfoController {
 
-    @Value("${app.version:2.0.0}")
-    private String appVersion;
+    private final String appVersion;
 
     @Value("${app.name:Portfolio Blog API}")
     private String appName;
 
     @Value("${app.description:RESTful API for Portfolio Blog}")
     private String appDescription;
+
+    public ApiInfoController(
+            @Autowired(required = false) BuildProperties buildProperties,
+            @Value("${app.version:2.0.0}") String fallbackVersion) {
+        if (buildProperties != null) {
+            this.appVersion = buildProperties.getVersion();
+        } else {
+            log.info("BuildProperties not available, using fallback version");
+            this.appVersion = fallbackVersion;
+        }
+    }
 
     private final Instant startTime = Instant.now();
 

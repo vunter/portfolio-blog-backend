@@ -268,15 +268,27 @@ class ArticleAdminServiceTest {
         }
 
         @Test
-        @DisplayName("Should throw DuplicateResourceException for duplicate slug")
+        @DisplayName("Should auto-suffix slug on duplicate instead of throwing")
         void shouldThrowOnDuplicateSlug() {
-            // Given
+            // Given - F-150: slug collision now auto-resolves with random suffix
+            // existsBySlug("new-article") returns true, triggering auto-suffix
+            when(articleRepository.existsBySlug(anyString())).thenReturn(Mono.just(true));
             when(articleRepository.existsBySlug("new-article")).thenReturn(Mono.just(true));
+            when(idService.nextId()).thenReturn(556L);
+            when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            when(htmlSanitizerService.sanitize(anyString())).thenAnswer(inv -> inv.getArgument(0));
+            when(articleRepository.save(any(Article.class))).thenReturn(Mono.just(testArticle));
+            when(articleService.enrichArticleWithMetadata(any(Article.class)))
+                    .thenReturn(Mono.just(testArticle));
+            when(articleService.mapToResponse(any(Article.class)))
+                    .thenReturn(testArticleResponse);
 
-            // When & Then
+            // When & Then - should succeed with auto-suffixed slug
             StepVerifier.create(articleAdminService.createArticle(draftRequest))
-                    .expectError(DuplicateResourceException.class)
-                    .verify();
+                    .assertNext(response -> {
+                        assertThat(response).isNotNull();
+                    })
+                    .verifyComplete();
         }
 
         @Test

@@ -136,14 +136,14 @@ class AdminNewsletterControllerTest {
     class DeleteBatch {
 
         @Test
-        @DisplayName("Should batch delete subscribers")
+        @DisplayName("Should batch delete subscribers when confirmed")
         void shouldBatchDeleteSubscribers() {
             List<Long> ids = List.of(1L, 2L, 3L);
 
             when(newsletterService.deleteSubscribersBatch(ids))
                     .thenReturn(Mono.just(3L));
 
-            StepVerifier.create(controller.deleteBatch(Map.of("ids", ids)))
+            StepVerifier.create(controller.deleteBatch(Map.of("ids", ids), true))
                     .assertNext(result -> {
                         assertThat(result).containsEntry("message", "Subscribers deleted");
                         assertThat(result).containsEntry("count", (Object) 3L);
@@ -156,7 +156,7 @@ class AdminNewsletterControllerTest {
         void shouldRejectBatchExceeding1000() {
             List<Long> ids = LongStream.rangeClosed(1, 1001).boxed().toList();
 
-            StepVerifier.create(controller.deleteBatch(Map.of("ids", ids)))
+            StepVerifier.create(controller.deleteBatch(Map.of("ids", ids), true))
                     .assertNext(result -> {
                         assertThat(result).containsEntry("message", "Too many IDs. Maximum is 1000.");
                         assertThat(result).containsEntry("count", (Object) 0);

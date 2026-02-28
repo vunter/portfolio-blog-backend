@@ -9,8 +9,10 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.Set;
 
-// TODO F-263: Consider a sealed interface ArticleView with ArticleSummary and ArticleDetail implementations
-// TODO F-267: Evaluate converting to a record DTO for immutability (requires removing @Builder/@Data)
+// Design decision: ArticleResponse is used as both summary and detail. A sealed interface
+// can be introduced when the two views diverge significantly.
+// Trade-off: Converting to a record would provide immutability but breaks Lombok @Builder/@Data
+// which is used extensively. The Lombok approach is retained for builder ergonomics.
 @Data
 @Builder
 @NoArgsConstructor

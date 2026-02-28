@@ -160,7 +160,7 @@ class AdminUserInitializerTest {
     @Test
     @DisplayName("Should accept password exactly 12 characters long")
     void shouldAcceptPasswordExactly12Chars() {
-        ReflectionTestUtils.setField(initializer, "adminPassword", "exactly12chr");
+        ReflectionTestUtils.setField(initializer, "adminPassword", "Exactly12ch!");
         when(userRepository.existsByEmail("admin@example.com")).thenReturn(Mono.just(false));
         when(passwordEncoder.encode(anyString())).thenReturn("encoded-password");
         when(idService.nextId()).thenReturn(1L);

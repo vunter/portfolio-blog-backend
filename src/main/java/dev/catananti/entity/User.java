@@ -25,9 +25,6 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class User implements Persistable<Long>, NewRecordAware {
 
-    // TODO F-259: Persist lockout state (accountLockedUntil, failedAttempts) in DB instead of in-memory LoginAttemptService
-    // TODO F-260: Add emailVerified boolean field to enforce email verification on registration
-
     @Id
     private Long id;
 
@@ -63,6 +60,10 @@ public class User implements Persistable<Long>, NewRecordAware {
     @Column("cf_email_rule_id")
     private String cfEmailRuleId;
 
+    @Column("email_verified")
+    @Builder.Default
+    private Boolean emailVerified = false;
+
     @Column("mfa_enabled")
     @Builder.Default
     private Boolean mfaEnabled = false;
@@ -71,6 +72,14 @@ public class User implements Persistable<Long>, NewRecordAware {
     @Builder.Default
     private String mfaPreferredMethod = "TOTP";
     
+    // F-259: Persist lockout state in DB for distributed-safe brute-force protection
+    @Column("account_locked_until")
+    private LocalDateTime accountLockedUntil;
+
+    @Column("failed_login_attempts")
+    @Builder.Default
+    private Integer failedLoginAttempts = 0;
+
     @Column("created_at")
     private LocalDateTime createdAt;
     

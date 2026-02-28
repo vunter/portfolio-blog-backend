@@ -23,7 +23,8 @@ public class OpenApiConfig {
     @Value("${server.port:8080}")
     private String serverPort;
 
-    // TODO F-023: Prefer @OpenAPIDefinition annotation or RouterFunction-based config over imperative @Bean in Boot 4.x
+    // F-023: @OpenAPIDefinition cannot express dynamic server URLs from @Value or SecurityScheme
+    // components as cleanly. Imperative @Bean is retained for full configurability.
     @Bean
     public OpenAPI customOpenAPI() {
         final String securitySchemeName = "bearerAuth";

@@ -9,11 +9,11 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Service for managing cache invalidation strategies.
  * Provides fine-grained control over Redis cache invalidation.
- * TODO F-238: Add cache metrics (hit/miss ratio) for monitoring and tuning
  */
 @Service
 @Slf4j
@@ -21,6 +21,9 @@ public class CacheService {
 
     private final ReactiveRedisTemplate<String, Object> redisTemplate;
     private final ObjectMapper objectMapper;
+
+    private final AtomicLong cacheHits = new AtomicLong(0);
+    private final AtomicLong cacheMisses = new AtomicLong(0);
 
     public CacheService(
             @org.springframework.beans.factory.annotation.Autowired(required = false) 
@@ -39,7 +42,14 @@ public class CacheService {
      * Returns the fallback value when Redis is unavailable.
      */
     private <T> Mono<T> withRedis(T fallback, java.util.function.Supplier<Mono<T>> operation) {
-        return isRedisAvailable() ? operation.get() : Mono.just(fallback);
+        if (!isRedisAvailable()) {
+            return Mono.just(fallback);
+        }
+        return operation.get()
+                .onErrorResume(e -> {
+                    log.debug("Redis operation failed (falling back gracefully): {}", e.getMessage());
+                    return Mono.just(fallback);
+                });
     }
 
     // Cache key prefixes
@@ -74,7 +84,11 @@ public class CacheService {
                     }
                 })
                 .filter(v -> v != null)
-                .doOnNext(v -> log.trace("Cache hit for key: {}", key));
+                .doOnNext(v -> {
+                    cacheHits.incrementAndGet();
+                    log.trace("Cache hit for key: {}", key);
+                })
+                .switchIfEmpty(Mono.<T>empty().doOnSubscribe(s -> cacheMisses.incrementAndGet()));
     }
 
     /**
@@ -207,17 +221,14 @@ public class CacheService {
 
     /**
      * Delete keys matching a pattern using SCAN (non-blocking).
+     * Streams results in bounded batches to prevent OOM on large keyspaces.
      */
-    // TODO F-161: Use flux streaming or limit SCAN count to prevent OOM on large keyspaces
     private Mono<Long> deleteByPattern(String pattern) {
         return redisTemplate.scan(ScanOptions.scanOptions().match(pattern).count(100).build())
-                .collectList()
-                .flatMap(keys -> {
-                    if (keys.isEmpty()) {
-                        return Mono.just(0L);
-                    }
-                    return redisTemplate.delete(keys.toArray(new String[0]));
-                });
+                .buffer(100)
+                .flatMap(keys -> redisTemplate.delete(keys.toArray(new String[0])))
+                .reduce(0L, Long::sum)
+                .defaultIfEmpty(0L);
     }
 
     /**
@@ -226,6 +237,28 @@ public class CacheService {
     private Mono<Long> countByPattern(String pattern) {
         return redisTemplate.scan(ScanOptions.scanOptions().match(pattern).count(100).build()).count();
     }
+
+    /**
+     * Returns the cache hit ratio (0.0 to 1.0). Returns 0.0 if no requests recorded.
+     */
+    public double getHitRatio() {
+        long hits = cacheHits.get();
+        long misses = cacheMisses.get();
+        long total = hits + misses;
+        return total == 0 ? 0.0 : (double) hits / total;
+    }
+
+    /**
+     * Returns cache hit/miss counters and hit ratio.
+     */
+    public HitMissStats getHitMissStats() {
+        long hits = cacheHits.get();
+        long misses = cacheMisses.get();
+        long total = hits + misses;
+        return new HitMissStats(hits, misses, total == 0 ? 0.0 : (double) hits / total);
+    }
+
+    public record HitMissStats(long hits, long misses, double hitRatio) {}
 
     /**
      * Cache statistics record.

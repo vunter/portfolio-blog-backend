@@ -2,9 +2,10 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
-# F-430: TODO: Add alerting rules and AlertManager configuration
-# rule_files:
-#   - "alert_rules.yml"
+rule_files:
+  - "alert_rules.yml"
+
+# Alerting — uncomment when AlertManager is deployed:
 # alerting:
 #   alertmanagers:
 #     - static_configs:
@@ -26,12 +27,14 @@ scrape_configs:
     # No auth needed: Prometheus scrapes directly within Docker network
     # External access is protected by nginx basic auth
 
-  # F-432: TODO: Add node_exporter for host-level metrics (CPU, memory, disk, network)
+  # Node Exporter — host-level metrics (CPU, memory, disk, network)
+  # Setup: docker run -d --net=host --pid=host -v /:/host:ro quay.io/prometheus/node-exporter --path.rootfs=/host
   # - job_name: 'node'
   #   static_configs:
   #     - targets: ['node-exporter:9100']
 
-  # F-433: TODO: Add nginx-prometheus-exporter for HTTP traffic metrics
+  # Nginx Exporter — HTTP traffic metrics
+  # Setup: docker run -d -p 9113:9113 nginx/nginx-prometheus-exporter -nginx.scrape-uri=http://nginx:8080/stub_status
   # - job_name: 'nginx'
   #   static_configs:
   #     - targets: ['nginx-exporter:9113']

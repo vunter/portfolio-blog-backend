@@ -10,7 +10,9 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
-// TODO F-246: Add unique constraint annotation for (article_id, locale) pair to prevent duplicate translations
+// F-246: Unique constraint on (article_id, locale) is enforced by PRIMARY KEY in schema.sql:
+// CREATE TABLE article_i18n (... PRIMARY KEY (article_id, locale));
+// The upsert in ArticleI18nRepository uses ON CONFLICT (article_id, locale) accordingly.
 @Table("article_i18n")
 @Data
 @Builder

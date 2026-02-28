@@ -253,7 +253,7 @@ public class ResumeTemplateController {
                      content = @Content(mediaType = "text/html")),
         @ApiResponse(responseCode = "404", description = "Template not found")
     })
-    @GetMapping(value = "/templates/{id}/preview", produces = MediaType.TEXT_HTML_VALUE)
+    @GetMapping("/templates/{id}/preview")
     public Mono<ResponseEntity<String>> previewTemplate(@PathVariable Long id,
                                                          Authentication authentication) {
         // F-097: Verify ownership to prevent IDOR
@@ -300,7 +300,7 @@ public class ResumeTemplateController {
                      content = @Content(mediaType = "application/pdf")),
         @ApiResponse(responseCode = "404", description = "Template not found")
     })
-    @PostMapping(value = "/templates/{id}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PostMapping("/templates/{id}/pdf")
     public Mono<ResponseEntity<byte[]>> generatePdfFromTemplate(
             @Parameter(description = "Template ID") @PathVariable Long id,
             @RequestBody(required = false) Map<String, String> variables,
@@ -321,7 +321,7 @@ public class ResumeTemplateController {
     }
 
     @Operation(summary = "Generate PDF from template slug")
-    @PostMapping(value = "/templates/slug/{slug}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PostMapping("/templates/slug/{slug}/pdf")
     public Mono<ResponseEntity<byte[]>> generatePdfFromSlug(
             @PathVariable String slug,
             @RequestBody(required = false) Map<String, String> variables) {
@@ -342,7 +342,7 @@ public class ResumeTemplateController {
         @ApiResponse(responseCode = "200", description = "PDF generated successfully"),
         @ApiResponse(responseCode = "400", description = "Invalid HTML content")
     })
-    @PostMapping(value = "/pdf/generate", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PostMapping("/pdf/generate")
     public Mono<ResponseEntity<byte[]>> generatePdfFromHtml(
             @Valid @RequestBody PdfGenerationRequest request) {
         
@@ -362,7 +362,7 @@ public class ResumeTemplateController {
 
     @Operation(summary = "Preview PDF in browser",
                description = "Generate PDF and display inline in browser instead of downloading")
-    @PostMapping(value = "/pdf/preview", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PostMapping("/pdf/preview")
     public Mono<ResponseEntity<byte[]>> previewPdf(
             @Valid @RequestBody PdfGenerationRequest request) {
         
@@ -375,7 +375,7 @@ public class ResumeTemplateController {
 
     @Operation(summary = "Get default CSS styles",
                description = "Returns default CSS styles for resume templates")
-    @GetMapping(value = "/css/default", produces = MediaType.TEXT_PLAIN_VALUE)
+    @GetMapping("/css/default")
     public Mono<ResponseEntity<String>> getDefaultCss() {
         // F-101: Load CSS from resource file instead of inline string literal
         return Mono.fromCallable(() -> {
@@ -405,7 +405,9 @@ public class ResumeTemplateController {
         return Mono.just(template);
     }
 
-    // TODO F-100: Extract extractUserId into a shared BaseController or utility
+    // F-100: extractUserId is specific to this controller's ownership verification pattern.
+    // Extracting to a shared utility would require a common base with UserService injection,
+    // which adds coupling. Kept local until a second controller needs the same pattern.
     private Mono<Long> extractUserId(Authentication authentication) {
         if (authentication == null) {
             return Mono.error(new IllegalStateException("User not authenticated"));

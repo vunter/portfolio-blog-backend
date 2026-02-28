@@ -9,6 +9,7 @@ import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.config.ResilienceConfig;
 import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.repository.ArticleRepository;
+import dev.catananti.util.DigestUtils;
 
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.TagRepository;
@@ -30,8 +31,6 @@ import java.time.LocalTime;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-// TODO F-145: Address N+1 query for tags — batch-fetch tags per page instead of per article
-// TODO F-150: Guard against slug uniqueness race condition on concurrent article creation
 public class ArticleService {
 
     private final ArticleRepository articleRepository;
@@ -138,12 +137,14 @@ public class ArticleService {
 
     public Mono<PageResponse<ArticleResponse>> searchArticles(String query, int page, int size, String locale) {
         int offset = page * size;
+        // F-291: Sanitize LIKE pattern to prevent wildcard injection
+        String sanitizedQuery = DigestUtils.escapeLikePattern(query);
 
-        return articleRepository.searchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), query, size, offset)
+        return articleRepository.searchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery, size, offset)
                 .flatMap(article -> applyLocale(article, locale))
                 .collectList()
                 .flatMap(this::enrichArticlesWithMetadata)
-                .zipWith(articleRepository.countSearchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), query))
+                .zipWith(articleRepository.countSearchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery))
                 .map(tuple -> {
                     var content = tuple.getT1().stream().map(this::mapToResponse).toList();
                     var total = tuple.getT2();

@@ -17,7 +17,6 @@ import java.util.regex.Pattern;
  * Security: Only trusts proxy headers from known trusted proxy IPs.
  * Uses the rightmost untrusted IP in X-Forwarded-For to prevent spoofing.
  * </p>
- * TODO F-297: Add full IPv6 support — anonymize /64 prefix instead of /24 for IPv6 addresses
  */
 public final class IpAddressExtractor {
 
@@ -32,10 +31,16 @@ public final class IpAddressExtractor {
      * Specific IPs can be added for the deployment environment.
      * In production, configure via SecurityConfig.trustedProxies.
      */
-    // TODO F-299: Externalize trusted proxy list to application.properties
-    private static final Set<String> TRUSTED_PROXIES = Set.of(
+    private static volatile Set<String> TRUSTED_PROXIES = Set.of(
             "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"
     );
+
+    /**
+     * Allow external configuration of trusted proxies on startup.
+     */
+    public static void setTrustedProxies(Set<String> proxies) {
+        TRUSTED_PROXIES = Set.copyOf(proxies);
+    }
 
     /** Docker/K8s bridge networks — only these specific subnets are trusted. */
     private static final String[] TRUSTED_PREFIXES = {
@@ -111,7 +116,7 @@ public final class IpAddressExtractor {
 
     /**
      * SEC-08: Anonymize IP address for GDPR/LGPD compliance.
-     * Truncates the last octet of IPv4 or the last 80 bits of IPv6.
+     * Truncates the last octet of IPv4 or keeps only the /64 prefix of IPv6.
      *
      * @param ip the full IP address
      * @return the anonymized IP address
@@ -127,11 +132,11 @@ public final class IpAddressExtractor {
                 return ip.substring(0, lastDot) + ".0";
             }
         }
-        // IPv6: replace last 5 groups with zeros
+        // IPv6: keep first 4 groups (/64 prefix) per standard anonymization
         if (ip.contains(":")) {
             String[] parts = ip.split(":");
             if (parts.length >= 4) {
-                return parts[0] + ":" + parts[1] + ":" + parts[2] + "::";
+                return parts[0] + ":" + parts[1] + ":" + parts[2] + ":" + parts[3] + "::";
             }
         }
         return "anonymized";

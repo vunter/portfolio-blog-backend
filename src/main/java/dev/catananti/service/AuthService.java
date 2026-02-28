@@ -30,7 +30,6 @@ import java.util.UUID;
 
 @Service
 @Slf4j
-// TODO F-155: Use constant-time comparison in login path to mitigate timing attacks on user existence
 public class AuthService {
 
     private final UserRepository userRepository;
@@ -139,7 +138,11 @@ public class AuthService {
                                 return clearFailedAttempts(loginKey).thenReturn(user);
                             }))
                 .switchIfEmpty(Mono.defer(() ->
-                        recordFailedAttempt(loginKey, clientIp)
+                        // F-155: Perform a dummy BCrypt hash when user is not found to mitigate
+                        // timing-based user enumeration (equalizes response time with valid users)
+                        Mono.fromCallable(() -> passwordEncoder.matches("dummy", "$2a$12$000000000000000000000uGzFnJwmxBwDL5m49XxfGkCgM0PjWVe"))
+                                .subscribeOn(Schedulers.boundedElastic())
+                                .then(recordFailedAttempt(loginKey, clientIp))
                                 .then(Mono.error(new BadCredentialsException("error.invalid_credentials")))
                 ));
     }

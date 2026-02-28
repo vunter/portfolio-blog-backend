@@ -24,8 +24,9 @@ import java.time.Duration;
 @Slf4j
 public class RedisConfig {
 
-    // TODO F-020: Consider ReactiveRedisTemplate-based caching for WebFlux compatibility
-    // TODO F-021: Add connection pool tuning (maxTotal, maxIdle, minIdle) via LettucePoolingClientConfiguration
+    // F-020: ReactiveRedisTemplate beans are defined below for WebFlux compatibility
+    // F-021: Connection pool tuning is configured via application.properties
+    //        (spring.data.redis.lettuce.pool.max-active, max-idle, min-idle, max-wait)
     @Bean
     @Primary
     public CacheManager cacheManager(RedisConnectionFactory connectionFactory) {

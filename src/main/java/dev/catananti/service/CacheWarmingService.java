@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Cache Warming Service for proactive cache population.
- * TODO F-239: Add cache warming health indicator to expose warm/cold status via /actuator/health
  * 
  * Benefits:
  * - First requests are served from warm cache
@@ -51,6 +50,7 @@ public class CacheWarmingService {
     private final Set<String> warmingInProgress = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean startupWarmingComplete = new AtomicBoolean(false);
     private final AtomicLong backgroundErrors = new AtomicLong(0);
+    private volatile boolean warmed = false;
 
     /**
      * MIN-05: Centralized background task subscriber.
@@ -120,6 +120,7 @@ public class CacheWarmingService {
             long elapsed = Duration.between(start, Instant.now()).toMillis();
             log.info("Cache warming completed in {}ms", elapsed);
             startupWarmingComplete.set(true);
+            warmed = true;
         })
         .doOnError(e -> log.warn("Cache warming failed: {}", e.getMessage()))
         .subscribe(
@@ -292,6 +293,14 @@ public class CacheWarmingService {
      */
     public boolean isStartupWarmingComplete() {
         return startupWarmingComplete.get();
+    }
+
+    /**
+     * Whether cache warming has completed at least once.
+     * Can be used as a health indicator for readiness checks.
+     */
+    public boolean isWarmed() {
+        return warmed;
     }
 
     /**

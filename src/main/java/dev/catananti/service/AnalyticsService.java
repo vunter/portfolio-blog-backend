@@ -10,8 +10,10 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.util.IpAddressExtractor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.r2dbc.core.DatabaseClient;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -24,7 +26,6 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-// TODO F-142: Add pagination to getEvents/analytics queries to avoid unbounded result sets
 public class AnalyticsService {
 
     // F-141: Allowed event types to prevent arbitrary data injection
@@ -37,6 +38,9 @@ public class AnalyticsService {
     private final ObjectMapper objectMapper;
     private final IdService idService;
     private final DatabaseClient databaseClient;
+
+    @Value("${app.analytics.retention-days:90}")
+    private int retentionDays;
 
     public Mono<Void> trackEvent(AnalyticsEventRequest request, ServerHttpRequest httpRequest) {
         // F-141: Validate eventType against allowed set
@@ -133,6 +137,7 @@ public class AnalyticsService {
                 WHERE event_type = :eventType AND created_at >= :since
                 GROUP BY CAST(created_at AS DATE)
                 ORDER BY stat_date
+                LIMIT 366
                 """)
                 .bind("eventType", "VIEW")
                 .bind("since", since)
@@ -266,6 +271,7 @@ public class AnalyticsService {
                 WHERE ae.event_type = :eventType AND ae.created_at >= :since AND a.author_id = :authorId
                 GROUP BY CAST(ae.created_at AS DATE)
                 ORDER BY stat_date
+                LIMIT 366
                 """)
                 .bind("eventType", "VIEW")
                 .bind("since", since)
@@ -360,5 +366,21 @@ public class AnalyticsService {
                 .all()
                 .collectList()
                 .defaultIfEmpty(new ArrayList<>());
+    }
+
+    /**
+     * Cleanup analytics events older than the configured retention period.
+     * Runs daily by default.
+     */
+    @Scheduled(fixedRateString = "${scheduling.analytics-cleanup-ms:86400000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
+    public void cleanupOldEvents() {
+        try {
+            LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
+            analyticsRepository.deleteByCreatedAtBefore(cutoff)
+                    .doOnSuccess(result -> log.info("Analytics events older than {} days cleaned up", retentionDays))
+                    .block();
+        } catch (Exception e) {
+            log.error("Failed to cleanup old analytics events: {}", e.getMessage());
+        }
     }
 }

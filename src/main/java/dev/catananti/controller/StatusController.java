@@ -17,6 +17,10 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
 
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContext;
+
 @RestController
 @RequestMapping("/api/v1/status")
 @ConditionalOnProperty(name = "spring.cache.type", havingValue = "redis", matchIfMissing = true)
@@ -30,9 +34,33 @@ public class StatusController {
     private final CommentRepository commentRepository;
     private final SubscriberRepository subscriberRepository;
 
-    // TODO F-107: Limit component health details exposure — consider hiding internal metrics from unauthenticated users
     @GetMapping
     public Mono<Map<String, Object>> getStatus() {
+        return ReactiveSecurityContextHolder.getContext()
+                .map(SecurityContext::getAuthentication)
+                .filter(Authentication::isAuthenticated)
+                .flatMap(auth -> getDetailedStatus())
+                .switchIfEmpty(getSimplifiedStatus());
+    }
+
+    private Mono<Map<String, Object>> getSimplifiedStatus() {
+        return Mono.zip(checkDatabase(), checkRedis())
+                .map(tuple -> {
+                    String dbStatus = (String) tuple.getT1().get("status");
+                    String redisStatus = (String) tuple.getT2().get("status");
+                    String overall = ("UP".equals(dbStatus) && "UP".equals(redisStatus)) ? "UP" : "DEGRADED";
+                    return Map.<String, Object>of(
+                            "status", overall,
+                            "timestamp", LocalDateTime.now().toString()
+                    );
+                })
+                .onErrorResume(ex -> Mono.just(Map.of(
+                        "status", "DEGRADED",
+                        "timestamp", LocalDateTime.now().toString()
+                )));
+    }
+
+    private Mono<Map<String, Object>> getDetailedStatus() {
         return Mono.zip(
                 checkDatabase(),
                 checkRedis(),

@@ -14,7 +14,6 @@ import reactor.core.publisher.Mono;
 /**
  * Public contact endpoint — only handles message submission.
  * Admin contact management is in {@link AdminContactController}.
- * TODO F-082: Add rate limiting to contact form submission (e.g., 5 per hour per IP)
  */
 @RestController
 @RequestMapping("/api/v1/contact")

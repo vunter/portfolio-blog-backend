@@ -24,7 +24,6 @@ import java.util.regex.Pattern;
  * This service handles resume generation for public download without authentication.
  * Priority: 1) Template's stored HTML → 2) Profile data (translatable) → 3) 404
  */
-// TODO F-202: Sanitize template HTML/CSS to prevent stored XSS in rendered resumes
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -34,6 +33,7 @@ public class PublicResumeService {
     private final ResumeTemplateRepository resumeTemplateRepository;
     private final ResumeProfileService resumeProfileService;
     private final UserRepository userRepository;
+    private final HtmlSanitizerService htmlSanitizerService;
     
     // PDF cache with 5-minute TTL and max 50 entries (M7: replaced manual ConcurrentHashMap with Caffeine)
     private final Cache<String, byte[]> pdfCache = Caffeine.newBuilder()
@@ -227,10 +227,10 @@ public class PublicResumeService {
     private String buildFullHtml(ResumeTemplate template, String lang) {
         String html = template.getHtmlContent();
         
-        // If the HTML content is already a complete document, return it directly
+        // If the HTML content is already a complete document, sanitize and return
         if (html != null && html.trim().toLowerCase().startsWith("<!doctype")) {
-            log.debug("Template HTML is a complete document, returning as-is");
-            return html;
+            log.debug("Template HTML is a complete document, sanitizing before use");
+            return htmlSanitizerService.sanitize(html);
         }
         
         // Otherwise, wrap in a basic HTML structure
@@ -239,6 +239,8 @@ public class PublicResumeService {
         String safeCss = css.replace("</style", "&lt;/style");
         String safeName = (template.getName() != null ? template.getName().getDefault() : "Resume")
                 .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+        // Sanitize template HTML body content to prevent stored XSS
+        String safeHtml = htmlSanitizerService.sanitize(html);
         
         return """
             <!DOCTYPE html>
@@ -253,7 +255,7 @@ public class PublicResumeService {
                 %s
             </body>
             </html>
-            """.formatted(lang, safeName, safeCss, html);
+            """.formatted(lang, safeName, safeCss, safeHtml);
     }
     
 }

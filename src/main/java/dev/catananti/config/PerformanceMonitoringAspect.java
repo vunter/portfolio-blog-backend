@@ -9,6 +9,7 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -115,8 +116,8 @@ public class PerformanceMonitoringAspect {
         Timer timer = getOrCreateTimer(metricName, className, methodName, "success");
         timer.record(duration, TimeUnit.NANOSECONDS);
 
-        // Log slow operations
-        if (duration > Duration.ofMillis(100).toNanos()) {
+        // Log slow operations (500ms threshold — auth/bcrypt ops normally take ~300ms)
+        if (duration > Duration.ofMillis(500).toNanos()) {
             log.warn("Slow operation: {}.{} took {}ms",
                     className, methodName, TimeUnit.NANOSECONDS.toMillis(duration));
         }
@@ -127,8 +128,31 @@ public class PerformanceMonitoringAspect {
         Timer timer = getOrCreateTimer(metricName, className, methodName, "error");
         timer.record(duration, TimeUnit.NANOSECONDS);
 
-        log.error("Operation failed: {}.{} after {}ms: {}",
-                className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage());
+        // Expected business exceptions → WARN; unexpected infrastructure errors → ERROR
+        if (isExpectedException(error)) {
+            log.warn("Operation failed: {}.{} after {}ms: {}",
+                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage());
+        } else {
+            log.error("Operation failed: {}.{} after {}ms: {}",
+                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage());
+        }
+    }
+
+    private boolean isExpectedException(Throwable error) {
+        return error instanceof dev.catananti.exception.ResourceNotFoundException
+                || error instanceof dev.catananti.exception.DuplicateResourceException
+                || error instanceof IllegalArgumentException
+                || error instanceof DuplicateKeyException
+                || error instanceof org.springframework.dao.DataIntegrityViolationException
+                || error instanceof org.springframework.security.access.AccessDeniedException
+                || error instanceof org.springframework.security.authentication.BadCredentialsException
+                || error instanceof org.springframework.web.server.ResponseStatusException
+                || (error.getMessage() != null && (
+                        error.getMessage().contains("email_already_exists")
+                        || error.getMessage().contains("Invalid credentials")
+                        || error.getMessage().contains("Unable to connect to Redis")
+                        || error.getMessage().contains("Connection has been closed")
+                        || error.getMessage().contains("Failed to send email")));
     }
 
     private Timer getOrCreateTimer(String metricName, String className, String methodName, String status) {

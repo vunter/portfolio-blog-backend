@@ -647,6 +647,15 @@ DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='mfa_preferred_method') THEN
         ALTER TABLE users ADD COLUMN mfa_preferred_method VARCHAR(20) DEFAULT 'TOTP';
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='email_verified') THEN
+        ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='failed_login_attempts') THEN
+        ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='account_locked_until') THEN
+        ALTER TABLE users ADD COLUMN account_locked_until TIMESTAMP;
+    END IF;
 END $$;
 
 -- User MFA configuration (TOTP secrets, backup codes)
@@ -663,3 +672,13 @@ CREATE TABLE IF NOT EXISTS user_mfa_config (
 
 CREATE INDEX IF NOT EXISTS idx_user_mfa_config_user ON user_mfa_config(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_mfa_config_method ON user_mfa_config(user_id, method);
+
+-- ============================================
+-- F-285: pg_trgm GIN indexes for LIKE queries
+-- ============================================
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_articles_title_trgm ON articles USING gin (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_articles_excerpt_trgm ON articles USING gin (excerpt gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_subscribers_email_trgm ON subscribers USING gin (email gin_trgm_ops);
+-- For resume_templates, LIKE search uses jsonb_each_text(name); index the default locale for partial coverage
+CREATE INDEX IF NOT EXISTS idx_resume_templates_name_en_trgm ON resume_templates USING gin ((name->>'en') gin_trgm_ops);

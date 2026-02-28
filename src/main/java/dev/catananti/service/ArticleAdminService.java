@@ -16,6 +16,7 @@ import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
@@ -165,12 +166,9 @@ public class ArticleAdminService {
 
     @Transactional
     public Mono<ArticleResponse> createArticle(ArticleRequest request) {
-        return articleRepository.existsBySlug(request.getSlug())
-                .flatMap(exists -> {
-                    if (exists) {
-                        return Mono.error(new DuplicateResourceException("Article", "slug", request.getSlug()));
-                    }
-
+        return resolveUniqueSlug(request.getSlug())
+                .flatMap(uniqueSlug -> {
+                    request.setSlug(uniqueSlug);
                     return getCurrentUser()
                             .map(User::getId)
                             .defaultIfEmpty(0L)
@@ -209,6 +207,8 @@ public class ArticleAdminService {
                                             }
 
                                             return articleRepository.save(article)
+                                                    .onErrorResume(DataIntegrityViolationException.class, ex ->
+                                                            Mono.error(new DuplicateResourceException("Article", "slug", request.getSlug())))
                                                     .flatMap(saved -> {
                                                         if (tags.isEmpty()) {
                                                             return Mono.just(saved);
@@ -228,6 +228,19 @@ public class ArticleAdminService {
                                                     .map(articleService::mapToResponse);
                                         });
                             });
+                });
+    }
+
+    /**
+     * F-150: Resolve a unique slug. If the slug already exists, append a random suffix and retry.
+     */
+    private Mono<String> resolveUniqueSlug(String slug) {
+        return articleRepository.existsBySlug(slug)
+                .flatMap(exists -> {
+                    if (!exists) return Mono.just(slug);
+                    String suffixed = slug + "-" + java.util.UUID.randomUUID().toString().substring(0, 6);
+                    log.info("Slug '{}' already exists, using '{}'", slug, suffixed);
+                    return Mono.just(suffixed);
                 });
     }
 
@@ -282,6 +295,8 @@ public class ArticleAdminService {
                     }
 
                     return slugCheck.then(articleRepository.save(article))
+                            .onErrorResume(DataIntegrityViolationException.class, ex ->
+                                    Mono.error(new DuplicateResourceException("Article", "slug", request.getSlug())))
                             .flatMap(saved -> {
                                 if (request.getTagSlugs() == null) {
                                     return Mono.just(saved);

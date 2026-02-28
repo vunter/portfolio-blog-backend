@@ -9,7 +9,9 @@ import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
 
-// TODO F-287: Standardize null vs empty string handling for i18n fields
+// F-287: Null handling convention: empty strings are stored in the database (not NULL)
+// for optional i18n fields (subtitle, excerpt, seo_*). This avoids R2DBC null-binding issues
+// and ensures consistent reads. The upsert method normalizes nulls to empty strings on write.
 @Repository
 public class ArticleI18nRepository {
 

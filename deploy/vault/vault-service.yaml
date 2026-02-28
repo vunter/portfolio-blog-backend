@@ -5,18 +5,90 @@ metadata:
   namespace: vault
   labels:
     app: vault
-  # F-426: TODO: Replace NodePort with ClusterIP + Ingress to restrict external access
-  # F-438: TODO: Add PodDisruptionBudget when scaling to HA (minAvailable: 1)
-  # F-439: TODO: Add NetworkPolicy to restrict vault namespace ingress/egress
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app: vault
   ports:
     - name: http
       port: 8200
       targetPort: 8200
-      nodePort: 30820
     - name: cluster
       port: 8201
       targetPort: 8201
+---
+# Ingress — uncomment when an ingress controller is available:
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: vault-ingress
+#   namespace: vault
+#   annotations:
+#     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+# spec:
+#   rules:
+#     - host: vault.internal.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: vault
+#                 port:
+#                   number: 8200
+---
+# PodDisruptionBudget — enable when scaling to HA
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vault-pdb
+  namespace: vault
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vault
+---
+# NetworkPolicy — restrict vault namespace ingress/egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault-network-policy
+  namespace: vault
+spec:
+  podSelector:
+    matchLabels:
+      app: vault
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: default
+      ports:
+        - protocol: TCP
+          port: 8200
+    - from:
+        - podSelector:
+            matchLabels:
+              app: vault
+      ports:
+        - protocol: TCP
+          port: 8201
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: vault
+      ports:
+        - protocol: TCP
+          port: 8201
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53

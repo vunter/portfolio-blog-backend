@@ -9,8 +9,11 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -21,7 +24,6 @@ import java.util.UUID;
 
 @Service
 @Slf4j
-// TODO F-181: Strip image EXIF metadata on upload to prevent GPS/device info leakage
 public class ImageUploadService {
 
     @Value("${app.upload.path:uploads}")
@@ -91,10 +93,15 @@ public class ImageUploadService {
                     Files.createDirectories(directory);
                     return filePath;
                 })
-                .flatMap(path -> 
+                .flatMap(path -> {
+                    // F-180: Reject obviously oversized uploads before writing to disk
+                    long contentLength = filePart.headers().getContentLength();
+                    if (contentLength > 0 && contentLength > maxFileSize) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "File size exceeds maximum allowed: " + maxFileSize + " bytes"));
+                    }
                     // H7: Stream directly to disk instead of buffering entire file in memory
-                    // TODO F-180: Move size check before write by checking Content-Length header first
-                    filePart.transferTo(path)
+                    return filePart.transferTo(path)
                             .then(Mono.fromCallable(() -> {
                                 // Validate file size from disk
                                 long fileSize = Files.size(path);
@@ -122,10 +129,13 @@ public class ImageUploadService {
                                             "File content does not match declared type");
                                 }
 
+                                // Strip EXIF metadata from JPEG files to prevent GPS/device info leakage
+                                stripExifMetadata(path, ext);
+
                                 log.info("Image uploaded: {}", path);
                                 return datePath + "/" + newFilename;
-                            }).subscribeOn(Schedulers.boundedElastic()))
-                );
+                            }).subscribeOn(Schedulers.boundedElastic()));
+                });
     }
 
     private String buildImageUrl(String relativePath) {
@@ -178,6 +188,29 @@ public class ImageUploadService {
                     return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "error.image_delete_failed"));
                 })
                 .then();
+    }
+
+    /**
+     * Strip EXIF metadata from JPEG files by reading and rewriting the image via ImageIO.
+     * ImageIO only preserves pixel data, effectively removing all EXIF metadata.
+     */
+    private void stripExifMetadata(Path filePath, String extension) {
+        if (!"jpg".equals(extension) && !"jpeg".equals(extension)) {
+            return;
+        }
+        try {
+            BufferedImage image = ImageIO.read(filePath.toFile());
+            if (image == null) {
+                log.warn("Could not read JPEG image for EXIF stripping: {}", filePath);
+                return;
+            }
+            try (OutputStream out = Files.newOutputStream(filePath)) {
+                ImageIO.write(image, "jpg", out);
+            }
+            log.debug("EXIF metadata stripped from: {}", filePath);
+        } catch (IOException e) {
+            log.warn("Failed to strip EXIF metadata from {}: {}", filePath, e.getMessage());
+        }
     }
 
     /**

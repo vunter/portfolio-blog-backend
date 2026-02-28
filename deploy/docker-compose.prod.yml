@@ -300,8 +300,9 @@ networks:
     driver: bridge
   blog-backend-network:
     driver: bridge
-    # F-409: NOT internal — app needs to reach external PostgreSQL on rpi5 (192.168.1.235:30432)
-    # TODO F-409: Use explicit egress rules or separate external-DB network to limit blast radius
+    internal: true
+  blog-external-network:
+    driver: bridge
 
 volumes:
   redis_data:

@@ -23,8 +23,8 @@ import java.util.stream.IntStream;
 
 /**
  * Service for managing resume work experience entries.
+ * Uses ResourceNotFoundException for missing entities and IllegalArgumentException for invalid input.
  */
-// TODO F-211: Standardize error handling to use consistent exception types
 @Service
 @RequiredArgsConstructor
 @Slf4j

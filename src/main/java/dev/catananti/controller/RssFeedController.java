@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.dto.RssFeedItem;
 import dev.catananti.entity.Article;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.CacheService;
@@ -7,7 +8,9 @@ import dev.catananti.util.XmlUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
@@ -40,23 +43,32 @@ public class RssFeedController {
     private static final DateTimeFormatter RSS_DATE_FORMAT = 
             DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.ENGLISH);
 
-    // TODO F-102: Add Cache-Control/ETag headers to RSS feed endpoint (currently relies on CacheService TTL only)
-    @GetMapping(value = {"/rss.xml", "/feed.xml"}, produces = MediaType.APPLICATION_XML_VALUE)
-    public Mono<String> getRssFeed() {
+    @GetMapping({"/rss.xml", "/feed.xml"})
+    public Mono<ResponseEntity<String>> getRssFeed() {
         log.debug("Generating RSS feed");
         return cacheService.get(RSS_CACHE_KEY, String.class)
                 .switchIfEmpty(
                         articleService.findAllPublishedForFeed()
                                 .take(20)
+                                .map(article -> new RssFeedItem(
+                                        article.getTitle(), article.getSlug(), article.getExcerpt(),
+                                        article.getSeoDescription(), article.getPublishedAt()))
                                 .collectList()
                                 .map(this::buildRssFeed)
                                 .flatMap(rss -> cacheService.set(RSS_CACHE_KEY, rss, RSS_CACHE_TTL)
                                         .thenReturn(rss))
-                );
+                )
+                .map(rss -> {
+                    String etag = "\"" + Integer.toHexString(rss.hashCode()) + "\"";
+                    return ResponseEntity.ok()
+                            .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
+                            .eTag(etag)
+                            .contentType(MediaType.APPLICATION_XML)
+                            .body(rss);
+                });
     }
 
-    private String buildRssFeed(java.util.List<Article> articles) {
-        // TODO F-103: Map Article entities to a lightweight DTO (e.g., RssFeedItem) to avoid entity leakage
+    private String buildRssFeed(java.util.List<RssFeedItem> items) {
         StringBuilder xml = new StringBuilder();
         
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -68,27 +80,27 @@ public class RssFeedController {
         xml.append("    <language>en-us</language>\n");
         xml.append("    <atom:link href=\"").append(siteUrl).append("/rss.xml\" rel=\"self\" type=\"application/rss+xml\"/>\n");
         
-        if (!articles.isEmpty() && articles.getFirst().getPublishedAt() != null) {
+        if (!items.isEmpty() && items.getFirst().publishedAt() != null) {
             xml.append("    <lastBuildDate>")
-               .append(articles.getFirst().getPublishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
+               .append(items.getFirst().publishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
                .append("</lastBuildDate>\n");
         }
 
-        for (Article article : articles) {
+        for (RssFeedItem item : items) {
             xml.append("    <item>\n");
-            xml.append("      <title>").append(XmlUtil.escapeXml(article.getTitle())).append("</title>\n");
-            xml.append("      <link>").append(siteUrl).append("/blog/").append(XmlUtil.escapeXml(article.getSlug())).append("</link>\n");
-            xml.append("      <guid isPermaLink=\"true\">").append(siteUrl).append("/blog/").append(XmlUtil.escapeXml(article.getSlug())).append("</guid>\n");
+            xml.append("      <title>").append(XmlUtil.escapeXml(item.title())).append("</title>\n");
+            xml.append("      <link>").append(siteUrl).append("/blog/").append(XmlUtil.escapeXml(item.slug())).append("</link>\n");
+            xml.append("      <guid isPermaLink=\"true\">").append(siteUrl).append("/blog/").append(XmlUtil.escapeXml(item.slug())).append("</guid>\n");
             
-            if (article.getExcerpt() != null) {
-                xml.append("      <description>").append(XmlUtil.escapeXml(article.getExcerpt())).append("</description>\n");
-            } else if (article.getSeoDescription() != null) {
-                xml.append("      <description>").append(XmlUtil.escapeXml(article.getSeoDescription())).append("</description>\n");
+            if (item.excerpt() != null) {
+                xml.append("      <description>").append(XmlUtil.escapeXml(item.excerpt())).append("</description>\n");
+            } else if (item.seoDescription() != null) {
+                xml.append("      <description>").append(XmlUtil.escapeXml(item.seoDescription())).append("</description>\n");
             }
             
-            if (article.getPublishedAt() != null) {
+            if (item.publishedAt() != null) {
                 xml.append("      <pubDate>")
-                   .append(article.getPublishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
+                   .append(item.publishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
                    .append("</pubDate>\n");
             }
             

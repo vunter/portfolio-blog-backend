@@ -14,13 +14,12 @@ import java.util.List;
 
 /**
  * Orchestrates the translation of all translatable fields in a resume profile.
- * Collects all text fields, sends them in a single batch to DeepL for efficiency,
- * then maps the results back to a new ResumeProfileResponse.
+ * Collects all text fields into a keyed map, sends them in a single batch to DeepL
+ * for efficiency, then maps the results back by key to a new ResumeProfileResponse.
  *
  * Fields that are NOT translated: fullName, email, phone, linkedin, github, website,
  * dates (startDate/endDate/issueDate), credentialUrl, IDs, sortOrder.
  */
-// TODO F-200: Use key-based field mapping instead of fragile index-based mapping
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -44,129 +43,128 @@ public class ProfileTranslationService {
      * @return translated profile
      */
     public Mono<ResumeProfileResponse> translateProfile(ResumeProfileResponse profile, String targetLang) {
-        // Collect all translatable texts into a flat list
-        List<String> texts = new ArrayList<>();
+        // F-200: Key-based field mapping — each text gets a unique key, eliminating fragile index tracking
+        java.util.LinkedHashMap<String, String> textMap = new java.util.LinkedHashMap<>();
 
-        // Root fields (indices 0-3)
-        texts.add(profile.getTitle());                 // 0
-        texts.add(profile.getLocation());              // 1
-        texts.add(profile.getProfessionalSummary());   // 2
-        texts.add(profile.getInterests());             // 3
+        // Root fields
+        textMap.put("title", profile.getTitle());
+        textMap.put("location", profile.getLocation());
+        textMap.put("professionalSummary", profile.getProfessionalSummary());
+        textMap.put("interests", profile.getInterests());
 
-        int rootFieldCount = texts.size(); // 4
-
-        // Education fields: institution, location, degree, fieldOfStudy, description, startDate, endDate (7 per entry)
+        // Education fields
         List<EducationResponse> educations = profile.getEducations() != null ? profile.getEducations() : List.of();
-        for (var edu : educations) {
-            texts.add(edu.getInstitution());
-            texts.add(edu.getLocation());
-            texts.add(edu.getDegree());
-            texts.add(edu.getFieldOfStudy());
-            texts.add(edu.getDescription());
-            texts.add(edu.getStartDate());     // e.g., "January 2017" → "Janeiro 2017"
-            texts.add(edu.getEndDate());       // e.g., "Present" → "Atual"
+        for (int i = 0; i < educations.size(); i++) {
+            var edu = educations.get(i);
+            textMap.put("edu." + i + ".institution", edu.getInstitution());
+            textMap.put("edu." + i + ".location", edu.getLocation());
+            textMap.put("edu." + i + ".degree", edu.getDegree());
+            textMap.put("edu." + i + ".fieldOfStudy", edu.getFieldOfStudy());
+            textMap.put("edu." + i + ".description", edu.getDescription());
+            textMap.put("edu." + i + ".startDate", edu.getStartDate());
+            textMap.put("edu." + i + ".endDate", edu.getEndDate());
         }
 
-        // Experience fields: position, startDate, endDate + each bullet (variable-length per entry)
-        // Track structure: [positionIdx, startDateIdx, endDateIdx, bulletCount, bulletStartIdx]
+        // Experience fields
         List<ExperienceResponse> experiences = profile.getExperiences() != null ? profile.getExperiences() : List.of();
-        List<int[]> expStructure = new ArrayList<>();
-        for (var exp : experiences) {
-            int posIdx = texts.size();
-            texts.add(exp.getPosition());
-            int startDateIdx = texts.size();
-            texts.add(exp.getStartDate());   // e.g., "June 2024" → "Junho 2024"
-            int endDateIdx = texts.size();
-            texts.add(exp.getEndDate());     // e.g., "Present" → "Atual"
+        for (int i = 0; i < experiences.size(); i++) {
+            var exp = experiences.get(i);
+            textMap.put("exp." + i + ".position", exp.getPosition());
+            textMap.put("exp." + i + ".startDate", exp.getStartDate());
+            textMap.put("exp." + i + ".endDate", exp.getEndDate());
             List<String> bullets = exp.getBullets() != null ? exp.getBullets() : List.of();
-            int bulletStart = texts.size();
-            texts.addAll(bullets);
-            expStructure.add(new int[]{posIdx, startDateIdx, endDateIdx, bullets.size(), bulletStart});
+            for (int j = 0; j < bullets.size(); j++) {
+                textMap.put("exp." + i + ".bullet." + j, bullets.get(j));
+            }
         }
 
-        // Skill fields: category, content (2 per entry)
+        // Skill fields
         List<SkillResponse> skills = profile.getSkills() != null ? profile.getSkills() : List.of();
-        int skillsStart = texts.size();
-        for (var skill : skills) {
-            texts.add(skill.getCategory());
-            texts.add(skill.getContent());
+        for (int i = 0; i < skills.size(); i++) {
+            textMap.put("skill." + i + ".category", skills.get(i).getCategory());
+            textMap.put("skill." + i + ".content", skills.get(i).getContent());
         }
 
-        // Language fields: name + proficiency (2 per entry)
+        // Language fields
         List<LanguageResponse> languages = profile.getLanguages() != null ? profile.getLanguages() : List.of();
-        int languagesStart = texts.size();
-        for (var lang : languages) {
-            texts.add(lang.getName());         // e.g., "English" → "Inglês"
-            texts.add(lang.getProficiency());
+        for (int i = 0; i < languages.size(); i++) {
+            textMap.put("lang." + i + ".name", languages.get(i).getName());
+            textMap.put("lang." + i + ".proficiency", languages.get(i).getProficiency());
         }
 
-        // Certification fields: name, issuer, description (3 per entry)
+        // Certification fields
         List<CertificationResponse> certifications = profile.getCertifications() != null ? profile.getCertifications() : List.of();
-        int certsStart = texts.size();
-        for (var cert : certifications) {
-            texts.add(cert.getName());
-            texts.add(cert.getIssuer());
-            texts.add(cert.getDescription());
+        for (int i = 0; i < certifications.size(); i++) {
+            textMap.put("cert." + i + ".name", certifications.get(i).getName());
+            textMap.put("cert." + i + ".issuer", certifications.get(i).getIssuer());
+            textMap.put("cert." + i + ".description", certifications.get(i).getDescription());
         }
 
-        // AdditionalInfo fields: label, content (2 per entry)
+        // AdditionalInfo fields
         List<AdditionalInfoResponse> additionalInfo = profile.getAdditionalInfo() != null ? profile.getAdditionalInfo() : List.of();
-        int addInfoStart = texts.size();
-        for (var info : additionalInfo) {
-            texts.add(info.getLabel());
-            texts.add(info.getContent());
+        for (int i = 0; i < additionalInfo.size(); i++) {
+            textMap.put("addInfo." + i + ".label", additionalInfo.get(i).getLabel());
+            textMap.put("addInfo." + i + ".content", additionalInfo.get(i).getContent());
         }
 
-        // HomeCustomization fields: label, content (2 per entry)
+        // HomeCustomization fields
         List<ResumeProfileResponse.HomeCustomizationResponse> homeCustomization = profile.getHomeCustomization() != null ? profile.getHomeCustomization() : List.of();
-        int homeCustomizationStart = texts.size();
-        for (var hc : homeCustomization) {
-            texts.add(hc.getLabel());
-            texts.add(hc.getContent());
+        for (int i = 0; i < homeCustomization.size(); i++) {
+            textMap.put("home." + i + ".label", homeCustomization.get(i).getLabel());
+            textMap.put("home." + i + ".content", homeCustomization.get(i).getContent());
         }
 
-        log.info("Translating profile: {} texts to {}", texts.size(), targetLang);
+        // Convert to ordered lists for batch translation
+        List<String> keys = new ArrayList<>(textMap.keySet());
+        List<String> values = new ArrayList<>(textMap.values());
 
-        return translationService.translateBatch(texts, targetLang)
+        log.info("Translating profile: {} texts to {}", values.size(), targetLang);
+
+        return translationService.translateBatch(values, targetLang)
                 .map(translated -> {
+                    // Build key-to-translated lookup
+                    java.util.Map<String, String> t = new java.util.HashMap<>();
+                    for (int i = 0; i < keys.size(); i++) {
+                        t.put(keys.get(i), translated.get(i));
+                    }
+
                     // Reconstruct profile with translated texts
                     ResumeProfileResponse result = ResumeProfileResponse.builder()
                             .id(profile.getId())
                             .ownerId(profile.getOwnerId())
-                            .locale(profile.getLocale())       // Preserve locale
-                            .fullName(profile.getFullName())   // NOT translated
-                            .title(translated.get(0))
-                            .email(profile.getEmail())         // NOT translated
-                            .phone(profile.getPhone())         // NOT translated
-                            .linkedin(profile.getLinkedin())   // NOT translated
-                            .github(profile.getGithub())       // NOT translated
-                            .website(profile.getWebsite())     // NOT translated
-                            .location(translated.get(1))
-                            .professionalSummary(translated.get(2))
-                            .interests(translated.get(3))
-                            .workMode(profile.getWorkMode())           // Preserve
-                            .timezone(profile.getTimezone())           // Preserve
-                            .employmentType(profile.getEmploymentType()) // Preserve
+                            .locale(profile.getLocale())
+                            .fullName(profile.getFullName())
+                            .title(t.get("title"))
+                            .email(profile.getEmail())
+                            .phone(profile.getPhone())
+                            .linkedin(profile.getLinkedin())
+                            .github(profile.getGithub())
+                            .website(profile.getWebsite())
+                            .location(t.get("location"))
+                            .professionalSummary(t.get("professionalSummary"))
+                            .interests(t.get("interests"))
+                            .workMode(profile.getWorkMode())
+                            .timezone(profile.getTimezone())
+                            .employmentType(profile.getEmploymentType())
                             .createdAt(profile.getCreatedAt())
                             .updatedAt(profile.getUpdatedAt())
                             .build();
 
                     // Educations
-                    int eduIdx = rootFieldCount;
                     List<EducationResponse> translatedEducations = new ArrayList<>();
-                    for (var edu : educations) {
+                    for (int i = 0; i < educations.size(); i++) {
+                        var edu = educations.get(i);
                         translatedEducations.add(EducationResponse.builder()
                                 .id(edu.getId())
-                                .institution(translated.get(eduIdx))
-                                .location(translated.get(eduIdx + 1))
-                                .degree(translated.get(eduIdx + 2))
-                                .fieldOfStudy(translated.get(eduIdx + 3))
-                                .description(translated.get(eduIdx + 4))
-                                .startDate(translated.get(eduIdx + 5))
-                                .endDate(translated.get(eduIdx + 6))
+                                .institution(t.get("edu." + i + ".institution"))
+                                .location(t.get("edu." + i + ".location"))
+                                .degree(t.get("edu." + i + ".degree"))
+                                .fieldOfStudy(t.get("edu." + i + ".fieldOfStudy"))
+                                .description(t.get("edu." + i + ".description"))
+                                .startDate(t.get("edu." + i + ".startDate"))
+                                .endDate(t.get("edu." + i + ".endDate"))
                                 .sortOrder(edu.getSortOrder())
                                 .build());
-                        eduIdx += 7;
                     }
                     result.setEducations(translatedEducations);
 
@@ -174,20 +172,17 @@ public class ProfileTranslationService {
                     List<ExperienceResponse> translatedExperiences = new ArrayList<>();
                     for (int i = 0; i < experiences.size(); i++) {
                         var exp = experiences.get(i);
-                        int[] struct = expStructure.get(i);
-                        String translatedPosition = translated.get(struct[0]);
-                        String translatedStartDate = translated.get(struct[1]);
-                        String translatedEndDate = translated.get(struct[2]);
                         List<String> translatedBullets = new ArrayList<>();
-                        for (int j = 0; j < struct[3]; j++) {
-                            translatedBullets.add(translated.get(struct[4] + j));
+                        List<String> origBullets = exp.getBullets() != null ? exp.getBullets() : List.of();
+                        for (int j = 0; j < origBullets.size(); j++) {
+                            translatedBullets.add(t.get("exp." + i + ".bullet." + j));
                         }
                         translatedExperiences.add(ExperienceResponse.builder()
                                 .id(exp.getId())
-                                .company(exp.getCompany())     // NOT translated (proper noun)
-                                .position(translatedPosition)
-                                .startDate(translatedStartDate)
-                                .endDate(translatedEndDate)
+                                .company(exp.getCompany())
+                                .position(t.get("exp." + i + ".position"))
+                                .startDate(t.get("exp." + i + ".startDate"))
+                                .endDate(t.get("exp." + i + ".endDate"))
                                 .bullets(translatedBullets)
                                 .sortOrder(exp.getSortOrder())
                                 .build());
@@ -196,74 +191,64 @@ public class ProfileTranslationService {
 
                     // Skills
                     List<SkillResponse> translatedSkills = new ArrayList<>();
-                    int sIdx = skillsStart;
-                    for (var skill : skills) {
+                    for (int i = 0; i < skills.size(); i++) {
                         translatedSkills.add(SkillResponse.builder()
-                                .id(skill.getId())
-                                .category(translated.get(sIdx))
-                                .content(translated.get(sIdx + 1))
-                                .sortOrder(skill.getSortOrder())
+                                .id(skills.get(i).getId())
+                                .category(t.get("skill." + i + ".category"))
+                                .content(t.get("skill." + i + ".content"))
+                                .sortOrder(skills.get(i).getSortOrder())
                                 .build());
-                        sIdx += 2;
                     }
                     result.setSkills(translatedSkills);
 
                     // Languages
                     List<LanguageResponse> translatedLanguages = new ArrayList<>();
-                    int lIdx = languagesStart;
-                    for (var lang : languages) {
+                    for (int i = 0; i < languages.size(); i++) {
                         translatedLanguages.add(LanguageResponse.builder()
-                                .id(lang.getId())
-                                .name(translated.get(lIdx))            // e.g., "Inglês"
-                                .proficiency(translated.get(lIdx + 1))
-                                .sortOrder(lang.getSortOrder())
+                                .id(languages.get(i).getId())
+                                .name(t.get("lang." + i + ".name"))
+                                .proficiency(t.get("lang." + i + ".proficiency"))
+                                .sortOrder(languages.get(i).getSortOrder())
                                 .build());
-                        lIdx += 2;
                     }
                     result.setLanguages(translatedLanguages);
 
                     // Certifications
                     List<CertificationResponse> translatedCerts = new ArrayList<>();
-                    int cIdx = certsStart;
-                    for (var cert : certifications) {
+                    for (int i = 0; i < certifications.size(); i++) {
                         translatedCerts.add(CertificationResponse.builder()
-                                .id(cert.getId())
-                                .name(translated.get(cIdx))
-                                .issuer(translated.get(cIdx + 1))
-                                .description(translated.get(cIdx + 2))
-                                .issueDate(cert.getIssueDate())
-                                .credentialUrl(cert.getCredentialUrl())
-                                .sortOrder(cert.getSortOrder())
+                                .id(certifications.get(i).getId())
+                                .name(t.get("cert." + i + ".name"))
+                                .issuer(t.get("cert." + i + ".issuer"))
+                                .description(t.get("cert." + i + ".description"))
+                                .issueDate(certifications.get(i).getIssueDate())
+                                .credentialUrl(certifications.get(i).getCredentialUrl())
+                                .sortOrder(certifications.get(i).getSortOrder())
                                 .build());
-                        cIdx += 3;
                     }
                     result.setCertifications(translatedCerts);
 
                     // Additional Info
                     List<AdditionalInfoResponse> translatedAddInfo = new ArrayList<>();
-                    int aIdx = addInfoStart;
-                    for (var info : additionalInfo) {
+                    for (int i = 0; i < additionalInfo.size(); i++) {
                         translatedAddInfo.add(AdditionalInfoResponse.builder()
-                                .id(info.getId())
-                                .label(translated.get(aIdx))
-                                .content(translated.get(aIdx + 1))
-                                .sortOrder(info.getSortOrder())
+                                .id(additionalInfo.get(i).getId())
+                                .label(t.get("addInfo." + i + ".label"))
+                                .content(t.get("addInfo." + i + ".content"))
+                                .sortOrder(additionalInfo.get(i).getSortOrder())
                                 .build());
-                        aIdx += 2;
                     }
                     result.setAdditionalInfo(translatedAddInfo);
 
                     // Home Customization
                     List<ResumeProfileResponse.HomeCustomizationResponse> translatedHomeCust = new ArrayList<>();
-                    int hcIdx = homeCustomizationStart;
-                    for (var hc : homeCustomization) {
+                    for (int i = 0; i < homeCustomization.size(); i++) {
                         translatedHomeCust.add(ResumeProfileResponse.HomeCustomizationResponse.builder()
-                                .id(hc.getId())
-                                .label(translated.get(hcIdx))
-                                .content(translated.get(hcIdx + 1))
-                                .sortOrder(hc.getSortOrder())
+                                .id(homeCustomization.get(i).getId())
+                                .label(t.get("home." + i + ".label"))
+                                .content(t.get("home." + i + ".content"))
+                                .sortOrder(homeCustomization.get(i).getSortOrder())
                                 .build());
-                        hcIdx += 2;
                     }
                     result.setHomeCustomization(translatedHomeCust);
 
@@ -273,8 +258,7 @@ public class ProfileTranslationService {
                     result.setProjects(profile.getProjects());
                     result.setLearningTopics(profile.getLearningTopics());
 
-                    log.info("Profile translation complete: {} → {}", 
-                            texts.size() + " fields", targetLang);
+                    log.info("Profile translation complete: {} fields → {}", keys.size(), targetLang);
                     return result;
                 });
     }

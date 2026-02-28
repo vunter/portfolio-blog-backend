@@ -8,15 +8,36 @@ import org.springframework.web.server.WebFilter;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Configuration for request/response logging.
- * TODO F-032: Ensure DEBUG-level body logging does not capture PII (passwords, tokens, personal data)
- * TODO F-033: Propagate correlation ID (e.g., X-Correlation-Id) across service boundaries for distributed tracing
+ * F-032: Sensitive paths are excluded from DEBUG body logging to prevent PII leakage.
  */
 @Configuration(proxyBeanMethods = false)
 @Slf4j
 public class RequestLoggingConfig {
+
+    /** Paths whose request/response bodies must never be logged, even at DEBUG level. */
+    private static final List<String> PII_SENSITIVE_PATHS = List.of(
+            "/auth/login", "/auth/register", "/auth/refresh",
+            "/reset-password", "/forgot-password",
+            "/api/v1/users/me", "/api/v1/contact"
+    );
+
+    @Bean
+    public WebFilter correlationIdFilter() {
+        return (exchange, chain) -> {
+            String correlationId = exchange.getRequest().getHeaders().getFirst("X-Correlation-Id");
+            if (correlationId == null || correlationId.isBlank()) {
+                correlationId = java.util.UUID.randomUUID().toString();
+            }
+            exchange.getResponse().getHeaders().set("X-Correlation-Id", correlationId);
+            final String cid = correlationId;
+            return chain.filter(exchange)
+                    .contextWrite(ctx -> ctx.put("correlationId", cid));
+        };
+    }
 
     @Bean
     public WebFilter requestLoggingFilter() {
@@ -43,19 +64,37 @@ public class RequestLoggingConfig {
                     })
                     .doOnError(error -> {
                         Duration duration = Duration.between(start, Instant.now());
-                        log.error("[{}] {} {} from {} - ERROR {} in {}ms", 
-                                requestId, method, path, clientIp, error.getMessage(), duration.toMillis());
+                        // SSE/stream client disconnects are expected, not errors
+                        if (error.getMessage() != null && error.getMessage().contains("Connection has been closed")) {
+                            log.debug("[{}] {} {} from {} - client disconnected in {}ms",
+                                    requestId, method, path, clientIp, duration.toMillis());
+                        } else {
+                            log.error("[{}] {} {} from {} - ERROR {} in {}ms",
+                                    requestId, method, path, clientIp, error.getMessage(), duration.toMillis());
+                        }
                     });
         };
+    }
+
+    /** F-032: Check whether the path handles PII and must not have its body logged. */
+    private boolean isSensitivePath(String path) {
+        return PII_SENSITIVE_PATHS.stream().anyMatch(path::contains);
     }
 
     private void logRequest(String requestId, String method, String path, String clientIp, int status, Duration duration) {
         if (path.contains("/actuator") || path.contains("/swagger") || path.contains("/v3/api-docs")) {
             log.trace("[{}] {} {} from {} - {} in {}ms", requestId, method, path, clientIp, status, duration.toMillis());
+        } else if (status >= 500) {
+            log.error("[{}] {} {} from {} - {} in {}ms", requestId, method, path, clientIp, status, duration.toMillis());
         } else if (status >= 400) {
-            log.warn("[{}] {} {} from {} - {} in {}ms", requestId, method, path, clientIp, status, duration.toMillis());
+            // 4xx are client errors — expected behavior, not server issues
+            log.debug("[{}] {} {} from {} - {} in {}ms", requestId, method, path, clientIp, status, duration.toMillis());
         } else {
-            log.info("[{}] {} {} from {} - {} in {}ms", requestId, method, path, clientIp, status, duration.toMillis());
+            if (isSensitivePath(path)) {
+                log.info("[{}] {} {} from {} - {} in {}ms [body-redacted]", requestId, method, path, clientIp, status, duration.toMillis());
+            } else {
+                log.info("[{}] {} {} from {} - {} in {}ms", requestId, method, path, clientIp, status, duration.toMillis());
+            }
         }
     }
 

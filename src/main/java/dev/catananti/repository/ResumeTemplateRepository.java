@@ -113,8 +113,6 @@ public interface ResumeTemplateRepository extends R2dbcRepository<ResumeTemplate
     /**
      * Search templates by name (searches across all locale values in JSONB).
      */
-    // TODO F-285: Add pg_trgm GIN index for LIKE queries
-    // TODO F-291: Sanitize LIKE pattern to escape %, _, \ characters
     @Query("SELECT * FROM resume_templates WHERE owner_id = :ownerId AND EXISTS (SELECT 1 FROM jsonb_each_text(name) jt WHERE LOWER(jt.value) LIKE LOWER(CONCAT('%', :searchTerm, '%')))")
     Flux<ResumeTemplate> searchByName(Long ownerId, String searchTerm);
 }

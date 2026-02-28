@@ -144,7 +144,7 @@ public class EmailService {
                 mailSender.send(message);
                 log.debug("Text email sent to: {}", to);
             } catch (Exception e) {
-                log.error("Failed to send text email to {}: {}", to, e.getMessage());
+                log.warn("Failed to send text email to {}: {}", to, e.getMessage());
                 throw new RuntimeException("Failed to send email", e);
             }
         }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
@@ -168,7 +168,7 @@ public class EmailService {
                 mailSender.send(message);
                 log.debug("HTML email sent to: {}", to);
             } catch (Exception e) {
-                log.error("Failed to send HTML email to {}: {}", to, e.getMessage());
+                log.warn("Failed to send HTML email to {}: {}", to, e.getMessage());
                 throw new RuntimeException("Failed to send email", e);
             }
         }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
@@ -307,7 +307,7 @@ public class EmailService {
 
         return sendHtmlEmail(email, subject, html)
                 .doOnSuccess(v -> log.debug("Account lockout notification sent to: {}", email))
-                .doOnError(e -> log.error("Failed to send lockout notification to {}: {}", email, e.getMessage()))
+                .doOnError(e -> log.warn("Failed to send lockout notification to {}: {}", email, e.getMessage()))
                 .onErrorResume(e -> Mono.empty());
     }
 

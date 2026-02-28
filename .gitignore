@@ -57,3 +57,4 @@ src/main/resources/dev/
 *.bak_removed
 *.backup_*
 HELP.md
+.claude/worktrees/

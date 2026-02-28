@@ -107,6 +107,16 @@ public class JwtAuthenticationFilter implements WebFilter {
 
     public static final String AUTHENTICATED_USER_ATTR = "authenticatedUser";
 
+    /**
+     * F-046: Proactively evict a user from the authentication cache.
+     * Called by UserService when a user is deactivated or role-changed,
+     * so that the next request forces a fresh DB lookup.
+     */
+    public void evictUserFromCache(String email) {
+        userCache.invalidate(email);
+        log.debug("Evicted user from auth cache: {}", email);
+    }
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
         String jwt = getJwtFromRequest(exchange);

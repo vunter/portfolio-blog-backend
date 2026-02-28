@@ -3,6 +3,7 @@ package dev.catananti.config;
 import dev.catananti.entity.User;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.IdService;
+import dev.catananti.util.PasswordValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,9 +43,8 @@ public class AdminUserInitializer {
             return;
         }
 
-        if (adminPassword.length() < 12) {
-            // TODO F-036: Enforce password complexity (uppercase, lowercase, digit, special char) not just length
-            log.warn("Admin password is too short (minimum 12 characters recommended). Skipping admin creation.");
+        if (!PasswordValidator.isComplexEnough(adminPassword)) {
+            log.warn("Admin password does not meet complexity requirements (min 12 chars, uppercase, lowercase, digit, special char). Skipping admin creation.");
             return;
         }
 

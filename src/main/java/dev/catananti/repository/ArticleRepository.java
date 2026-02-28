@@ -9,7 +9,6 @@ import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
 
-// TODO F-285: Add pg_trgm GIN index for LIKE queries
 @Repository
 public interface ArticleRepository extends ReactiveCrudRepository<Article, Long> {
 
@@ -35,7 +34,6 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("SELECT COUNT(*) FROM articles WHERE status = :status")
     Mono<Long> countByStatus(String status);
 
-    // TODO F-291: Sanitize LIKE pattern to escape %, _, \ characters
     @Query("SELECT * FROM articles WHERE status = :status AND " +
            "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
            "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +

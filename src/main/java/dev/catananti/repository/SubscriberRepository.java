@@ -11,7 +11,6 @@ import reactor.core.publisher.Mono;
 import java.time.LocalDateTime;
 import java.util.List;
 
-// TODO F-285: Add pg_trgm GIN index for LIKE queries
 @Repository
 public interface SubscriberRepository extends ReactiveCrudRepository<Subscriber, Long> {
 
@@ -32,7 +31,6 @@ public interface SubscriberRepository extends ReactiveCrudRepository<Subscriber,
     @Query("SELECT * FROM subscribers WHERE status = :status ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Subscriber> findByStatusPaginated(String status, int limit, int offset);
 
-    // TODO F-291: Sanitize LIKE pattern to escape %, _, \ characters
     @Query("SELECT * FROM subscribers WHERE LOWER(email) LIKE LOWER(CONCAT('%', :email, '%')) ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Subscriber> findByEmailContainingPaginated(String email, int limit, int offset);
 

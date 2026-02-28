@@ -20,11 +20,12 @@ public class HtmlSanitizerService {
     /**
      * Whitelist for rich content (articles, comments with formatting).
      * Allows safe structural and formatting tags but blocks scripts, iframes, forms, etc.
-     * TODO F-037: Safelist.relaxed() inherits 'style' attribute — consider removing it to prevent CSS injection
+     * F-037: Explicitly remove 'style' attribute to prevent CSS-based data exfiltration.
      */
     private static final Safelist RICH_CONTENT_SAFELIST = Safelist.relaxed()
             .removeTags("form", "input", "textarea", "select", "button")
             .removeAttributes("a", "onclick", "onmouseover", "onfocus")
+            .removeAttributes(":all", "style")
             .addProtocols("a", "href", "http", "https", "mailto")
             .addProtocols("img", "src", "http", "https");
 

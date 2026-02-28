@@ -6,12 +6,15 @@ import dev.catananti.dto.ResumeTemplateRequest;
 import dev.catananti.dto.ResumeTemplateResponse;
 import dev.catananti.entity.LocalizedText;
 import dev.catananti.entity.ResumeTemplate;
+import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ResumeTemplateRepository;
+import dev.catananti.util.DigestUtils;
 import dev.catananti.repository.UserRepository;
 import io.r2dbc.postgresql.codec.Json;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +44,7 @@ public class ResumeTemplateService {
     private final PdfGenerationService pdfGenerationService;
     private final IdService idService;
     private final DatabaseClient databaseClient;
+    private final org.springframework.core.env.Environment environment;
 
     // ==================== CRUD Operations ====================
 
@@ -91,6 +95,8 @@ public class ResumeTemplateService {
 
                                 return resetDefault
                                         .then(templateRepository.save(template))
+                                        .onErrorMap(DuplicateKeyException.class, e ->
+                                                new DuplicateResourceException("A template with this URL alias already exists"))
                                         .doOnSuccess(t -> log.info("Template created: {} (owner: {})", t.getSlug(), ownerId))
                                         .flatMap(this::mapToResponse);
                             });
@@ -190,10 +196,10 @@ public class ResumeTemplateService {
                                 "url_alias = :alias, " +
                                 "version = :version, is_default = :isDefault, updated_at = :updatedAt " +
                                 "WHERE id = :id")
-                                .bind("name", Json.of(template.getName().toJson()))
+                                .bind("name", jsonValue(template.getName().toJson()))
                                 .bind("desc", template.getDescription() != null
-                                        ? Json.of(template.getDescription().toJson())
-                                        : Json.of("{}"))
+                                        ? jsonValue(template.getDescription().toJson())
+                                        : jsonValue("{}"))
                                 .bind("html", template.getHtmlContent())
                                 .bind("css", template.getCssContent() != null ? template.getCssContent() : "")
                                 .bind("status", template.getStatus())
@@ -212,6 +218,8 @@ public class ResumeTemplateService {
                                 .fetch().rowsUpdated();
                     }))
                             .doOnSuccess(rows -> log.info("Template updated: {} (v{})", template.getSlug(), template.getVersion()))
+                            .onErrorMap(DuplicateKeyException.class, e ->
+                                    new DuplicateResourceException("A template with this URL alias already exists"))
                             .then(Mono.just(template))
                             .flatMap(this::mapToResponse);
                 });
@@ -239,28 +247,34 @@ public class ResumeTemplateService {
 
     /**
      * Get all templates for an owner with pagination.
+     * Pre-fetches owner name once to avoid N+1 user lookups.
      */
-    // TODO F-219: Batch user lookup or join query to prevent N+1
     public Mono<PageResponse<ResumeTemplateResponse>> getTemplatesByOwner(Long ownerId, int page, int size) {
         int offset = page * size;
 
-        return Mono.zip(
-                templateRepository.findByOwnerIdPaginated(ownerId, size, offset)
-                        .flatMap(this::mapToResponse)
-                        .collectList(),
-                templateRepository.countByOwnerId(ownerId)
-        ).map(tuple -> {
-            int totalPages = (int) Math.ceil((double) tuple.getT2() / size);
-            return PageResponse.<ResumeTemplateResponse>builder()
-                    .content(tuple.getT1())
-                    .page(page)
-                    .size(size)
-                    .totalElements(tuple.getT2())
-                    .totalPages(totalPages)
-                    .first(page == 0)
-                    .last(page >= totalPages - 1)
-                    .build();
-        });
+        Mono<String> ownerNameMono = userRepository.findById(ownerId)
+                .map(user -> user.getName() != null ? user.getName() : user.getEmail())
+                .defaultIfEmpty("Unknown");
+
+        return ownerNameMono.flatMap(ownerName ->
+            Mono.zip(
+                    templateRepository.findByOwnerIdPaginated(ownerId, size, offset)
+                            .map(t -> mapToResponseWithOwner(t, ownerName))
+                            .collectList(),
+                    templateRepository.countByOwnerId(ownerId)
+            ).map(tuple -> {
+                int totalPages = (int) Math.ceil((double) tuple.getT2() / size);
+                return PageResponse.<ResumeTemplateResponse>builder()
+                        .content(tuple.getT1())
+                        .page(page)
+                        .size(size)
+                        .totalElements(tuple.getT2())
+                        .totalPages(totalPages)
+                        .first(page == 0)
+                        .last(page >= totalPages - 1)
+                        .build();
+            })
+        );
     }
 
     /**
@@ -275,7 +289,8 @@ public class ResumeTemplateService {
      * Search templates by name.
      */
     public Flux<ResumeTemplateResponse> searchTemplates(Long ownerId, String searchTerm) {
-        return templateRepository.searchByName(ownerId, searchTerm)
+        String sanitized = DigestUtils.escapeLikePattern(searchTerm);
+        return templateRepository.searchByName(ownerId, sanitized)
                 .flatMap(this::mapToResponse);
     }
 
@@ -353,6 +368,17 @@ public class ResumeTemplateService {
 
     // ==================== Helper Methods ====================
 
+    /**
+     * Returns the appropriate value for JSON/JSONB columns:
+     * PostgreSQL uses Json.of(), H2 uses plain String.
+     */
+    private Object jsonValue(String json) {
+        if (java.util.Arrays.asList(environment.getActiveProfiles()).contains("dev")) {
+            return json;
+        }
+        return Json.of(json);
+    }
+
     private Mono<Boolean> validateHtmlContent(String htmlContent) {
         if (htmlContent == null || htmlContent.isBlank()) {
             return Mono.just(false);
@@ -383,27 +409,31 @@ public class ResumeTemplateService {
         return userRepository.findById(template.getOwnerId())
                 .map(user -> user.getName() != null ? user.getName() : user.getEmail())
                 .defaultIfEmpty("Unknown")
-                .map(ownerName -> ResumeTemplateResponse.builder()
-                        .id(String.valueOf(template.getId()))
-                        .slug(template.getSlug())
-                        .alias(template.getAlias())
-                        .name(template.getName() != null ? template.getName().getDefault() : null)
-                        .description(template.getDescription() != null ? template.getDescription().getDefault() : null)
-                        .names(template.getName() != null ? template.getName().getTranslations() : null)
-                        .descriptions(template.getDescription() != null ? template.getDescription().getTranslations() : null)
-                        .htmlContent(template.getHtmlContent())
-                        .cssContent(template.getCssContent())
-                        .status(template.getStatus())
-                        .ownerId(String.valueOf(template.getOwnerId()))
-                        .ownerName(ownerName)
-                        .version(template.getVersion())
-                        .isDefault(template.getIsDefault())
-                        .paperSize(template.getPaperSize())
-                        .orientation(template.getOrientation())
-                        .downloadCount(template.getDownloadCount())
-                        .previewUrl(template.getPreviewUrl())
-                        .createdAt(template.getCreatedAt())
-                        .updatedAt(template.getUpdatedAt())
-                        .build());
+                .map(ownerName -> mapToResponseWithOwner(template, ownerName));
+    }
+
+    private ResumeTemplateResponse mapToResponseWithOwner(ResumeTemplate template, String ownerName) {
+        return ResumeTemplateResponse.builder()
+                .id(String.valueOf(template.getId()))
+                .slug(template.getSlug())
+                .alias(template.getAlias())
+                .name(template.getName() != null ? template.getName().getDefault() : null)
+                .description(template.getDescription() != null ? template.getDescription().getDefault() : null)
+                .names(template.getName() != null ? template.getName().getTranslations() : null)
+                .descriptions(template.getDescription() != null ? template.getDescription().getTranslations() : null)
+                .htmlContent(template.getHtmlContent())
+                .cssContent(template.getCssContent())
+                .status(template.getStatus())
+                .ownerId(String.valueOf(template.getOwnerId()))
+                .ownerName(ownerName)
+                .version(template.getVersion())
+                .isDefault(template.getIsDefault())
+                .paperSize(template.getPaperSize())
+                .orientation(template.getOrientation())
+                .downloadCount(template.getDownloadCount())
+                .previewUrl(template.getPreviewUrl())
+                .createdAt(template.getCreatedAt())
+                .updatedAt(template.getUpdatedAt())
+                .build();
     }
 }

@@ -25,6 +25,7 @@ public class RefreshTokenService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
     private final IdService idService;
+    private final AuditService auditService;
 
     @Value("${jwt.refresh-expiration:604800000}") // 7 days default
     private long refreshTokenExpirationMs;
@@ -72,9 +73,11 @@ public class RefreshTokenService {
                 .flatMap(refreshToken -> {
                     if (refreshToken.isRevoked()) {
                         // Token was already used - possible token theft, revoke all tokens for user
-                        // TODO F-208: Log audit event when refresh token reuse detected (potential theft)
                         log.warn("Attempted reuse of revoked refresh token for user: {}", refreshToken.getUserId());
-                        return refreshTokenRepository.revokeAllByUserId(refreshToken.getUserId())
+                        return auditService.logAction("REFRESH_TOKEN_REUSE", "USER",
+                                        refreshToken.getUserId().toString(), refreshToken.getUserId(), null,
+                                        "Possible token theft: revoked refresh token reused")
+                                .then(refreshTokenRepository.revokeAllByUserId(refreshToken.getUserId()))
                                 .then(Mono.error(new SecurityException("error.unauthorized")));
                     }
 

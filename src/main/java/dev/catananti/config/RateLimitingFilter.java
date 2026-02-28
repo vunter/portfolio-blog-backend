@@ -6,12 +6,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
@@ -19,14 +19,13 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @Slf4j
 @ConditionalOnProperty(name = "spring.cache.type", havingValue = "redis", matchIfMissing = true)
-// TODO F-025: Consider sliding window algorithm instead of fixed window to avoid burst-at-boundary issues
 public class RateLimitingFilter implements WebFilter {
 
     private final ReactiveRedisTemplate<String, String> redisTemplate;
@@ -61,8 +60,9 @@ public class RateLimitingFilter implements WebFilter {
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
         String path = exchange.getRequest().getPath().value();
         
-        // Skip rate limiting for actuator health endpoints
-        if (path.startsWith("/actuator/health") || path.equals("/livez") || path.equals("/readyz")) {
+        // Skip rate limiting for actuator health endpoints and static assets
+        if (path.startsWith("/actuator/health") || path.equals("/livez") || path.equals("/readyz")
+                || path.startsWith("/images/")) {
             return chain.filter(exchange);
         }
 
@@ -70,47 +70,47 @@ public class RateLimitingFilter implements WebFilter {
         String rateLimitKey = buildRateLimitKey(clientIp, path);
 
         // BUG-CRÍTICO-01: Determine rate limit reactively (removed .block() call)
+        // F-025: Sliding window log — uses Redis sorted sets for accurate per-window counting
         return determineRateLimit(exchange, path)
-                .flatMap(maxRequests -> redisTemplate.opsForValue()
-                        .increment(rateLimitKey)
-                        .flatMap(count -> {
-                            if (count == 1) {
-                                // First request, set expiry
-                                return redisTemplate.expire(rateLimitKey, windowDuration)
-                                        .thenReturn(count);
-                            }
-                            return Mono.just(count);
-                        })
-                        .flatMap(count -> {
-                            // BUG-RT7 FIX: Use set() instead of add() to avoid duplicate headers,
-                            // and add headers via beforeCommit to ensure they are set before
-                            // the response body is written by downstream filters.
-                            HttpHeaders headers = exchange.getResponse().getHeaders();
-                            
-                            if (count > maxRequests) {
-                                log.warn("Rate limit exceeded for IP: {}, path: {}, count: {}", clientIp, path, count);
-                                exchange.getResponse().setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
+                .flatMap(maxRequests -> {
+                    long nowMs = Instant.now().toEpochMilli();
+                    double windowStartMs = (double) (nowMs - windowDuration.toMillis());
+                    String member = nowMs + ":" + UUID.randomUUID().toString().substring(0, 8);
+
+                    return redisTemplate.opsForZSet()
+                            .removeRangeByScore(rateLimitKey,
+                                    Range.closed(0.0, windowStartMs))
+                            .flatMap(removed -> redisTemplate.opsForZSet().add(rateLimitKey, member, (double) nowMs))
+                            .flatMap(added -> redisTemplate.opsForZSet().size(rateLimitKey))
+                            .flatMap(count -> redisTemplate.expire(rateLimitKey, windowDuration.plusSeconds(10))
+                                    .thenReturn(count))
+                            .flatMap(count -> {
+                                HttpHeaders headers = exchange.getResponse().getHeaders();
+                                
+                                if (count > maxRequests) {
+                                    log.warn("Rate limit exceeded for IP: {}, path: {}, count: {}", clientIp, path, count);
+                                    exchange.getResponse().setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
+                                    headers.set("X-RateLimit-Limit", String.valueOf(maxRequests));
+                                    headers.set("X-RateLimit-Remaining", "0");
+                                    headers.set("X-RateLimit-Reset", 
+                                            String.valueOf(Instant.now().plus(windowDuration).toEpochMilli()));
+                                    headers.set("Retry-After", String.valueOf(windowDuration.toSeconds()));
+                                    return exchange.getResponse().setComplete();
+                                }
+                                
                                 headers.set("X-RateLimit-Limit", String.valueOf(maxRequests));
-                                headers.set("X-RateLimit-Remaining", "0");
-                                headers.set("X-RateLimit-Reset", 
-                                        String.valueOf(Instant.now().plus(windowDuration).toEpochMilli()));
-                                headers.set("Retry-After", String.valueOf(windowDuration.toSeconds()));
-                                return exchange.getResponse().setComplete();
-                            }
-                            
-                            headers.set("X-RateLimit-Limit", String.valueOf(maxRequests));
-                            headers.set("X-RateLimit-Remaining", 
-                                    String.valueOf(Math.max(0, maxRequests - count)));
-                            
-                            return chain.filter(exchange);
-                        })
-                        .onErrorResume(e -> {
-                            // Redis unavailable — use in-memory fallback
-                            log.warn("Rate limiting Redis unavailable ({}), using in-memory fallback: {}",
-                                    e.getClass().getSimpleName(), e.getMessage());
-                            return handleInMemoryRateLimit(exchange, chain, rateLimitKey, maxRequests, clientIp, path);
-                        })
-                );
+                                headers.set("X-RateLimit-Remaining", 
+                                        String.valueOf(Math.max(0, maxRequests - count)));
+                                
+                                return chain.filter(exchange);
+                            })
+                            .onErrorResume(e -> {
+                                // Redis unavailable — use in-memory fallback
+                                log.warn("Rate limiting Redis unavailable ({}), using in-memory fallback: {}",
+                                        e.getClass().getSimpleName(), e.getMessage());
+                                return handleInMemoryRateLimit(exchange, chain, rateLimitKey, maxRequests, clientIp, path);
+                            });
+                });
     }
 
     /**
@@ -164,6 +164,11 @@ public class RateLimitingFilter implements WebFilter {
             return Mono.just(maxRequestsLogin);
         }
 
+        // F-082: Contact form gets the same strict limit as auth endpoints to prevent spam
+        if (path.equals("/api/v1/contact")) {
+            return Mono.just(maxRequestsLogin);
+        }
+
         // Check SecurityContext reactively to avoid blocking on Netty event loop
         return exchange.getPrincipal()
                 .map(principal -> maxRequestsAuthenticated)
@@ -174,6 +179,10 @@ public class RateLimitingFilter implements WebFilter {
         // Use different buckets for login to prevent circumvention
         if (path.contains("/auth/login")) {
             return "rate_limit:login:" + clientIp;
+        }
+        // F-082: Separate bucket for contact form
+        if (path.equals("/api/v1/contact")) {
+            return "rate_limit:contact:" + clientIp;
         }
         return "rate_limit:" + clientIp;
     }

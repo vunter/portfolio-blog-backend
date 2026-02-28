@@ -10,8 +10,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.data.redis.core.ReactiveValueOperations;
+import org.springframework.data.redis.core.ReactiveZSetOperations;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
@@ -24,6 +25,7 @@ import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mockStatic;
@@ -37,7 +39,7 @@ class RateLimitingFilterTest {
     private ReactiveRedisTemplate<String, String> redisTemplate;
 
     @Mock
-    private ReactiveValueOperations<String, String> valueOperations;
+    private ReactiveZSetOperations<String, String> zSetOperations;
 
     @Mock
     private JwtTokenProvider tokenProvider;
@@ -72,20 +74,22 @@ class RateLimitingFilterTest {
         return MockServerWebExchange.from(request);
     }
 
+    @SuppressWarnings("unchecked")
     private void stubRedisIncrement(String key, long returnCount) {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(eq(key))).thenReturn(Mono.just(returnCount));
-        if (returnCount == 1L) {
-            when(redisTemplate.expire(eq(key), any(Duration.class))).thenReturn(Mono.just(true));
-        }
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(zSetOperations.removeRangeByScore(eq(key), any(Range.class))).thenReturn(Mono.just(0L));
+        when(zSetOperations.add(eq(key), anyString(), anyDouble())).thenReturn(Mono.just(true));
+        when(zSetOperations.size(eq(key))).thenReturn(Mono.just(returnCount));
+        when(redisTemplate.expire(eq(key), any(Duration.class))).thenReturn(Mono.just(true));
     }
 
+    @SuppressWarnings("unchecked")
     private void stubRedisIncrementForAnyKey(long returnCount) {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(Mono.just(returnCount));
-        if (returnCount == 1L) {
-            when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-        }
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(zSetOperations.removeRangeByScore(anyString(), any(Range.class))).thenReturn(Mono.just(0L));
+        when(zSetOperations.add(anyString(), anyString(), anyDouble())).thenReturn(Mono.just(true));
+        when(zSetOperations.size(anyString())).thenReturn(Mono.just(returnCount));
+        when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -426,8 +430,8 @@ class RateLimitingFilterTest {
 
                 MockServerWebExchange exchange = buildExchange("/api/posts");
 
-                when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-                when(valueOperations.increment(anyString()))
+                when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+                when(zSetOperations.removeRangeByScore(anyString(), any(Range.class)))
                         .thenReturn(Mono.error(new RuntimeException("Redis connection refused")));
                 when(chain.filter(exchange)).thenReturn(Mono.empty());
 
@@ -450,8 +454,8 @@ class RateLimitingFilterTest {
                 ipMock.when(() -> IpAddressExtractor.extractClientIp(any(MockServerWebExchange.class)))
                         .thenReturn(TEST_IP);
 
-                when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-                when(valueOperations.increment(anyString()))
+                when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+                when(zSetOperations.removeRangeByScore(anyString(), any(Range.class)))
                         .thenReturn(Mono.error(new RuntimeException("Redis unavailable")));
 
                 // Simulate MAX_ANONYMOUS + 1 requests to exceed limit
@@ -484,8 +488,8 @@ class RateLimitingFilterTest {
                 ipMock.when(() -> IpAddressExtractor.extractClientIp(any(MockServerWebExchange.class)))
                         .thenReturn(TEST_IP);
 
-                when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-                when(valueOperations.increment(anyString()))
+                when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+                when(zSetOperations.removeRangeByScore(anyString(), any(Range.class)))
                         .thenReturn(Mono.error(new RuntimeException("Redis down")));
 
                 // Exhaust the limit
@@ -529,8 +533,8 @@ class RateLimitingFilterTest {
                 ipMock.when(() -> IpAddressExtractor.extractClientIp(any(MockServerWebExchange.class)))
                         .thenReturn(TEST_IP);
 
-                when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-                when(valueOperations.increment(anyString()))
+                when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+                when(zSetOperations.removeRangeByScore(anyString(), any(Range.class)))
                         .thenReturn(Mono.error(new RuntimeException("Redis unavailable")));
 
                 // Make a request to populate in-memory map via fallback
@@ -573,8 +577,8 @@ class RateLimitingFilterTest {
                 ipMock.when(() -> IpAddressExtractor.extractClientIp(any(MockServerWebExchange.class)))
                         .thenReturn(TEST_IP);
 
-                when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-                when(valueOperations.increment(anyString()))
+                when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+                when(zSetOperations.removeRangeByScore(anyString(), any(Range.class)))
                         .thenReturn(Mono.error(new RuntimeException("Redis unavailable")));
 
                 // Populate in-memory entries

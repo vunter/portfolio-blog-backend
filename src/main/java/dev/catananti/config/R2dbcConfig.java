@@ -2,11 +2,14 @@ package dev.catananti.config;
 
 import dev.catananti.config.converter.JsonToLocalizedTextConverter;
 import dev.catananti.config.converter.LocalizedTextToJsonConverter;
+import dev.catananti.config.converter.LocalizedTextToStringConverter;
+import dev.catananti.config.converter.StringToLocalizedTextConverter;
 import io.r2dbc.spi.ConnectionFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.r2dbc.convert.R2dbcCustomConversions;
 import org.springframework.data.r2dbc.dialect.DialectResolver;
@@ -44,11 +47,22 @@ public class R2dbcConfig {
     }
 
     @Bean
+    @Profile("!dev")
     public R2dbcCustomConversions r2dbcCustomConversions(ConnectionFactory connectionFactory) {
         var dialect = DialectResolver.getDialect(connectionFactory);
         return R2dbcCustomConversions.of(dialect, List.of(
                 new JsonToLocalizedTextConverter(),
                 new LocalizedTextToJsonConverter()
+        ));
+    }
+
+    @Bean
+    @Profile("dev")
+    public R2dbcCustomConversions r2dbcCustomConversionsH2(ConnectionFactory connectionFactory) {
+        var dialect = DialectResolver.getDialect(connectionFactory);
+        return R2dbcCustomConversions.of(dialect, List.of(
+                new StringToLocalizedTextConverter(),
+                new LocalizedTextToStringConverter()
         ));
     }
 }

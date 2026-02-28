@@ -7,7 +7,6 @@ import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-// TODO F-289: Add pagination default limit to prevent unbounded result sets on findAllByArticleId
 @Repository
 public interface CommentRepository extends ReactiveCrudRepository<Comment, Long> {
 
@@ -20,7 +19,7 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
     @Query("SELECT * FROM comments WHERE parent_id = :parentId AND status = 'APPROVED' ORDER BY created_at ASC")
     Flux<Comment> findApprovedRepliesByParentId(Long parentId);
 
-    @Query("SELECT * FROM comments WHERE article_id = :articleId ORDER BY created_at DESC")
+    @Query("SELECT * FROM comments WHERE article_id = :articleId ORDER BY created_at DESC LIMIT 100")
     Flux<Comment> findAllByArticleId(Long articleId);
 
     @Query("SELECT * FROM comments WHERE status = :status ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
