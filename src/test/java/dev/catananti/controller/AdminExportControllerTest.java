@@ -1,6 +1,7 @@
 package dev.catananti.controller;
 
 import dev.catananti.dto.BlogExport;
+import dev.catananti.repository.ArticleRepository;
 import dev.catananti.service.ExportImportService;
 import dev.catananti.service.ExportImportService.ImportResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +29,9 @@ class AdminExportControllerTest {
     @Mock
     private ExportImportService exportImportService;
 
+    @Mock
+    private ArticleRepository articleRepository;
+
     @InjectMocks
     private AdminExportController controller;
 
@@ -36,6 +40,8 @@ class AdminExportControllerTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(articleRepository.countAll()).thenReturn(Mono.just(25L));
+
         blogStats = BlogExport.BlogStats.builder()
                 .totalArticles(25)
                 .publishedArticles(20)

@@ -51,11 +51,16 @@ class ResumeTemplateServiceTest {
     @Mock
     private DatabaseClient databaseClient;
 
+    @Mock
+    private org.springframework.core.env.Environment environment;
+
     private ResumeTemplate sampleTemplate;
     private User sampleUser;
 
     @BeforeEach
     void setUp() {
+        lenient().when(environment.getActiveProfiles()).thenReturn(new String[]{"dev"});
+
         sampleUser = User.builder()
                 .id(1L)
                 .email("test@example.com")
