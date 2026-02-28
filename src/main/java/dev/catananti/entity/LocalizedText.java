@@ -3,6 +3,7 @@ package dev.catananti.entity;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -12,8 +13,8 @@ import java.util.Objects;
 /**
  * Wrapper type for JSONB-stored localized text fields.
  * Stored in PostgreSQL as JSONB: {"en": "Java", "pt-br": "Java", "es": "Java"}
- * TODO F-257: Log a warning when get() falls back from requested locale to DEFAULT_LOCALE or first-available
  */
+@Slf4j
 public class LocalizedText {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -56,8 +57,10 @@ public class LocalizedText {
             return translations.get(locale);
         }
         if (translations.containsKey(DEFAULT_LOCALE)) {
+            log.trace("Locale '{}' not found, falling back to default '{}'", locale, DEFAULT_LOCALE);
             return translations.get(DEFAULT_LOCALE);
         }
+        log.trace("Locale '{}' and default '{}' not found, using first available", locale, DEFAULT_LOCALE);
         return translations.values().stream().findFirst().orElse(null);
     }
 

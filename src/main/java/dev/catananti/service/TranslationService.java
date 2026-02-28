@@ -9,12 +9,18 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Translation service using DeepL API Free.
@@ -25,7 +31,6 @@ import java.util.List;
  * <p>
  * Supported languages: EN, PT, PT-BR, DE, FR, ES, IT, NL, PL, RU, JA, ZH, etc.
  * </p>
- * TODO F-235: Track monthly character usage to warn before hitting DeepL free tier limit
  */
 @Service
 @Slf4j
@@ -34,11 +39,17 @@ public class TranslationService {
     private static final String DEEPL_FREE_URL = "https://api-free.deepl.com/v2/translate";
     private static final String DEEPL_PRO_URL = "https://api.deepl.com/v2/translate";
     private static final int MAX_BATCH_SIZE = 50; // DeepL allows up to 50 texts per request
+    private static final long FREE_TIER_CHAR_LIMIT = 500_000L;
+    private static final double USAGE_WARNING_THRESHOLD = 0.8;
 
     private final WebClient webClient;
     private final String apiKey;
     private final boolean usePro;
     private final CircuitBreaker circuitBreaker;
+
+    // F-235: Monthly character usage tracking
+    private final AtomicLong monthlyCharCount = new AtomicLong(0);
+    private final AtomicReference<YearMonth> trackingMonth = new AtomicReference<>(YearMonth.now());
 
     public TranslationService(
             WebClient.Builder webClientBuilder,
@@ -142,22 +153,24 @@ public class TranslationService {
         });
     }
 
-    // TODO F-230: Use UriComponentsBuilder instead of manual URL parameter concatenation
     private Mono<List<String>> callDeepL(List<String> texts, String targetLang) {
-        // Build form data: text=...&text=...&target_lang=...
-        StringBuilder formBody = new StringBuilder();
+        // F-230: Use Spring's MultiValueMap + BodyInserters for proper form encoding
+        MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
         for (String text : texts) {
-            if (!formBody.isEmpty()) formBody.append("&");
-            formBody.append("text=").append(urlEncode(text));
+            formData.add("text", text);
         }
-        formBody.append("&target_lang=").append(targetLang);
+        formData.add("target_lang", targetLang);
+
+        // F-235: Track character usage
+        long charCount = texts.stream().mapToLong(String::length).sum();
+        trackCharacterUsage(charCount);
 
         log.debug("DeepL request: {} texts, targetLang={}", texts.size(), targetLang);
 
         return webClient.post()
                 .header("Authorization", "DeepL-Auth-Key " + apiKey)
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .bodyValue(formBody.toString())
+                .body(BodyInserters.fromFormData(formData))
                 .retrieve()
                 .bodyToMono(DeepLResponse.class)
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
@@ -175,14 +188,30 @@ public class TranslationService {
     }
 
     /**
-     * Reassemble the full result list, putting translated texts back at their original indices.
+     * Track monthly character usage and warn when approaching the free tier limit.
      */
-    private List<String> reassemble(List<String> originals, List<Integer> contentIndices, List<String> translated) {
-        List<String> result = new ArrayList<>(originals);
-        for (int i = 0; i < contentIndices.size() && i < translated.size(); i++) {
-            result.set(contentIndices.get(i), translated.get(i));
+    private void trackCharacterUsage(long chars) {
+        YearMonth now = YearMonth.now();
+        if (!now.equals(trackingMonth.get())) {
+            trackingMonth.set(now);
+            monthlyCharCount.set(0);
         }
-        return result;
+        long total = monthlyCharCount.addAndGet(chars);
+        if (!usePro && total > (long) (FREE_TIER_CHAR_LIMIT * USAGE_WARNING_THRESHOLD)) {
+            log.warn("DeepL free tier usage warning: {} / {} characters used this month",
+                    total, FREE_TIER_CHAR_LIMIT);
+        }
+    }
+
+    /**
+     * Get current monthly character usage.
+     */
+    public long getMonthlyCharacterUsage() {
+        YearMonth now = YearMonth.now();
+        if (!now.equals(trackingMonth.get())) {
+            return 0;
+        }
+        return monthlyCharCount.get();
     }
 
     /**
@@ -199,12 +228,15 @@ public class TranslationService {
         };
     }
 
-    private String urlEncode(String value) {
-        try {
-            return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            return value;
+    /**
+     * Reassemble the full result list, putting translated texts back at their original indices.
+     */
+    private List<String> reassemble(List<String> originals, List<Integer> contentIndices, List<String> translated) {
+        List<String> result = new ArrayList<>(originals);
+        for (int i = 0; i < contentIndices.size() && i < translated.size(); i++) {
+            result.set(contentIndices.get(i), translated.get(i));
         }
+        return result;
     }
 
     // DeepL API response DTOs

@@ -31,7 +31,6 @@ public class NewsletterController {
         return messageSource.getMessage(key, null, key, locale);
     }
 
-    // TODO F-085: Add pagination to GET /subscribers endpoint (currently loads all into memory)
     @PostMapping("/subscribe")
     @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
     @Operation(summary = "Subscribe to newsletter", description = "Subscribe an email to the newsletter")

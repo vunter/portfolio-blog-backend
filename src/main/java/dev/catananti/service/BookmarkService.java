@@ -7,6 +7,7 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.BookmarkRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -26,12 +27,14 @@ public class BookmarkService {
     private final ArticleService articleService;
     private final IdService idService;
 
+    @Value("${app.bookmark.hash-salt:default-bookmark-salt}")
+    private String hashSalt;
+
     /**
-     * Hash visitor ID with SHA-256 for privacy.
+     * Hash visitor ID with SHA-256 and salt for privacy.
      */
-    // TODO F-159: Add salt to visitor ID hash for better privacy or use HMAC
     public String hashVisitorId(String visitorId) {
-        return dev.catananti.util.DigestUtils.sha256Hex(visitorId);
+        return dev.catananti.util.DigestUtils.sha256Hex(hashSalt + visitorId);
     }
 
     public Mono<PageResponse<ArticleResponse>> getBookmarks(String visitorId, int page, int size) {

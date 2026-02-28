@@ -65,6 +65,9 @@ class ArticleVersionServiceTest {
                 .content("Test Content")
                 .createdAt(LocalDateTime.now())
                 .build();
+
+        // F-185: createVersion now calls pruneOldVersions which needs countByArticleId
+        lenient().when(versionRepository.countByArticleId(any())).thenReturn(Mono.just(1L));
     }
 
     @Test

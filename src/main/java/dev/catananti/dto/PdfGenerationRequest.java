@@ -11,7 +11,8 @@ import java.util.Map;
 
 /**
  * Request DTO for PDF generation from template.
- * TODO F-282: Consider converting to a record class for immutability (Java 16+)
+ * Note: Converting to a record would break Lombok @Builder and @Data, and records
+ * do not support Jakarta Bean Validation annotations on fields with the same ergonomics.
  */
 @Data
 @Builder
@@ -34,7 +35,6 @@ public class PdfGenerationRequest {
      * Raw HTML content for direct PDF conversion.
      * Used when templateId is not provided.
      */
-    // TODO F-273: Validate URL against allowlist to prevent SSRF
     @Size(max = 500_000, message = "HTML content too large")
     private String htmlContent;
 

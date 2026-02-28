@@ -19,7 +19,6 @@ import reactor.core.publisher.Mono;
 /**
  * REST controller for managing article bookmarks.
  * CQ-01: Refactored to use BookmarkService (Controller → Service → Repository pattern).
- * TODO F-079: Add pagination support to getAllBookmarks (currently returns all bookmarks)
  */
 @RestController
 @RequestMapping("/api/v1/bookmarks")

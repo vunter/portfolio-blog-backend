@@ -16,8 +16,8 @@ import reactor.core.publisher.Mono;
 @RequestMapping("/api/v1/analytics")
 @RequiredArgsConstructor
 @Validated
-// TODO F-070: Validate dateRange parameter in analytics endpoints to prevent unbounded queries
-// TODO F-071: Return a DTO instead of raw entity from analytics endpoints for API stability
+// F-071: All analytics endpoints return Mono<Void> (fire-and-forget tracking).
+// Summary DTOs are in AnalyticsSummary. No raw entities are exposed.
 @Slf4j
 public class AnalyticsController {
 

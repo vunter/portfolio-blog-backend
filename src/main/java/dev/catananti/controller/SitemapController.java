@@ -36,7 +36,7 @@ public class SitemapController {
 
     private static final DateTimeFormatter SITEMAP_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
-    @GetMapping(value = "/sitemap.xml", produces = MediaType.APPLICATION_XML_VALUE)
+    @GetMapping("/sitemap.xml")
     public Mono<String> getSitemap() {
         log.debug("Generating sitemap");
         return cacheService.get(SITEMAP_CACHE_KEY, String.class)

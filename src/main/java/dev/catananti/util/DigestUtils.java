@@ -58,4 +58,60 @@ public final class DigestUtils {
             throw new IllegalStateException("SHA-256 not available", e);
         }
     }
+
+    /**
+     * Constant-time comparison of two strings to prevent timing attacks.
+     * Uses MessageDigest.isEqual on the UTF-8 bytes of both strings.
+     *
+     * @param a first string
+     * @param b second string
+     * @return true if both strings are equal
+     */
+    public static boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) return false;
+        return MessageDigest.isEqual(
+                a.getBytes(StandardCharsets.UTF_8),
+                b.getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
+    /**
+     * F-291: Escape SQL LIKE special characters (%, _, \) in user-supplied search terms.
+     * This prevents users from injecting wildcards into LIKE patterns.
+     *
+     * @param input raw user search query
+     * @return escaped string safe for use inside LIKE patterns
+     */
+    public static String escapeLikePattern(String input) {
+        if (input == null) return null;
+        return input
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+    }
+
+    /**
+     * F-216: Sanitize a user-supplied URL by rejecting dangerous schemes.
+     * Only allows http, https, and mailto schemes. Returns null for any
+     * URL using javascript:, data:, vbscript:, or other dangerous schemes.
+     *
+     * @param url the user-supplied URL
+     * @return the URL unchanged if safe, or null if it uses a dangerous scheme
+     */
+    public static String sanitizeUrl(String url) {
+        if (url == null || url.isBlank()) return url;
+        String trimmed = url.strip();
+        // Collapse embedded whitespace/control chars that could bypass scheme detection
+        String normalized = trimmed.replaceAll("[\\s\\u0000-\\u001F]+", "");
+        String lower = normalized.toLowerCase();
+        if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("mailto:")) {
+            return trimmed;
+        }
+        // URLs without a scheme are treated as relative (safe)
+        if (!lower.contains(":")) {
+            return trimmed;
+        }
+        // Any other scheme (javascript:, data:, vbscript:, etc.) is rejected
+        return null;
+    }
 }

@@ -17,24 +17,29 @@ data:
 
     listener "tcp" {
       address     = "0.0.0.0:8200"
-      # F-420: TODO: Enable TLS when cert-manager is deployed
+      # TLS configuration — enable when cert-manager is deployed:
+      # 1. Create a Certificate resource in the vault namespace
+      # 2. Mount the TLS secret as a volume in vault-deployment.yaml
+      # 3. Uncomment the lines below and set tls_disable = 0
       # tls_cert_file = "/vault/tls/tls.crt"
       # tls_key_file  = "/vault/tls/tls.key"
       tls_disable = 1
     }
 
-    # F-421: TODO: Add audit backend for secret access trail
-    # audit "file" {
-    #   file_path = "/vault/logs/audit.log"
-    # }
+    audit "file" {
+      file_path = "/vault/logs/audit.log"
+    }
 
     telemetry {
       prometheus_retention_time = "30s"
       disable_hostname = true
     }
 
-    # F-425: TODO: Set AppRole secret_id_ttl and secret_id_num_uses to non-zero values
-    # for periodic rotation (e.g., secret_id_ttl=24h, secret_id_num_uses=100)
+    # AppRole configuration — set via Vault CLI after init:
+    # vault write auth/approle/role/portfolio-blog \
+    #   secret_id_ttl=24h secret_id_num_uses=0 \
+    #   token_ttl=1h token_max_ttl=4h \
+    #   policies=portfolio-blog
 
     # api_addr and cluster_addr set via VAULT_API_ADDR / VAULT_CLUSTER_ADDR env vars
     # (uses pod IP from K8s downward API for Raft compatibility)

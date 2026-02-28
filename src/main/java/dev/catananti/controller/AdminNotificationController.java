@@ -17,7 +17,7 @@ import java.time.Duration;
  * SSE endpoint for real-time admin notifications.
  * Clients connect to /api/v1/admin/notifications/stream and receive
  * events as they occur (article published, comment received, etc.).
- * TODO F-133: Extract notification types into an enum instead of hardcoded strings
+ * Notification types are defined in {@link dev.catananti.service.NotificationType}.
  */
 @RestController
 @RequestMapping("/api/v1/admin/notifications")
@@ -28,7 +28,7 @@ public class AdminNotificationController {
 
     private final NotificationEventService notificationEventService;
 
-    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @GetMapping("/stream")
     public Flux<ServerSentEvent<NotificationEventService.NotificationEvent>> stream() {
         log.debug("Client subscribing to notification stream");
         Flux<ServerSentEvent<NotificationEventService.NotificationEvent>> events = notificationEventService.subscribe()

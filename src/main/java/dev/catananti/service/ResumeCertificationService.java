@@ -4,6 +4,7 @@ import dev.catananti.dto.ResumeProfileRequest;
 import dev.catananti.dto.ResumeProfileResponse;
 import dev.catananti.entity.ResumeCertification;
 import dev.catananti.repository.ResumeCertificationRepository;
+import dev.catananti.util.DigestUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,7 +31,6 @@ public class ResumeCertificationService {
     /**
      * Save certification entries for a profile.
      */
-    // TODO F-216: Validate credential URLs to reject javascript:/data:/vbscript: schemes
     public Mono<Void> saveCertifications(Long profileId, List<ResumeProfileRequest.CertificationEntry> certifications) {
         if (certifications == null || certifications.isEmpty()) {
             log.debug("No certifications to save for profileId={}", profileId);
@@ -46,7 +46,7 @@ public class ResumeCertificationService {
                     .name(e.getName())
                     .issuer(e.getIssuer())
                     .issueDate(e.getIssueDate())
-                    .credentialUrl(e.getCredentialUrl())
+                    .credentialUrl(DigestUtils.sanitizeUrl(e.getCredentialUrl()))
                     .description(e.getDescription())
                     .sortOrder(e.getSortOrder() != null ? e.getSortOrder() : i)
                     .createdAt(now).updatedAt(now)
@@ -88,7 +88,7 @@ public class ResumeCertificationService {
                             entity.setName(entry.getName());
                             entity.setIssuer(entry.getIssuer());
                             entity.setIssueDate(entry.getIssueDate());
-                            entity.setCredentialUrl(entry.getCredentialUrl());
+                            entity.setCredentialUrl(DigestUtils.sanitizeUrl(entry.getCredentialUrl()));
                             entity.setDescription(entry.getDescription());
                             entity.setSortOrder(sortOrder);
                             entity.setUpdatedAt(now);
@@ -99,7 +99,7 @@ public class ResumeCertificationService {
                             toSave.add(ResumeCertification.builder()
                                     .id(idService.nextId()).profileId(profileId)
                                     .name(entry.getName()).issuer(entry.getIssuer())
-                                    .issueDate(entry.getIssueDate()).credentialUrl(entry.getCredentialUrl())
+                                    .issueDate(entry.getIssueDate()).credentialUrl(DigestUtils.sanitizeUrl(entry.getCredentialUrl()))
                                     .description(entry.getDescription()).sortOrder(sortOrder)
                                     .createdAt(now).updatedAt(now).newRecord(true)
                                     .build());

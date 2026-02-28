@@ -47,7 +47,7 @@ public class AuthController {
     private static final String REFRESH_TOKEN_COOKIE = "refresh_token";
 
     // F-076: Rate-limited via nginx login zone (5r/m)
-    // TODO F-077: Enforce password complexity (uppercase, lowercase, digit, special char) on registration/reset
+    // F-077: Password complexity enforced via @Pattern annotation on RegisterRequest DTO
     @PostMapping("/login")
     public Mono<AuthResponse> login(@Valid @RequestBody LoginRequest request,
                                      ServerHttpRequest httpRequest,

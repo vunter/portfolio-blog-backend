@@ -5,9 +5,32 @@ metadata:
   namespace: vault
   labels:
     app: vault
-  # F-422: TODO: Scale to 3 replicas with Raft HA for production
-  # F-426: TODO: Replace NodePort with ClusterIP + Ingress to restrict access
-  # TODO F-448: Add HorizontalPodAutoscaler when scaling beyond single replica
+  # F-422: Raft HA — scale to 3 replicas for production:
+  # spec:
+  #   replicas: 3
+  #   # Each replica needs a unique node_id; use a StatefulSet instead of Deployment
+  #   # and configure storage "raft" { node_id = "${HOSTNAME}" } in vault.hcl
+  # HorizontalPodAutoscaler — enable when scaling beyond single replica:
+  # ---
+  # apiVersion: autoscaling/v2
+  # kind: HorizontalPodAutoscaler
+  # metadata:
+  #   name: vault-hpa
+  #   namespace: vault
+  # spec:
+  #   scaleTargetRef:
+  #     apiVersion: apps/v1
+  #     kind: Deployment
+  #     name: vault
+  #   minReplicas: 1
+  #   maxReplicas: 3
+  #   metrics:
+  #     - type: Resource
+  #       resource:
+  #         name: cpu
+  #         target:
+  #           type: Utilization
+  #           averageUtilization: 70
 spec:
   replicas: 1
   selector:

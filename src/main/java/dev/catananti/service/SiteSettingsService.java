@@ -2,12 +2,14 @@ package dev.catananti.service;
 
 import dev.catananti.entity.SiteSetting;
 import dev.catananti.repository.SiteSettingRepository;
-import lombok.RequiredArgsConstructor;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -15,15 +17,25 @@ import java.util.Map;
 /**
  * Service for managing site settings with database persistence.
  * Settings are stored as key-value pairs in the site_settings table.
- * TODO F-225: Consider caching settings in memory with short TTL to reduce DB queries
+ * Uses Caffeine cache with short TTL to reduce DB queries.
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SiteSettingsService {
 
     private final SiteSettingRepository repository;
     private final IdService idService;
+
+    private static final String ALL_SETTINGS_KEY = "all";
+    private final Cache<String, Map<String, Object>> settingsCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofSeconds(30))
+            .maximumSize(1)
+            .build();
+
+    public SiteSettingsService(SiteSettingRepository repository, IdService idService) {
+        this.repository = repository;
+        this.idService = idService;
+    }
 
     @Value("${app.site-url:https://catananti.dev}")
     private String siteUrl;
@@ -44,9 +56,15 @@ public class SiteSettingsService {
 
     /**
      * Get all settings as a map, filling in defaults for any missing values.
+     * Uses Caffeine cache with 30s TTL.
      */
     public Mono<Map<String, Object>> getAllSettings() {
-        log.debug("Loading all site settings");
+        Map<String, Object> cached = settingsCache.getIfPresent(ALL_SETTINGS_KEY);
+        if (cached != null) {
+            log.debug("Returning cached site settings");
+            return Mono.just(cached);
+        }
+        log.debug("Loading all site settings from DB");
         return repository.findAllByOrderBySettingKeyAsc()
                 .collectMap(SiteSetting::getSettingKey, s -> (Object) parseValue(s.getSettingValue(), s.getSettingType()))
                 .map(stored -> {
@@ -58,14 +76,14 @@ public class SiteSettingsService {
                     DEFAULTS.forEach((k, v) -> result.put(k, parseValue(v, inferType(v))));
                     // Override with stored values
                     result.putAll(stored);
+                    settingsCache.put(ALL_SETTINGS_KEY, result);
                     return result;
                 });
     }
 
     /**
-     * Update multiple settings at once.
+     * Update multiple settings at once using batch save.
      */
-    // TODO F-225: Batch setting updates instead of N+1 individual updates
     public Mono<Map<String, Object>> updateSettings(Map<String, Object> settings) {
         if (settings == null || settings.isEmpty()) {
             log.debug("No settings to update, returning current settings");
@@ -98,7 +116,7 @@ public class SiteSettingsService {
                             })))
                     .toList();
 
-            return Mono.when(saves).then(getAllSettings());
+            return Mono.when(saves).then(Mono.fromRunnable(() -> settingsCache.invalidateAll())).then(getAllSettings());
         });
     }
 

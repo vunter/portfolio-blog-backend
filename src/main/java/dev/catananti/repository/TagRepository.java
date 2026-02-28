@@ -41,4 +41,10 @@ public interface TagRepository extends ReactiveCrudRepository<Tag, Long> {
            "JOIN articles a ON a.id = at.article_id " +
            "WHERE a.author_id = :authorId")
     Mono<Long> countByAuthorId(Long authorId);
+
+    @Query("SELECT * FROM tags ORDER BY name ASC LIMIT :limit OFFSET :offset")
+    Flux<Tag> findAllPaginated(int limit, int offset);
+
+    @Query("SELECT COUNT(*) FROM tags")
+    Mono<Long> countAll();
 }

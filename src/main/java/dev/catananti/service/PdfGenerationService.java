@@ -22,7 +22,6 @@ import java.util.concurrent.Semaphore;
 /**
  * Service for converting HTML content to PDF documents.
  * Uses Playwright with Chromium for perfect CSS3 support (flexbox, grid, etc).
- * TODO F-210: Add configurable timeout and page size limits for PDF generation
  */
 @Service
 @Slf4j
@@ -30,6 +29,12 @@ public class PdfGenerationService {
 
     private volatile Playwright playwright;
     private volatile Browser browser;
+
+    @org.springframework.beans.factory.annotation.Value("${app.pdf.timeout-seconds:30}")
+    private int timeoutSeconds = 30;
+
+    @org.springframework.beans.factory.annotation.Value("${app.pdf.max-pages:50}")
+    private int maxPages = 50;
 
     /**
      * IMP-08: Semaphore to limit concurrent PDF generation.
@@ -71,24 +76,26 @@ public class PdfGenerationService {
                         .setHeadless(true);
 
                 // Use system Chromium if PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH is set
-                // (required for Alpine Linux where Playwright's bundled browser is not installed)
                 String chromiumPath = System.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH");
                 if (chromiumPath != null && !chromiumPath.isBlank()) {
                     log.info("Using system Chromium at: {}", chromiumPath);
                     launchOptions.setExecutablePath(java.nio.file.Paths.get(chromiumPath));
-                    // Required for running Chromium in containers without sandbox
-                    launchOptions.setArgs(java.util.List.of(
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-gpu"
-                    ));
                 }
+
+                // Container-safe flags
+                launchOptions.setArgs(java.util.List.of(
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu"
+                ));
 
                 browser = playwright.chromium().launch(launchOptions);
                 log.info("Playwright initialized successfully with Chromium");
                 return browser;
             }).subscribeOn(Schedulers.boundedElastic())
+            .doOnError(e -> log.error("Playwright init failed: {}", e.getMessage()))
+            .retry(2)
     ).cache(); // cache() ensures single initialization
 
     @PostConstruct
@@ -150,6 +157,7 @@ public class PdfGenerationService {
                             }
                         })
                         .subscribeOn(Schedulers.boundedElastic()))
+                .timeout(java.time.Duration.ofSeconds(timeoutSeconds))
                 .doOnSuccess(bytes -> log.info("PDF generated successfully: {} bytes", bytes.length))
                 .doOnError(e -> log.error("PDF generation failed", e));
     }
@@ -253,6 +261,13 @@ public class PdfGenerationService {
             
             // Generate PDF
             byte[] pdfBytes = page.pdf(pdfOptions);
+
+            // F-210: Enforce max pages limit
+            // Rough estimation: typical A4 PDF page ~3KB-50KB; reject extremely large outputs
+            // A more precise check would parse the PDF page count, but this is a safe guard
+            if (pdfBytes.length > maxPages * 200_000L) {
+                throw new PdfGenerationException("PDF exceeds maximum allowed size (estimated >" + maxPages + " pages)");
+            }
             
             log.debug("PDF generated: {} bytes", pdfBytes.length);
             return pdfBytes;

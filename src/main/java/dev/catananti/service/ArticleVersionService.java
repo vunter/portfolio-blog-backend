@@ -18,7 +18,6 @@ import java.time.LocalDateTime;
 /**
  * Service for managing article version history.
  * Automatically creates versions when articles are updated.
- * TODO F-185: Add version pruning — limit stored versions per article (e.g., keep last 50)
  */
 @Service
 @RequiredArgsConstructor
@@ -28,6 +27,9 @@ public class ArticleVersionService {
     private final ArticleVersionRepository versionRepository;
     private final ArticleRepository articleRepository;
     private final IdService idService;
+
+    @org.springframework.beans.factory.annotation.Value("${app.article.max-versions:50}")
+    private int maxVersions = 50;
 
     /**
      * Create a new version of an article.
@@ -54,7 +56,8 @@ public class ArticleVersionService {
                             .build();
 
                     return versionRepository.save(version)
-                            .doOnSuccess(v -> log.info("Created version {} for article {}", v.getVersionNumber(), article.getSlug()));
+                            .doOnSuccess(v -> log.info("Created version {} for article {}", v.getVersionNumber(), article.getSlug()))
+                            .flatMap(v -> pruneOldVersions(article.getId()).thenReturn(v));
                 });
     }
 
@@ -164,6 +167,21 @@ public class ArticleVersionService {
     public Mono<Void> deleteVersionHistory(Long articleId) {
         return versionRepository.deleteByArticleId(articleId)
                 .doOnSuccess(v -> log.info("Deleted version history for article: {}", articleId));
+    }
+
+    /**
+     * F-185: Prune old versions, keeping only the most recent maxVersions.
+     */
+    private Mono<Void> pruneOldVersions(Long articleId) {
+        return versionRepository.countByArticleId(articleId)
+                .flatMap(count -> {
+                    if (count <= maxVersions) return Mono.empty();
+                    return versionRepository.findByArticleIdOrderByVersionNumberDesc(articleId)
+                            .skip(maxVersions)
+                            .flatMap(old -> versionRepository.deleteById(old.getId()))
+                            .then()
+                            .doOnSuccess(v -> log.info("Pruned old versions for article {}, kept last {}", articleId, maxVersions));
+                });
     }
 
     /**

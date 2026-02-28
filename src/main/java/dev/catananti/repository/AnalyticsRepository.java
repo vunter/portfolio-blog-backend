@@ -31,4 +31,7 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
     // Aggregate queries are now handled via DatabaseClient in AnalyticsService.
 
     Mono<Void> deleteByArticleId(Long articleId);
+
+    @Query("DELETE FROM analytics_events WHERE created_at < :cutoff")
+    Mono<Void> deleteByCreatedAtBefore(LocalDateTime cutoff);
 }

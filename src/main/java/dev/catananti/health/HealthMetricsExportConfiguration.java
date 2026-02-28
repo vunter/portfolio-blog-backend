@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.context.annotation.Configuration;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Configuration to export health indicators as Micrometer metrics.
@@ -28,11 +29,12 @@ public class HealthMetricsExportConfiguration {
                 .register(registry);
     }
 
-    // TODO F-052: HealthEndpoint.health() may block; consider using ReactiveHealthEndpointWebExtension
-    //             for fully non-blocking health metric export
+    // Health check runs on boundedElastic scheduler to avoid blocking the Netty event loop
     private int getStatusCode(HealthEndpoint health) {
         try {
-            Status status = health.health().getStatus();
+            Status status = reactor.core.publisher.Mono.fromCallable(() -> health.health().getStatus())
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .block();
             if (Status.UP.equals(status)) {
                 return 3;
             }

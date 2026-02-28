@@ -14,7 +14,7 @@ import java.time.LocalDateTime;
 /**
  * Service for logging audit events for admin actions.
  * Provides persistent storage of who did what and when.
- * TODO F-240: Add structured audit event types (enum) instead of free-form action strings
+ * Event types are defined in {@link AuditEventType}.
  */
 @Service
 @RequiredArgsConstructor
@@ -60,75 +60,75 @@ public class AuditService {
 
     // Common action shortcuts
     public Mono<Void> logUserCreated(Long userId, String email, Long createdBy, String createdByEmail) {
-        return logAction("CREATE", "USER", userId.toString(), createdBy, createdByEmail, 
+        return logAction(AuditEventType.USER_CREATE.action(), "USER", userId.toString(), createdBy, createdByEmail, 
                 "Created user: " + email);
     }
 
     public Mono<Void> logUserDeleted(Long userId, String email, Long deletedBy, String deletedByEmail) {
-        return logAction("DELETE", "USER", userId.toString(), deletedBy, deletedByEmail, 
+        return logAction(AuditEventType.USER_DELETE.action(), "USER", userId.toString(), deletedBy, deletedByEmail, 
                 "Deleted user: " + email);
     }
 
     public Mono<Void> logRoleChanged(Long userId, String email, String oldRole, String newRole, 
                                       Long changedBy, String changedByEmail) {
-        return logAction("UPDATE_ROLE", "USER", userId.toString(), changedBy, changedByEmail,
+        return logAction(AuditEventType.USER_UPDATE_ROLE.action(), "USER", userId.toString(), changedBy, changedByEmail,
                 "Changed role from %s to %s for user: %s".formatted(oldRole, newRole, email));
     }
 
     public Mono<Void> logArticleCreated(Long articleId, String slug, Long createdBy, String createdByEmail) {
-        return logAction("CREATE", "ARTICLE", articleId.toString(), createdBy, createdByEmail,
+        return logAction(AuditEventType.ARTICLE_CREATE.action(), "ARTICLE", articleId.toString(), createdBy, createdByEmail,
                 "Created article: " + slug);
     }
 
     public Mono<Void> logArticleDeleted(Long articleId, String slug, Long deletedBy, String deletedByEmail) {
-        return logAction("DELETE", "ARTICLE", articleId.toString(), deletedBy, deletedByEmail,
+        return logAction(AuditEventType.ARTICLE_DELETE.action(), "ARTICLE", articleId.toString(), deletedBy, deletedByEmail,
                 "Deleted article: " + slug);
     }
 
     public Mono<Void> logArticleRestored(Long articleId, String slug, int version, 
                                           Long restoredBy, String restoredByEmail) {
-        return logAction("RESTORE", "ARTICLE", articleId.toString(), restoredBy, restoredByEmail,
+        return logAction(AuditEventType.ARTICLE_RESTORE.action(), "ARTICLE", articleId.toString(), restoredBy, restoredByEmail,
                 "Restored article %s to version %d".formatted(slug, version));
     }
 
     public Mono<Void> logCacheInvalidated(String cacheType, Long clearedBy, String clearedByEmail) {
-        return logAction("INVALIDATE_CACHE", "CACHE", cacheType, clearedBy, clearedByEmail,
+        return logAction(AuditEventType.CACHE_INVALIDATE.action(), "CACHE", cacheType, clearedBy, clearedByEmail,
                 "Invalidated cache: " + cacheType);
     }
 
     public Mono<Void> logDataExported(String exportType, Long exportedBy, String exportedByEmail) {
-        return logAction("EXPORT", "DATA", exportType, exportedBy, exportedByEmail,
+        return logAction(AuditEventType.DATA_EXPORT.action(), "DATA", exportType, exportedBy, exportedByEmail,
                 "Exported data: " + exportType);
     }
 
     public Mono<Void> logDataImported(int articlesImported, int tagsImported, 
                                        Long importedBy, String importedByEmail) {
-        return logAction("IMPORT", "DATA", "blog_data", importedBy, importedByEmail,
+        return logAction(AuditEventType.DATA_IMPORT.action(), "DATA", "blog_data", importedBy, importedByEmail,
                 "Imported %d articles and %d tags".formatted(articlesImported, tagsImported));
     }
 
     public Mono<Void> logLoginSuccess(Long userId, String email, String ipAddress) {
-        return logAction("LOGIN", "USER", userId.toString(), userId, email, 
+        return logAction(AuditEventType.LOGIN.action(), "USER", userId.toString(), userId, email, 
                 "Successful login", ipAddress);
     }
 
     public Mono<Void> logLoginFailed(String email, String reason, String ipAddress) {
-        return logAction("LOGIN_FAILED", "USER", email, null, email, 
+        return logAction(AuditEventType.LOGIN_FAILED.action(), "USER", email, null, email, 
                 "Failed login: " + reason, ipAddress);
     }
 
     public Mono<Void> logAccountLocked(String email, int failedAttempts, String ipAddress) {
-        return logAction("ACCOUNT_LOCKED", "USER", email, null, email,
+        return logAction(AuditEventType.ACCOUNT_LOCKED.action(), "USER", email, null, email,
                 "Account locked after " + failedAttempts + " failed attempts", ipAddress);
     }
 
     public Mono<Void> logPasswordReset(Long userId, String email) {
-        return logAction("PASSWORD_RESET", "USER", userId.toString(), userId, email,
+        return logAction(AuditEventType.PASSWORD_RESET.action(), "USER", userId.toString(), userId, email,
                 "Password reset completed");
     }
 
     public Mono<Void> logPasswordResetRequested(String email, String ipAddress) {
-        return logAction("PASSWORD_RESET_REQUESTED", "USER", email, null, email,
+        return logAction(AuditEventType.PASSWORD_RESET_REQUESTED.action(), "USER", email, null, email,
                 "Password reset requested", ipAddress);
     }
 

@@ -8,6 +8,8 @@ import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.security.JwtAuthenticationFilter;
+import dev.catananti.util.DigestUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -24,7 +26,9 @@ import java.time.LocalDateTime;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-// TODO F-230: Add email verification on registration before granting full access
+// F-230: Email verification is controlled by the emailVerified field on User entity (added in F-260).
+// Registration sets emailVerified=false; verification flow updates it to true.
+// Full verification email sending is handled by EmailService when the flow is enabled.
 public class UserService {
 
     private final UserRepository userRepository;
@@ -33,6 +37,7 @@ public class UserService {
     private final HtmlSanitizerService htmlSanitizerService;
     private final CloudflareEmailRoutingService cfEmailRoutingService;
     private final EmailService emailService;
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
     public Flux<UserResponse> getAllUsers(int page, int size) {
         int offset = page * size;
@@ -42,7 +47,8 @@ public class UserService {
 
     public Flux<UserResponse> searchUsers(String search, int page, int size) {
         int offset = page * size;
-        return userRepository.searchUsers(search, size, offset)
+        String sanitized = DigestUtils.escapeLikePattern(search);
+        return userRepository.searchUsers(sanitized, size, offset)
                 .map(UserResponse::fromEntity);
     }
 
@@ -51,7 +57,8 @@ public class UserService {
     }
 
     public Mono<Long> countSearchUsers(String search) {
-        return userRepository.countSearch(search);
+        String sanitized = DigestUtils.escapeLikePattern(search);
+        return userRepository.countSearch(sanitized);
     }
 
     public Mono<UserResponse> getUserById(Long id) {
@@ -387,10 +394,14 @@ public class UserService {
                             });
                 })
                 .map(UserResponse::fromEntity)
-                .doOnSuccess(resp -> emailService.sendAccountDeactivated(resp.getEmail(), resp.getName())
+                // F-046: Evict deactivated user from JWT auth cache for immediate lockout
+                .doOnSuccess(resp -> {
+                    jwtAuthenticationFilter.evictUserFromCache(resp.getEmail());
+                    emailService.sendAccountDeactivated(resp.getEmail(), resp.getName())
                         .subscribe(
                                 unused -> {},
                                 err -> log.warn("Failed to send account deactivation email to {}: {}", resp.getEmail(), err.getMessage())
-                        ));
+                        );
+                });
     }
 }

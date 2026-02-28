@@ -17,7 +17,6 @@ import java.util.UUID;
 
 @Service
 @Slf4j
-// TODO F-170: Add spam scoring (e.g., Akismet, keyword-based) for contact form submissions
 public class ContactService {
 
     private final ContactRepository contactRepository;
@@ -41,7 +40,37 @@ public class ContactService {
         this.notificationEmail = notificationEmail;
     }
 
+    private static final java.util.regex.Pattern URL_PATTERN = java.util.regex.Pattern.compile("https?://", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.Set<String> SUSPICIOUS_KEYWORDS = java.util.Set.of(
+            "buy now", "click here", "free money", "casino", "viagra", "lottery",
+            "earn money", "make money fast", "act now", "limited offer", "winner");
+
+    private int calculateSpamScore(String message) {
+        if (message == null || message.isBlank()) return 0;
+        int score = 0;
+        String lower = message.toLowerCase();
+        // Links count (10 points each)
+        long linkCount = URL_PATTERN.matcher(message).results().count();
+        score += (int) (linkCount * 10);
+        // Suspicious keywords (15 points each)
+        for (String keyword : SUSPICIOUS_KEYWORDS) {
+            if (lower.contains(keyword)) score += 15;
+        }
+        // Very short message (<10 chars) = suspicious
+        if (message.length() < 10) score += 20;
+        // Very long message (>5000 chars)
+        if (message.length() > 5000) score += 20;
+        return Math.min(score, 100);
+    }
+
     public Mono<ContactResponse> saveContact(ContactRequest request) {
+        // F-170: Spam scoring
+        int spamScore = calculateSpamScore(request.getMessage());
+        if (spamScore > 70) {
+            log.warn("Contact form submission rejected with spam score {}: {}", spamScore, request.getEmail());
+            return Mono.error(new IllegalArgumentException("Message rejected: detected as spam"));
+        }
+
         // F-169: Enforce field length limits to prevent abuse
         String name = htmlSanitizerService.stripHtml(request.getName());
         if (name.length() > 200) name = name.substring(0, 200);

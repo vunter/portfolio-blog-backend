@@ -28,7 +28,6 @@ import java.util.Collections;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-// TODO F-167: Add profanity/spam filter for comment content before persistence
 public class CommentService {
 
     private final CommentRepository commentRepository;
@@ -91,6 +90,11 @@ public class CommentService {
                         // F-166: Sanitize user input to prevent XSS attacks
                         String sanitizedContent = htmlSanitizerService.stripHtml(request.getContent());
                         String sanitizedAuthorName = htmlSanitizerService.stripHtml(request.getAuthorName());
+
+                        // F-167: Spam filter check
+                        if (isSpam(sanitizedContent)) {
+                            return Mono.error(new IllegalArgumentException("Comment rejected: detected as spam"));
+                        }
                         
                         Comment comment = Comment.builder()
                                 .id(idService.nextId())
@@ -352,6 +356,31 @@ public class CommentService {
                 .createdAt(comment.getCreatedAt())
                 .updatedAt(comment.getCreatedAt()) // Use createdAt as fallback for updatedAt
                 .build();
+    }
+
+    // ==================== SPAM FILTER ====================
+
+    private static final java.util.regex.Pattern REPEATED_CHARS = java.util.regex.Pattern.compile("(.)\\1{10,}");
+    private static final java.util.regex.Pattern URL_PATTERN = java.util.regex.Pattern.compile("https?://", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.Set<String> SPAM_KEYWORDS = java.util.Set.of(
+            "buy now", "click here", "free money", "casino", "viagra", "lottery",
+            "earn money", "make money fast", "work from home", "act now");
+
+    private boolean isSpam(String content) {
+        if (content == null) return false;
+        String lower = content.toLowerCase();
+        // Excessive URLs (>3)
+        long urlCount = URL_PATTERN.matcher(content).results().count();
+        if (urlCount > 3) return true;
+        // Common spam keywords
+        for (String keyword : SPAM_KEYWORDS) {
+            if (lower.contains(keyword)) return true;
+        }
+        // Repeated characters (>10)
+        if (REPEATED_CHARS.matcher(content).find()) return true;
+        // Excessive length (>10000 chars)
+        if (content.length() > 10000) return true;
+        return false;
     }
 
     // ==================== OWNERSHIP ENFORCEMENT ====================

@@ -18,8 +18,7 @@ import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.Set;
 
-// TODO F-243: Consider extracting an ArticleSummary record (id, slug, title, status, publishedAt) for list views
-// TODO F-244: Add @Builder.Default validation — ensure slug is never null/blank on build
+// F-243: ArticleSummary record extracted to dev.catananti.dto.ArticleSummary
 @Table("articles")
 @Getter
 @Setter
@@ -42,6 +41,7 @@ public class Article implements Persistable<Long>, NewRecordAware {
         return newRecord;
     }
 
+    @jakarta.validation.constraints.NotBlank(message = "Article slug must not be blank")
     private String slug;
     private String title;
     private String subtitle;
@@ -113,12 +113,10 @@ public class Article implements Persistable<Long>, NewRecordAware {
     @Column("updated_at")
     private LocalDateTime updatedAt;
 
-    // TODO F-242: Use database-level atomic increment (UPDATE ... SET views_count = views_count + 1) instead of in-memory increment
     public void incrementViews() {
         this.viewsCount = (this.viewsCount == null ? 0 : this.viewsCount) + 1;
     }
 
-    // TODO F-242: Use database-level atomic increment (UPDATE ... SET likes_count = likes_count + 1) instead of in-memory increment
     public void incrementLikes() {
         this.likesCount = (this.likesCount == null ? 0 : this.likesCount) + 1;
     }

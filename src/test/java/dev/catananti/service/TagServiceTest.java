@@ -15,11 +15,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.r2dbc.core.DatabaseClient;
+import org.springframework.r2dbc.core.FetchSpec;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -30,6 +33,8 @@ class TagServiceTest {
 
     @Mock private TagRepository tagRepository;
     @Mock private IdService idService;
+    @Mock private DatabaseClient databaseClient;
+    @Mock private DatabaseClient.GenericExecuteSpec executeSpec;
 
     @InjectMocks
     private TagService tagService;
@@ -58,6 +63,17 @@ class TagServiceTest {
                 .build();
     }
 
+    @SuppressWarnings("unchecked")
+    private void stubBatchArticleCounts(Map<Long, Long> counts) {
+        FetchSpec<Map<String, Object>> fetchSpec = mock(FetchSpec.class);
+        when(databaseClient.sql(anyString())).thenReturn(executeSpec);
+        when(executeSpec.bind(eq("ids"), any(Long[].class))).thenReturn(executeSpec);
+        when(executeSpec.map(any(java.util.function.BiFunction.class))).thenReturn(fetchSpec);
+        Flux<Map.Entry<Long, Integer>> entries = Flux.fromIterable(counts.entrySet())
+                .map(e -> Map.entry(e.getKey(), e.getValue().intValue()));
+        when(fetchSpec.all()).thenReturn((Flux) entries);
+    }
+
     @Nested
     @DisplayName("getAllTags")
     class GetAllTags {
@@ -66,8 +82,7 @@ class TagServiceTest {
         @DisplayName("Should return all tags with article counts")
         void shouldReturnAllTags() {
             when(tagRepository.findAll()).thenReturn(Flux.just(javaTag, springTag));
-            when(tagRepository.countPublishedArticlesByTagId(101L)).thenReturn(Mono.just(15L));
-            when(tagRepository.countPublishedArticlesByTagId(102L)).thenReturn(Mono.just(8L));
+            stubBatchArticleCounts(Map.of(101L, 15L, 102L, 8L));
 
             StepVerifier.create(tagService.getAllTags("en").collectList())
                     .assertNext(tags -> {
@@ -102,7 +117,7 @@ class TagServiceTest {
                     .build();
 
             when(tagRepository.findAll()).thenReturn(Flux.just(tutorialTag));
-            when(tagRepository.countPublishedArticlesByTagId(103L)).thenReturn(Mono.just(5L));
+            stubBatchArticleCounts(Map.of(103L, 5L));
 
             StepVerifier.create(tagService.getAllTags("es").collectList())
                     .assertNext(tags -> {

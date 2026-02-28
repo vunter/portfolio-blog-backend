@@ -11,7 +11,6 @@ import java.time.LocalDateTime;
 
 /**
  * Repository for password reset tokens.
- * TODO F-254: Verify DB has index on 'token' column for O(1) lookup in findByToken queries
  */
 @Repository
 public interface PasswordResetTokenRepository extends ReactiveCrudRepository<PasswordResetToken, Long> {

@@ -16,7 +16,10 @@ public class UserResponse {
 
     private String id;
     private String name;
+    private String username;
     private String email;
+    private String avatarUrl;
+    private String bio;
     private String role;
     private Boolean active;
     private LocalDateTime createdAt;
@@ -26,7 +29,10 @@ public class UserResponse {
         return UserResponse.builder()
                 .id(String.valueOf(user.getId()))
                 .name(user.getName())
+                .username(user.getUsername())
                 .email(user.getEmail())
+                .avatarUrl(user.getAvatarUrl())
+                .bio(user.getBio())
                 .role(user.getRole())
                 .active(user.getActive())
                 .createdAt(user.getCreatedAt())

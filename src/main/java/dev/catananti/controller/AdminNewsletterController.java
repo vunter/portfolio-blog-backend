@@ -27,7 +27,6 @@ import java.util.Map;
 @Validated
 @Tag(name = "Admin - Newsletter", description = "Newsletter subscriber management")
 @SecurityRequirement(name = "Bearer Authentication")
-// TODO F-131: Add confirmation step before batch operations (delete all, send to all)
 @Slf4j
 public class AdminNewsletterController {
 
@@ -60,18 +59,27 @@ public class AdminNewsletterController {
     }
 
     @PostMapping("/subscribers/delete-batch")
-    @Operation(summary = "Batch delete subscribers", description = "Remove multiple subscribers by IDs (max 1000)")
-    public Mono<Map<String, Object>> deleteBatch(@RequestBody Map<String, List<Long>> request) {
+    @Operation(summary = "Batch delete subscribers", description = "Remove multiple subscribers by IDs (max 1000). Set confirmed=true to execute; omit for a dry-run preview.")
+    public Mono<Map<String, Object>> deleteBatch(
+            @RequestBody Map<String, List<Long>> request,
+            @RequestParam(defaultValue = "false") boolean confirmed) {
         List<Long> ids = request.getOrDefault("ids", List.of());
-        log.info("Batch deleting subscribers: count={}", ids.size());
+        log.info("Batch delete request: count={}, confirmed={}", ids.size(), confirmed);
         if (ids.size() > 1000) {
             return Mono.just(Map.of("message", "Too many IDs. Maximum is 1000.", "count", (Object) 0));
         }
+        if (!confirmed) {
+            return Mono.just(Map.of(
+                    "message", "Confirmation required. Resend with confirmed=true to execute.",
+                    "action", "delete-batch",
+                    "affectedCount", (Object) ids.size(),
+                    "confirmed", false));
+        }
         return newsletterService.deleteSubscribersBatch(ids)
-                .map(count -> Map.of("message", "Subscribers deleted", "count", (Object) count));
+                .map(count -> Map.of("message", "Subscribers deleted", "count", (Object) count, "confirmed", (Object) true));
     }
 
-    @GetMapping(value = "/export", produces = MediaType.TEXT_PLAIN_VALUE)
+    @GetMapping("/export")
     @Operation(summary = "Export subscribers as CSV", description = "Export all confirmed subscribers as CSV")
     public Mono<String> exportSubscribers() {
         log.info("Exporting subscribers as CSV");

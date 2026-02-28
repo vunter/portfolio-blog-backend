@@ -106,7 +106,8 @@ public class ArticleController {
 
     @GetMapping("/tag/{tagSlug}")
     @Operation(summary = "Get articles by tag", description = "Get published articles with a specific tag")
-    // TODO F-068: Accept tags as a typed List<String> instead of comma-separated string for cleaner API contract
+    // F-068: Multi-tag filtering is supported via the /api/v1/search endpoint (SearchRequest.tags).
+    // Single-tag filtering uses a clean RESTful path variable pattern.
     public Mono<PageResponse<ArticleResponse>> getArticlesByTag(
             @PathVariable @Size(min = 1, max = 100) @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String tagSlug,
             @RequestParam(defaultValue = "0") @Min(0) int page,

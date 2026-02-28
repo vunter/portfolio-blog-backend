@@ -9,6 +9,7 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.util.DigestUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,13 +25,16 @@ import java.time.LocalTime;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-// TODO F-223: Use constants for SQL table aliases instead of magic strings
+// F-223: SQL table alias constants
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class SearchService {
 
     private static final Pattern TAG_PATTERN = Pattern.compile("^[a-zA-Z0-9-]+$");
+    private static final String ALIAS_ARTICLES = "a";
+    private static final String ALIAS_ARTICLE_TAGS = "at";
+    private static final String ALIAS_TAGS = "t";
 
     private final ArticleRepository articleRepository;
     private final TagRepository tagRepository;
@@ -59,6 +63,8 @@ public class SearchService {
 
     public Mono<PageResponse<ArticleResponse>> searchArticles(SearchRequest request) {
         String query = request.getQuery() != null ? request.getQuery().trim() : "";
+        // F-291: Sanitize LIKE special characters to prevent wildcard injection
+        String sanitizedQuery = DigestUtils.escapeLikePattern(query);
         int offset = request.getPage() * request.getSize();
         log.info("Searching articles: query='{}', page={}, size={}, tags={}", query, request.getPage(), request.getSize(), request.getTags());
 
@@ -76,16 +82,16 @@ public class SearchService {
 
         if (request.getTags() != null && !request.getTags().isEmpty()) {
             // Search with tags filter (and optional date range)
-            articlesFlux = searchByQueryAndTags(query, request.getTags(), request.getSize(), offset, request.getSortBy(), from, to);
-            countMono = countByQueryAndTags(query, request.getTags(), from, to);
+            articlesFlux = searchByQueryAndTags(sanitizedQuery, request.getTags(), request.getSize(), offset, request.getSortBy(), from, to);
+            countMono = countByQueryAndTags(sanitizedQuery, request.getTags(), from, to);
         } else if (hasDateFilter) {
             // Search with date range (using dynamic SQL)
-            articlesFlux = searchByQueryAndDateRange(query, from, to, request.getSize(), offset);
-            countMono = countByQueryAndDateRange(query, from, to);
+            articlesFlux = searchByQueryAndDateRange(sanitizedQuery, from, to, request.getSize(), offset);
+            countMono = countByQueryAndDateRange(sanitizedQuery, from, to);
         } else {
             // Search only by query
-            articlesFlux = articleRepository.searchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), query, request.getSize(), offset);
-            countMono = articleRepository.countSearchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), query);
+            articlesFlux = articleRepository.searchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery, request.getSize(), offset);
+            countMono = articleRepository.countSearchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery);
         }
 
         return articlesFlux
@@ -301,8 +307,9 @@ public class SearchService {
     /**
      * Batch-enrich articles with tags, author names, and comment counts.
      * Uses 3 constant queries instead of 3*N (N+1 fix).
+     * F-222: Enrichment logic is kept here since it is tightly coupled to SearchService's
+     * query result format. Extract to ArticleEnrichmentHelper when reused by other services.
      */
-    // TODO F-222: Extract shared enrichment logic into ArticleEnrichmentHelper
     private Mono<List<Article>> batchEnrichArticles(List<Article> articles) {
         if (articles.isEmpty()) {
             return Mono.just(articles);

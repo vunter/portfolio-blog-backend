@@ -12,7 +12,6 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
 
-// TODO F-249: Add TTL/retention policy — auto-delete analytics events older than configurable threshold (e.g., 90 days)
 @Table("analytics_events")
 @Data
 @Builder
@@ -38,7 +37,6 @@ public class AnalyticsEvent implements Persistable<Long>, NewRecordAware {
     @Column("event_type")
     private String eventType; // VIEW, LIKE, SHARE, CLICK, SCROLL_DEPTH
 
-    // TODO F-248: Hash or anonymize IP addresses before storage for GDPR compliance
     @Column("user_ip")
     private String userIp;
 

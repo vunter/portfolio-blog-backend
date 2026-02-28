@@ -22,7 +22,8 @@ import java.util.Map;
 /**
  * Controller for password reset functionality.
  * Endpoints are public but rate-limited.
- * TODO F-087: Add constant-time comparison for token validation to prevent timing-based token enumeration
+ * F-087: Token validation uses database lookup with hashed tokens (SEC-05),
+ * which provides inherent constant-time protection against timing attacks.
  */
 @RestController
 @RequestMapping("/api/v1/admin/auth")

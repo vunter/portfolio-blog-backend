@@ -37,10 +37,10 @@ public class CspNonceFilter implements WebFilter {
         exchange.getResponse().beforeCommit(() -> {
             try {
                 // F-026: Added connect-src 'self' to restrict fetch/XHR destinations
-                // TODO F-027: Add report-uri / report-to directive to collect CSP violation reports
                 String csp = ("default-src 'self'; script-src 'self' 'nonce-%s'; style-src 'self' 'nonce-%s'; " +
-                        "connect-src 'self'; img-src 'self' data: https:; font-src 'self' https:; " +
-                        "frame-ancestors 'none'; base-uri 'self'; form-action 'self';").formatted(nonce, nonce);
+                        "connect-src 'self' https://api.github.com https://www.google.com; img-src 'self' data: https:; font-src 'self' https:; " +
+                        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; " +
+                        "report-uri /api/csp-report; report-to csp-endpoint;").formatted(nonce, nonce);
                 exchange.getResponse().getHeaders().set("Content-Security-Policy", csp);
             } catch (UnsupportedOperationException e) {
                 // Headers already read-only, skip

@@ -70,7 +70,7 @@ public class BlogMetrics {
                 .register(meterRegistry);
 
         // F-055: Pre-register counters to avoid registry lookup per call
-        commentCreatedCounter = meterRegistry.counter("blog.comments.created");
+        commentCreatedCounter = meterRegistry.counter("blog.comment.events.created");
         subscriptionNewCounter = meterRegistry.counter("blog.subscriptions.new");
         subscriptionCancelledCounter = meterRegistry.counter("blog.subscriptions.cancelled");
     }

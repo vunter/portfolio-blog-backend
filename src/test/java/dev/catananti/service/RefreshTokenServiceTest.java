@@ -28,6 +28,7 @@ class RefreshTokenServiceTest {
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private UserRepository userRepository;
     @Mock private IdService idService;
+    @Mock private AuditService auditService;
 
     @InjectMocks
     private RefreshTokenService refreshTokenService;
@@ -107,6 +108,8 @@ class RefreshTokenServiceTest {
 
             when(refreshTokenRepository.findByToken(anyString()))
                     .thenReturn(Mono.just(revoked));
+            when(auditService.logAction(anyString(), anyString(), anyString(), any(), any(), anyString()))
+                    .thenReturn(Mono.empty());
             when(refreshTokenRepository.revokeAllByUserId(1001L)).thenReturn(Mono.empty());
 
             StepVerifier.create(refreshTokenService.verifyAndRotate("reused-token"))

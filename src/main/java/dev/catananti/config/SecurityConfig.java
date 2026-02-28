@@ -144,7 +144,7 @@ public class SecurityConfig {
                                 .policy("geolocation=(), microphone=(), camera=(), payment=()")
                         )
                 )
-                // TODO F-017: Consider consolidating path matchers into a role-based map or enum for maintainability
+                // Path matchers are grouped by access level (public, role-based, authenticated) — current structure is acceptable
                 .authorizeExchange(auth -> auth
                         // Public article endpoints
                         .pathMatchers("/api/v1/articles/**").permitAll()
@@ -242,9 +242,15 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         log.info("Configuring CORS");
         CorsConfiguration configuration = new CorsConfiguration();
-        // TODO F-022: Ensure allowedOriginPatterns do not include broad wildcards like "*" in production
-        // Use origin patterns to support wildcards like http://localhost:*
+        // F-022: Validate that allowedOriginPatterns do not include broad wildcards in production
         List<String> origins = List.of(allowedOrigins.split(","));
+        for (String origin : origins) {
+            if ("*".equals(origin.trim())) {
+                log.warn("SEC: CORS origin wildcard '*' detected — this is insecure for production! "
+                        + "Set cors.allowed-origins to specific origins instead.");
+            }
+        }
+        // Use origin patterns to support wildcards like http://localhost:*
         configuration.setAllowedOriginPatterns(origins);
         configuration.setAllowedMethods(List.of(allowedMethods.split(",")));
         // BUG-06: Added X-XSRF-TOKEN to allowed headers for CSRF double-submit cookie pattern

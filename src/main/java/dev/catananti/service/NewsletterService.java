@@ -9,6 +9,7 @@ import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.repository.SubscriberRepository;
+import dev.catananti.util.DigestUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,7 +26,6 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-// TODO F-190: Add double opt-in email confirmation with token expiry for GDPR compliance
 public class NewsletterService {
 
     private final SubscriberRepository subscriberRepository;
@@ -200,16 +200,17 @@ public class NewsletterService {
 
         boolean hasStatus = status != null && !status.isEmpty();
         boolean hasEmail = email != null && !email.isBlank();
+        String sanitizedEmail = hasEmail ? DigestUtils.escapeLikePattern(email) : null;
 
         if (hasStatus && hasEmail) {
-            subscribersFlux = subscriberRepository.findByStatusAndEmailContainingPaginated(status.toUpperCase(), email, size, offset);
-            countMono = subscriberRepository.countByStatusAndEmailContaining(status.toUpperCase(), email);
+            subscribersFlux = subscriberRepository.findByStatusAndEmailContainingPaginated(status.toUpperCase(), sanitizedEmail, size, offset);
+            countMono = subscriberRepository.countByStatusAndEmailContaining(status.toUpperCase(), sanitizedEmail);
         } else if (hasStatus) {
             subscribersFlux = subscriberRepository.findByStatusPaginated(status.toUpperCase(), size, offset);
             countMono = subscriberRepository.countByStatus(status.toUpperCase());
         } else if (hasEmail) {
-            subscribersFlux = subscriberRepository.findByEmailContainingPaginated(email, size, offset);
-            countMono = subscriberRepository.countByEmailContaining(email);
+            subscribersFlux = subscriberRepository.findByEmailContainingPaginated(sanitizedEmail, size, offset);
+            countMono = subscriberRepository.countByEmailContaining(sanitizedEmail);
         } else {
             subscribersFlux = subscriberRepository.findAllPaginated(size, offset);
             countMono = subscriberRepository.count();

@@ -18,6 +18,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.ServerWebInputException;
 import dev.catananti.config.LocaleConstants;
+import org.springframework.dao.DuplicateKeyException;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
@@ -25,11 +26,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-// TODO F-300: Extract common error response builder method to reduce duplication across handlers
-// TODO F-304: Add request-id (correlation ID) to all ErrorResponse instances for traceability
 @RestControllerAdvice
 @Slf4j
 @RequiredArgsConstructor
@@ -42,18 +42,40 @@ public class GlobalExceptionHandler {
 
     private final MessageSource messageSource;
 
+    /**
+     * Build a standardized error response with correlation ID.
+     */
+    private ErrorResponse buildErrorResponse(HttpStatus status, String error, String message,
+                                              ServerWebExchange exchange) {
+        String requestId = exchange.getRequest().getHeaders().getFirst("X-Correlation-Id");
+        if (requestId == null || requestId.isBlank()) {
+            requestId = UUID.randomUUID().toString();
+        }
+        return ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(status.value())
+                .error(error)
+                .message(message)
+                .path(exchange.getRequest().getPath().value())
+                .requestId(requestId)
+                .build();
+    }
+
+    private ErrorResponse buildErrorResponse(HttpStatus status, String error, String message,
+                                              ServerWebExchange exchange,
+                                              Map<String, String> validationErrors) {
+        ErrorResponse resp = buildErrorResponse(status, error, message, exchange);
+        resp.setValidationErrors(validationErrors);
+        return resp;
+    }
+
     @ExceptionHandler(ResourceNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public Mono<ErrorResponse> handleResourceNotFound(ResourceNotFoundException ex, ServerWebExchange exchange) {
         log.warn("Resource not found: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.NOT_FOUND.value())
-                .error(msg(locale, "error.not_found"))
-                .message(msg(locale, ex.getMessage()))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.NOT_FOUND,
+                msg(locale, "error.not_found"), msg(locale, ex.getMessage()), exchange));
     }
 
     @ExceptionHandler(AccountLockedException.class)
@@ -61,13 +83,9 @@ public class GlobalExceptionHandler {
     public Mono<ErrorResponse> handleAccountLocked(AccountLockedException ex, ServerWebExchange exchange) {
         log.warn("Account locked: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.TOO_MANY_REQUESTS.value())
-                .error(msg(locale, "error.unauthorized"))
-                .message(msg(locale, "error.account_locked", ex.getRemainingMinutes()))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.TOO_MANY_REQUESTS,
+                msg(locale, "error.unauthorized"),
+                msg(locale, "error.account_locked", ex.getRemainingMinutes()), exchange));
     }
 
     @ExceptionHandler(BadCredentialsException.class)
@@ -76,14 +94,8 @@ public class GlobalExceptionHandler {
         log.warn("Authentication failed: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
         // SEC: Never expose attempt count details to the client
-        String responseMessage = msg(locale, "error.invalid_credentials");
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.UNAUTHORIZED.value())
-                .error(msg(locale, "error.unauthorized"))
-                .message(responseMessage)
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.UNAUTHORIZED,
+                msg(locale, "error.unauthorized"), msg(locale, "error.invalid_credentials"), exchange));
     }
 
     @ExceptionHandler(WebExchangeBindException.class)
@@ -98,14 +110,9 @@ public class GlobalExceptionHandler {
 
         Locale locale = resolveLocale(exchange);
         log.warn("Validation failed: {}", errors);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(msg(locale, "error.validation_failed"))
-                .message(msg(locale, "error.invalid_request_data"))
-                .path(exchange.getRequest().getPath().value())
-                .validationErrors(errors)
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
+                msg(locale, "error.validation_failed"), msg(locale, "error.invalid_request_data"),
+                exchange, errors));
     }
 
     @ExceptionHandler(dev.catananti.service.RecaptchaService.RecaptchaException.class)
@@ -114,13 +121,8 @@ public class GlobalExceptionHandler {
             dev.catananti.service.RecaptchaService.RecaptchaException ex, ServerWebExchange exchange) {
         log.warn("reCAPTCHA verification failed: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(msg(locale, "error.recaptcha_failed"))
-                .message(msg(locale, "error.recaptcha_retry"))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
+                msg(locale, "error.recaptcha_failed"), msg(locale, "error.recaptcha_retry"), exchange));
     }
 
     @ExceptionHandler(DuplicateResourceException.class)
@@ -128,13 +130,8 @@ public class GlobalExceptionHandler {
     public Mono<ErrorResponse> handleDuplicateResource(DuplicateResourceException ex, ServerWebExchange exchange) {
         log.warn("Duplicate resource: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.CONFLICT.value())
-                .error(msg(locale, "error.conflict"))
-                .message(msg(locale, ex.getMessage()))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.CONFLICT,
+                msg(locale, "error.conflict"), msg(locale, ex.getMessage()), exchange));
     }
 
     @ExceptionHandler(SecurityException.class)
@@ -142,13 +139,8 @@ public class GlobalExceptionHandler {
     public Mono<ErrorResponse> handleSecurityException(SecurityException ex, ServerWebExchange exchange) {
         log.warn("Security exception: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.UNAUTHORIZED.value())
-                .error(msg(locale, "error.unauthorized"))
-                .message(msg(locale, "error.unauthorized"))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.UNAUTHORIZED,
+                msg(locale, "error.unauthorized"), msg(locale, "error.unauthorized"), exchange));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -161,13 +153,8 @@ public class GlobalExceptionHandler {
         String safeMessage = translated.equals(ex.getMessage())
                 ? sanitizeErrorMessage(ex.getMessage(), locale)
                 : translated;
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(msg(locale, "error.bad_request"))
-                .message(safeMessage)
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
+                msg(locale, "error.bad_request"), safeMessage, exchange));
     }
 
     @ExceptionHandler(jakarta.validation.ConstraintViolationException.class)
@@ -183,20 +170,20 @@ public class GlobalExceptionHandler {
 
         Locale locale = resolveLocale(exchange);
         log.warn("Constraint violations: {}", errors);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(msg(locale, "error.validation_failed"))
-                .message(msg(locale, "error.invalid_request_params"))
-                .path(exchange.getRequest().getPath().value())
-                .validationErrors(errors)
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
+                msg(locale, "error.validation_failed"), msg(locale, "error.invalid_request_params"),
+                exchange, errors));
     }
 
     @ExceptionHandler(ResponseStatusException.class)
     public Mono<ResponseEntity<ErrorResponse>> handleResponseStatusException(
             ResponseStatusException ex, ServerWebExchange exchange) {
-        log.warn("Response status exception: {} - {}", ex.getStatusCode(), ex.getReason());
+        // 406 NOT_ACCEPTABLE is common for SSE content negotiation — don't spam logs
+        if (ex.getStatusCode().value() == 406) {
+            log.debug("Response status exception: {} - {}", ex.getStatusCode(), ex.getReason());
+        } else {
+            log.warn("Response status exception: {} - {}", ex.getStatusCode(), ex.getReason());
+        }
         Locale locale = resolveLocale(exchange);
         HttpStatusCode statusCode = ex.getStatusCode();
         HttpStatus status = HttpStatus.resolve(statusCode.value());
@@ -204,13 +191,8 @@ public class GlobalExceptionHandler {
         String errorKey = statusToKey(status);
         String reason = ex.getReason();
         String translatedMessage = reason != null ? msg(locale, reason) : msg(locale, errorKey);
-        return Mono.just(ResponseEntity.status(status).body(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(status.value())
-                .error(msg(locale, errorKey))
-                .message(translatedMessage)
-                .path(exchange.getRequest().getPath().value())
-                .build()));
+        return Mono.just(ResponseEntity.status(status).body(
+                buildErrorResponse(status, msg(locale, errorKey), translatedMessage, exchange)));
     }
 
     @ExceptionHandler(PdfGenerationException.class)
@@ -218,13 +200,8 @@ public class GlobalExceptionHandler {
     public Mono<ErrorResponse> handlePdfGenerationException(PdfGenerationException ex, ServerWebExchange exchange) {
         log.error("PDF generation failed: {}", ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .error(msg(locale, "error.internal_server_error"))
-                .message(msg(locale, "error.pdf_generation_failed"))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
+                msg(locale, "error.internal_server_error"), msg(locale, "error.pdf_generation_failed"), exchange));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
@@ -232,13 +209,8 @@ public class GlobalExceptionHandler {
     public Mono<ErrorResponse> handleAccessDeniedException(AccessDeniedException ex, ServerWebExchange exchange) {
         log.warn("Access denied: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.FORBIDDEN.value())
-                .error(msg(locale, "error.forbidden"))
-                .message("Access denied")
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.FORBIDDEN,
+                msg(locale, "error.forbidden"), "Access denied", exchange));
     }
 
     @ExceptionHandler(ServerWebInputException.class)
@@ -246,27 +218,33 @@ public class GlobalExceptionHandler {
     public Mono<ErrorResponse> handleServerWebInputException(ServerWebInputException ex, ServerWebExchange exchange) {
         log.warn("Bad request input: {}", ex.getMessage());
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(msg(locale, "error.bad_request"))
-                .message(ex.getReason() != null ? ex.getReason() : msg(locale, "error.invalid_request"))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
+                msg(locale, "error.bad_request"),
+                ex.getReason() != null ? ex.getReason() : msg(locale, "error.invalid_request"), exchange));
+    }
+
+    @ExceptionHandler(DuplicateKeyException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Mono<ErrorResponse> handleDuplicateKeyException(DuplicateKeyException ex, ServerWebExchange exchange) {
+        log.warn("Database constraint violation: {}", ex.getMessage());
+        Locale locale = resolveLocale(exchange);
+        return Mono.just(buildErrorResponse(HttpStatus.CONFLICT,
+                msg(locale, "error.duplicate_resource"), ex.getMessage(), exchange));
     }
 
     @ExceptionHandler(RuntimeException.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Mono<ErrorResponse> handleRuntimeException(RuntimeException ex, ServerWebExchange exchange) {
+        // Client disconnects (SSE stream closed) are expected, not server errors
+        if (ex.getMessage() != null && ex.getMessage().contains("Connection has been closed")) {
+            log.debug("Client disconnected: {}", ex.getMessage());
+            return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Client disconnected", ex.getMessage(), exchange));
+        }
         log.error("Runtime exception: {}", ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .error(msg(locale, "error.internal_server_error"))
-                .message(msg(locale, "error.unexpected_error"))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
+                msg(locale, "error.internal_server_error"), msg(locale, "error.unexpected_error"), exchange));
     }
 
     @ExceptionHandler(Exception.class)
@@ -274,13 +252,8 @@ public class GlobalExceptionHandler {
     public Mono<ErrorResponse> handleGenericException(Exception ex, ServerWebExchange exchange) {
         log.error("Unexpected error: ", ex);
         Locale locale = resolveLocale(exchange);
-        return Mono.just(ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .error(msg(locale, "error.internal_server_error"))
-                .message(msg(locale, "error.unexpected_error"))
-                .path(exchange.getRequest().getPath().value())
-                .build());
+        return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
+                msg(locale, "error.internal_server_error"), msg(locale, "error.unexpected_error"), exchange));
     }
 
     /**

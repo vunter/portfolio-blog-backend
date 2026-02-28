@@ -29,7 +29,6 @@ import java.util.Map;
 public class AdminArticleVersionController {
 
     private final ArticleVersionService versionService;
-    // TODO F-114: Use ArticleVersionService instead of direct repository injection
     private final UserRepository userRepository;
 
     @GetMapping

@@ -1,5 +1,7 @@
 package dev.catananti.controller;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import dev.catananti.dto.ResumeProfileRequest;
 import dev.catananti.dto.ResumeProfileResponse;
 import dev.catananti.service.PdfGenerationService;
@@ -20,12 +22,12 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
  * REST Controller for managing resume profile data (experiences, education, skills, etc.)
  * and generating HTML resumes from the stored profile.
- * TODO F-095: Add PATCH endpoint for partial profile updates instead of requiring full PUT
  */
 @RestController
 @RequestMapping("/api/v1/resume/profile")
@@ -37,6 +39,12 @@ public class ResumeProfileController {
 
     private static final Pattern NON_SLUG_CHARS = Pattern.compile("[^a-z0-9]+");
     private static final Pattern LEADING_TRAILING_HYPHENS = Pattern.compile("^-|-$");
+
+    /** F-093: Caffeine cache for email→userId to avoid DB lookup per request (TTL 5 min). */
+    private final Cache<String, Long> userIdByEmailCache = Caffeine.newBuilder()
+            .maximumSize(500)
+            .expireAfterWrite(5, TimeUnit.MINUTES)
+            .build();
 
     private final ResumeProfileService profileService;
     private final PdfGenerationService pdfGenerationService;
@@ -110,11 +118,54 @@ public class ResumeProfileController {
     }
 
     /**
+     * F-095: Partially update the authenticated user's resume profile.
+     * Only the provided fields are updated; omitted fields remain unchanged.
+     */
+    @PatchMapping
+    public Mono<ResponseEntity<ResumeProfileResponse>> patchProfile(
+            Authentication authentication,
+            @RequestBody java.util.Map<String, Object> updates,
+            @RequestParam(defaultValue = "en") @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2})?$", message = "Invalid locale format") String locale) {
+        return extractUserId(authentication)
+                .flatMap(userId -> profileService.getProfileByOwnerId(userId, locale)
+                        .switchIfEmpty(Mono.just(ResumeProfileResponse.builder()
+                                .locale(locale)
+                                .educations(java.util.List.of())
+                                .experiences(java.util.List.of())
+                                .skills(java.util.List.of())
+                                .languages(java.util.List.of())
+                                .certifications(java.util.List.of())
+                                .additionalInfo(java.util.List.of())
+                                .testimonials(java.util.List.of())
+                                .proficiencies(java.util.List.of())
+                                .projects(java.util.List.of())
+                                .learningTopics(java.util.List.of())
+                                .build()))
+                        .flatMap(existing -> {
+                            // Merge provided fields into existing profile request
+                            ResumeProfileRequest merged = ResumeProfileRequest.builder()
+                                    .fullName(updates.containsKey("fullName") ? String.valueOf(updates.get("fullName")) : existing.getFullName())
+                                    .title(updates.containsKey("title") ? String.valueOf(updates.get("title")) : existing.getTitle())
+                                    .email(updates.containsKey("email") ? String.valueOf(updates.get("email")) : existing.getEmail())
+                                    .phone(updates.containsKey("phone") ? String.valueOf(updates.get("phone")) : existing.getPhone())
+                                    .linkedin(updates.containsKey("linkedin") ? String.valueOf(updates.get("linkedin")) : existing.getLinkedin())
+                                    .github(updates.containsKey("github") ? String.valueOf(updates.get("github")) : existing.getGithub())
+                                    .website(updates.containsKey("website") ? String.valueOf(updates.get("website")) : existing.getWebsite())
+                                    .location(updates.containsKey("location") ? String.valueOf(updates.get("location")) : existing.getLocation())
+                                    .professionalSummary(updates.containsKey("professionalSummary") ? String.valueOf(updates.get("professionalSummary")) : existing.getProfessionalSummary())
+                                    .build();
+                            return profileService.saveProfile(userId, merged, locale);
+                        }))
+                .doOnSuccess(profile -> publicResumeService.clearPdfCache(null))
+                .map(ResponseEntity::ok);
+    }
+
+    /**
      * Generate an HTML resume from the user's stored profile data,
      * following the standard resume template structure.
      * @param locale language/locale for section headers ("en" or "pt"). Defaults to "en".
      */
-    @GetMapping(value = "/generate-html", produces = "text/html;charset=UTF-8")
+    @GetMapping("/generate-html")
     public Mono<ResponseEntity<String>> generateHtml(
             Authentication authentication,
             @RequestParam(defaultValue = "en") @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2})?$", message = "Invalid locale format") String locale) {
@@ -129,7 +180,7 @@ public class ResumeProfileController {
      * Generate an HTML resume and return it as a downloadable file.
      * @param locale language/locale for the resume (e.g., "en", "pt", "pt-br"). Defaults to "en".
      */
-    @GetMapping(value = "/download-html", produces = "text/html;charset=UTF-8")
+    @GetMapping("/download-html")
     public Mono<ResponseEntity<String>> downloadHtml(
             Authentication authentication,
             @RequestParam(defaultValue = "en") @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2})?$", message = "Invalid locale format") String locale) {
@@ -150,7 +201,7 @@ public class ResumeProfileController {
      * Generate a PDF resume from the user's stored profile data and return it as a downloadable file.
      * @param locale language/locale for the resume (e.g., "en", "pt", "pt-br"). Defaults to "en".
      */
-    @GetMapping(value = "/download-pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    @GetMapping("/download-pdf")
     public Mono<ResponseEntity<byte[]>> downloadPdf(
             Authentication authentication,
             @RequestParam(defaultValue = "en") @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2})?$", message = "Invalid locale format") String locale) {
@@ -221,13 +272,20 @@ public class ResumeProfileController {
         return "resume-" + safeName + localeSuffix + "." + extension;
     }
 
-    // TODO F-093: Cache userId by email in Caffeine to avoid DB lookup per request
     private Mono<Long> extractUserId(Authentication authentication) {
         if (authentication == null) {
             return Mono.error(new IllegalStateException("User not authenticated"));
         }
         String email = authentication.getName();
+        Long cached = userIdByEmailCache.getIfPresent(email);
+        if (cached != null) {
+            return Mono.just(cached);
+        }
         return userService.getUserByEmail(email)
-                .map(user -> Long.valueOf(user.getId()));
+                .map(user -> {
+                    Long userId = Long.valueOf(user.getId());
+                    userIdByEmailCache.put(email, userId);
+                    return userId;
+                });
     }
 }

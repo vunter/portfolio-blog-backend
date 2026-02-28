@@ -5,13 +5,15 @@ import dev.catananti.entity.ArticleI18n;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ArticleI18nRepository;
 import dev.catananti.repository.ArticleRepository;
-import lombok.RequiredArgsConstructor;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,16 +24,28 @@ import java.util.List;
  * Translatable fields: title, subtitle, content, excerpt, seoTitle, seoDescription, seoKeywords.
  * Uses batch translation for efficiency (single API call for all fields).
  * </p>
- * TODO F-187: Add translation caching to avoid re-translating unchanged content
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class ArticleTranslationService {
 
     private final ArticleRepository articleRepository;
     private final ArticleI18nRepository articleI18nRepository;
     private final TranslationService translationService;
+
+    private final Cache<String, ArticleI18n> translationCache;
+
+    public ArticleTranslationService(ArticleRepository articleRepository,
+                                      ArticleI18nRepository articleI18nRepository,
+                                      TranslationService translationService) {
+        this.articleRepository = articleRepository;
+        this.articleI18nRepository = articleI18nRepository;
+        this.translationService = translationService;
+        this.translationCache = Caffeine.newBuilder()
+                .maximumSize(500)
+                .expireAfterWrite(Duration.ofHours(1))
+                .build();
+    }
 
     /**
      * Check if translation service is available.
@@ -85,9 +99,16 @@ public class ArticleTranslationService {
 
     /**
      * Get a specific translation for an article.
+     * Uses Caffeine cache with key=articleId+locale, TTL=1 hour.
      */
     public Mono<ArticleI18n> getTranslation(Long articleId, String locale) {
-        return articleI18nRepository.findByArticleIdAndLocale(articleId, locale);
+        String cacheKey = articleId + ":" + locale;
+        ArticleI18n cached = translationCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            return Mono.just(cached);
+        }
+        return articleI18nRepository.findByArticleIdAndLocale(articleId, locale)
+                .doOnNext(i18n -> translationCache.put(cacheKey, i18n));
     }
 
     /**
@@ -107,34 +128,47 @@ public class ArticleTranslationService {
     /**
      * Apply a translation overlay on top of an article's base fields.
      * If no translation exists for the given locale, returns the original article unchanged.
+     * Uses Caffeine cache for performance.
      */
     public Mono<Article> applyTranslation(Article article, String locale) {
         if (locale == null || locale.isBlank() || locale.equalsIgnoreCase("en")) {
             return Mono.just(article);
         }
 
+        String cacheKey = article.getId() + ":" + locale.toLowerCase();
+        ArticleI18n cached = translationCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            applyI18nToArticle(article, cached);
+            return Mono.just(article);
+        }
+
         return articleI18nRepository.findByArticleIdAndLocale(article.getId(), locale.toLowerCase())
+                .doOnNext(i18n -> translationCache.put(cacheKey, i18n))
                 .map(i18n -> {
-                    article.setTitle(i18n.getTitle());
-                    if (i18n.getSubtitle() != null && !i18n.getSubtitle().isBlank()) {
-                        article.setSubtitle(i18n.getSubtitle());
-                    }
-                    article.setContent(i18n.getContent());
-                    if (i18n.getExcerpt() != null && !i18n.getExcerpt().isBlank()) {
-                        article.setExcerpt(i18n.getExcerpt());
-                    }
-                    if (i18n.getSeoTitle() != null && !i18n.getSeoTitle().isBlank()) {
-                        article.setSeoTitle(i18n.getSeoTitle());
-                    }
-                    if (i18n.getSeoDescription() != null && !i18n.getSeoDescription().isBlank()) {
-                        article.setSeoDescription(i18n.getSeoDescription());
-                    }
-                    if (i18n.getSeoKeywords() != null && !i18n.getSeoKeywords().isBlank()) {
-                        article.setSeoKeywords(i18n.getSeoKeywords());
-                    }
+                    applyI18nToArticle(article, i18n);
                     return article;
                 })
                 .defaultIfEmpty(article);
+    }
+
+    private void applyI18nToArticle(Article article, ArticleI18n i18n) {
+        article.setTitle(i18n.getTitle());
+        if (i18n.getSubtitle() != null && !i18n.getSubtitle().isBlank()) {
+            article.setSubtitle(i18n.getSubtitle());
+        }
+        article.setContent(i18n.getContent());
+        if (i18n.getExcerpt() != null && !i18n.getExcerpt().isBlank()) {
+            article.setExcerpt(i18n.getExcerpt());
+        }
+        if (i18n.getSeoTitle() != null && !i18n.getSeoTitle().isBlank()) {
+            article.setSeoTitle(i18n.getSeoTitle());
+        }
+        if (i18n.getSeoDescription() != null && !i18n.getSeoDescription().isBlank()) {
+            article.setSeoDescription(i18n.getSeoDescription());
+        }
+        if (i18n.getSeoKeywords() != null && !i18n.getSeoKeywords().isBlank()) {
+            article.setSeoKeywords(i18n.getSeoKeywords());
+        }
     }
 
     private ArticleI18n buildI18n(Long articleId, String locale, List<String> translated, boolean autoTranslated) {

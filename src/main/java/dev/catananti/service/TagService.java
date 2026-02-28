@@ -1,5 +1,6 @@
 package dev.catananti.service;
 
+import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.TagRequest;
 import dev.catananti.dto.TagResponse;
 import dev.catananti.entity.LocalizedText;
@@ -9,18 +10,20 @@ import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.TagRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
-// TODO F-232: Add tag merge/alias functionality for consolidating similar tags
 public class TagService {
 
     private static final Pattern DIACRITICALS = Pattern.compile("[\\p{InCombiningDiacriticalMarks}]");
@@ -29,10 +32,43 @@ public class TagService {
 
     private final TagRepository tagRepository;
     private final IdService idService;
+    private final DatabaseClient databaseClient;
 
     public Flux<TagResponse> getAllTags(String locale) {
         return tagRepository.findAll()
-                .flatMap(tag -> toResponseWithCount(tag, locale));
+                .collectList()
+                .flatMapMany(tags -> {
+                    if (tags.isEmpty()) {
+                        return Flux.empty();
+                    }
+                    List<Long> tagIds = tags.stream().map(Tag::getId).toList();
+                    return batchFetchArticleCounts(tagIds)
+                            .flatMapMany(countMap -> Flux.fromIterable(tags)
+                                    .map(tag -> buildTagResponse(tag, locale,
+                                            countMap.getOrDefault(tag.getId(), 0))));
+                });
+    }
+
+    public Mono<PageResponse<TagResponse>> getAllTagsPaginated(String locale, int page, int size) {
+        int offset = page * size;
+        return tagRepository.findAllPaginated(size, offset)
+                .collectList()
+                .flatMap(tags -> {
+                    if (tags.isEmpty()) {
+                        return tagRepository.countAll()
+                                .map(total -> PageResponse.of(List.of(), page, size, total));
+                    }
+                    List<Long> tagIds = tags.stream().map(Tag::getId).toList();
+                    return batchFetchArticleCounts(tagIds)
+                            .flatMap(countMap -> {
+                                List<TagResponse> responses = tags.stream()
+                                        .map(tag -> buildTagResponse(tag, locale,
+                                                countMap.getOrDefault(tag.getId(), 0)))
+                                        .toList();
+                                return tagRepository.countAll()
+                                        .map(total -> PageResponse.of(responses, page, size, total));
+                            });
+                });
     }
 
     public Mono<TagResponse> getTagBySlug(String slug, String locale) {
@@ -112,7 +148,6 @@ public class TagService {
                 .then(); // Idempotent: if tag not found, complete silently
     }
 
-    // TODO F-227: Use LEFT JOIN with COUNT instead of N+1 count queries per tag
     private Mono<TagResponse> toResponseWithCount(Tag tag, String locale) {
         return tagRepository.countPublishedArticlesByTagId(tag.getId())
                 .defaultIfEmpty(0L)
@@ -153,6 +188,39 @@ public class TagService {
     }
 
     /**
+     * F-232: Merge source tag into target tag.
+     * Reassigns all articles from source tag to target tag, then deletes the source tag.
+     */
+    @Transactional
+    public Mono<TagResponse> mergeTags(Long sourceTagId, Long targetTagId) {
+        if (sourceTagId.equals(targetTagId)) {
+            return Mono.error(new IllegalArgumentException("Source and target tags must be different"));
+        }
+        return Mono.zip(
+                tagRepository.findById(sourceTagId)
+                        .switchIfEmpty(Mono.error(new ResourceNotFoundException("Tag", "id", sourceTagId))),
+                tagRepository.findById(targetTagId)
+                        .switchIfEmpty(Mono.error(new ResourceNotFoundException("Tag", "id", targetTagId)))
+        ).flatMap(tuple -> {
+            Tag source = tuple.getT1();
+            Tag target = tuple.getT2();
+            // Reassign articles: update article_tags rows from source to target, skip duplicates
+            return databaseClient.sql(
+                    "UPDATE article_tags SET tag_id = :targetId WHERE tag_id = :sourceId " +
+                    "AND article_id NOT IN (SELECT article_id FROM article_tags WHERE tag_id = :targetId)")
+                    .bind("targetId", targetTagId)
+                    .bind("sourceId", sourceTagId)
+                    .fetch().rowsUpdated()
+                    .then(databaseClient.sql("DELETE FROM article_tags WHERE tag_id = :sourceId")
+                            .bind("sourceId", sourceTagId)
+                            .fetch().rowsUpdated())
+                    .then(tagRepository.deleteById(sourceTagId))
+                    .then(toResponseWithCount(target, null))
+                    .doOnSuccess(t -> log.info("Merged tag {} into {} (slug={})", source.getSlug(), target.getSlug(), target.getSlug()));
+        });
+    }
+
+    /**
      * MIN-07: Service-layer access for feed controllers (Sitemap).
      * Returns raw Tag entities.
      */
@@ -165,6 +233,32 @@ public class TagService {
      */
     public Flux<TagResponse> getTagsByAuthorId(Long authorId, String locale) {
         return tagRepository.findByAuthorId(authorId)
-                .flatMap(tag -> toResponseWithCount(tag, locale));
+                .collectList()
+                .flatMapMany(tags -> {
+                    if (tags.isEmpty()) {
+                        return Flux.empty();
+                    }
+                    List<Long> tagIds = tags.stream().map(Tag::getId).toList();
+                    return batchFetchArticleCounts(tagIds)
+                            .flatMapMany(countMap -> Flux.fromIterable(tags)
+                                    .map(tag -> buildTagResponse(tag, locale,
+                                            countMap.getOrDefault(tag.getId(), 0))));
+                });
+    }
+
+    /**
+     * Batch-fetch published article counts for a list of tag IDs in a single query.
+     */
+    private Mono<Map<Long, Integer>> batchFetchArticleCounts(List<Long> tagIds) {
+        return databaseClient.sql(
+                "SELECT at.tag_id, COUNT(*) as cnt FROM article_tags at " +
+                "JOIN articles a ON a.id = at.article_id " +
+                "WHERE a.status = 'PUBLISHED' AND at.tag_id = ANY(:ids) GROUP BY at.tag_id")
+                .bind("ids", tagIds.toArray(new Long[0]))
+                .map((row, meta) -> Map.entry(
+                        row.get("tag_id", Long.class),
+                        row.get("cnt", Long.class).intValue()))
+                .all()
+                .collectMap(Map.Entry::getKey, Map.Entry::getValue);
     }
 }

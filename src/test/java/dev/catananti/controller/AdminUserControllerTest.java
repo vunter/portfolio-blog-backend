@@ -443,15 +443,24 @@ class AdminUserControllerTest {
     class DeleteUser {
 
         @Test
-        @DisplayName("Should delete user and return success message")
+        @DisplayName("Should soft-delete (deactivate) user and return user response")
         void shouldDeleteUser() {
-            when(userService.deleteUserSafe(devId, "admin@catananti.dev"))
-                    .thenReturn(Mono.empty());
+            UserResponse deactivated = UserResponse.builder()
+                    .id(String.valueOf(devId))
+                    .name("Dev User")
+                    .email("dev@catananti.dev")
+                    .role("DEV")
+                    .active(false)
+                    .build();
+
+            when(userService.deactivateUser(devId, "admin@catananti.dev"))
+                    .thenReturn(Mono.just(deactivated));
 
             StepVerifier.create(controller.deleteUser(devId, adminAuth))
                     .assertNext(response -> {
-                        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
-                        assertThat(response.getBody()).isNull();
+                        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+                        assertThat(response.getBody()).isNotNull();
+                        assertThat(response.getBody().getActive()).isFalse();
                     })
                     .verifyComplete();
         }

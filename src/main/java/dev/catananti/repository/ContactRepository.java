@@ -6,11 +6,11 @@ import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-// TODO F-290: Add pagination default — findAllByOrderByCreatedAtDesc returns unbounded results
 public interface ContactRepository extends ReactiveCrudRepository<Contact, Long> {
 
     Mono<Contact> findByPublicId(String publicId);
 
+    @Query("SELECT * FROM contacts ORDER BY created_at DESC LIMIT 100")
     Flux<Contact> findAllByOrderByCreatedAtDesc();
 
     Flux<Contact> findByReadFalseOrderByCreatedAtDesc();

@@ -52,8 +52,9 @@ public class PublicResumeController {
         @ApiResponse(responseCode = "200", description = "PDF downloaded successfully"),
         @ApiResponse(responseCode = "404", description = "Resume not found for this alias")
     })
-    // TODO F-089: Add server-side rate limiting for PDF generation (nginx zone or Spring RateLimiter)
-    @GetMapping(value = "/{alias}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    // F-089: PDF generation is covered by the global RateLimitingFilter (F-025 sliding window).
+    // Anonymous requests are limited to rate-limit.anonymous (default 30 req/min).
+    @GetMapping("/{alias}/pdf")
     public Mono<ResponseEntity<byte[]>> downloadResumePdf(
             @Parameter(description = "Person alias (e.g., leonardo-catananti)") 
             @PathVariable @Size(max = 100) @jakarta.validation.constraints.Pattern(regexp = "^[a-zA-Z0-9\\-_]+$", message = "Invalid alias format") String alias,
@@ -80,7 +81,7 @@ public class PublicResumeController {
 
     @Operation(summary = "Preview resume PDF in browser",
                description = "View a public resume PDF inline in the browser")
-    @GetMapping(value = "/{alias}/preview", produces = MediaType.APPLICATION_PDF_VALUE)
+    @GetMapping("/{alias}/preview")
     public Mono<ResponseEntity<byte[]>> previewResumePdf(
             @PathVariable @Size(max = 100) @jakarta.validation.constraints.Pattern(regexp = "^[a-zA-Z0-9\\-_]+$", message = "Invalid alias format") String alias,
             @RequestParam(defaultValue = "en") @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2})?$", message = "Invalid language format") String lang) {
@@ -94,7 +95,7 @@ public class PublicResumeController {
 
     @Operation(summary = "Get resume HTML by alias",
                description = "Get the raw HTML content of a public resume")
-    @GetMapping(value = "/{alias}/html", produces = MediaType.TEXT_HTML_VALUE)
+    @GetMapping("/{alias}/html")
     public Mono<ResponseEntity<String>> getResumeHtml(
             @PathVariable @Size(max = 100) @jakarta.validation.constraints.Pattern(regexp = "^[a-zA-Z0-9\\-_]+$", message = "Invalid alias format") String alias,
             @RequestParam(defaultValue = "en") @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2})?$", message = "Invalid language format") String lang) {

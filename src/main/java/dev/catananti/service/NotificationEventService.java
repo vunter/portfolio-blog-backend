@@ -16,9 +16,8 @@ import java.util.Map;
 @Slf4j
 public class NotificationEventService {
 
-    // F-192: Buffer size is bounded to prevent unbounded memory growth
-    // TODO F-192: Consider adding overflow strategy (e.g., DROP_OLDEST) for sustained high-throughput scenarios
-    private final Sinks.Many<NotificationEvent> sink = Sinks.many().multicast().onBackpressureBuffer(256);
+    // Buffer size is bounded; oldest events are dropped on overflow to prevent memory pressure
+    private final Sinks.Many<NotificationEvent> sink = Sinks.many().multicast().onBackpressureBuffer(256, false);
 
     /**
      * Subscribe to the notification event stream.
@@ -42,31 +41,31 @@ public class NotificationEventService {
     }
 
     public void articlePublished(String articleTitle, String slug) {
-        publish("article", "published", articleTitle, Map.of("slug", slug));
+        publish(NotificationType.ARTICLE.value(), "published", articleTitle, Map.of("slug", slug));
     }
 
     public void articleCreated(String articleTitle, String slug) {
-        publish("article", "created", articleTitle, Map.of("slug", slug));
+        publish(NotificationType.ARTICLE.value(), "created", articleTitle, Map.of("slug", slug));
     }
 
     public void commentReceived(String articleSlug, String authorName) {
-        publish("comment", "created", "New comment on " + articleSlug, Map.of("articleSlug", articleSlug, "author", authorName));
+        publish(NotificationType.COMMENT.value(), "created", "New comment on " + articleSlug, Map.of("articleSlug", articleSlug, "author", authorName));
     }
 
     public void commentApproved(Long commentId) {
-        publish("comment", "approved", "Comment approved", Map.of("commentId", commentId));
+        publish(NotificationType.COMMENT.value(), "approved", "Comment approved", Map.of("commentId", commentId));
     }
 
     public void subscriberJoined(String email) {
-        publish("subscriber", "joined", "New subscriber", Map.of("email", email));
+        publish(NotificationType.SUBSCRIBER.value(), "joined", "New subscriber", Map.of("email", email));
     }
 
     public void contactReceived(String name) {
-        publish("contact", "received", "New contact from " + name, Map.of("name", name));
+        publish(NotificationType.CONTACT.value(), "received", "New contact from " + name, Map.of("name", name));
     }
 
     public void userLoggedIn(String email) {
-        publish("auth", "login", "User logged in", Map.of("email", email));
+        publish(NotificationType.AUTH.value(), "login", "User logged in", Map.of("email", email));
     }
 
     /**

@@ -1,6 +1,7 @@
 package dev.catananti.controller;
 
 import dev.catananti.dto.BlogExport;
+import dev.catananti.repository.ArticleRepository;
 import dev.catananti.service.ExportImportService;
 import dev.catananti.service.ExportImportService.ImportResult;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,14 +27,17 @@ import java.util.Map;
 @PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "Admin - Export/Import", description = "Blog data export and import")
 @SecurityRequirement(name = "Bearer Authentication")
-// TODO F-125: Add size limits for export (e.g., max articles) to prevent OOM on large datasets
 @Slf4j
 public class AdminExportController {
 
     private final ExportImportService exportImportService;
+    private final ArticleRepository articleRepository;
 
     /** SEC-03: Max import payload size (2 MB) */
     private static final int MAX_IMPORT_SIZE = 2 * 1024 * 1024;
+
+    /** Max articles allowed in a single export to prevent OOM */
+    private static final int MAX_EXPORT_ARTICLES = 10_000;
 
     @GetMapping
     @Operation(summary = "Export blog data", description = "Export all articles and tags as JSON")
@@ -41,7 +45,8 @@ public class AdminExportController {
             @Parameter(description = "Name of the person exporting")
             @RequestParam(defaultValue = "Admin") String exportedBy) {
         log.info("Exporting blog data");
-        return exportImportService.exportAll(exportedBy)
+        return checkExportLimit()
+                .then(exportImportService.exportAll(exportedBy))
                 .map(ResponseEntity::ok);
     }
 
@@ -53,7 +58,8 @@ public class AdminExportController {
         String filename = "blog-export-" + 
                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")) + ".json";
         
-        return exportImportService.exportToJson(exportedBy)
+        return checkExportLimit()
+                .then(exportImportService.exportToJson(exportedBy))
                 .map(json -> ResponseEntity.ok()
                         .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -64,7 +70,8 @@ public class AdminExportController {
     @Operation(summary = "Export as Markdown", description = "Export all articles as Markdown with YAML frontmatter")
     public Mono<ResponseEntity<Map<String, String>>> exportAsMarkdown() {
         log.info("Exporting blog data as Markdown");
-        return exportImportService.exportToMarkdown()
+        return checkExportLimit()
+                .then(exportImportService.exportToMarkdown())
                 .map(ResponseEntity::ok);
     }
 
@@ -98,5 +105,16 @@ public class AdminExportController {
         return exportImportService.exportAll("preview")
                 .map(BlogExport::getStats)
                 .map(ResponseEntity::ok);
+    }
+
+    private Mono<Void> checkExportLimit() {
+        return articleRepository.countAll()
+                .flatMap(count -> {
+                    if (count > MAX_EXPORT_ARTICLES) {
+                        return Mono.error(new IllegalStateException(
+                                "Export limit exceeded. Maximum " + MAX_EXPORT_ARTICLES + " articles allowed, found " + count));
+                    }
+                    return Mono.empty();
+                });
     }
 }
