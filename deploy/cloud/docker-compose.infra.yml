@@ -1,0 +1,89 @@
+# ============================================
+# Infrastructure Stack - Always Running
+# PostgreSQL + Redis (independent of app deploys)
+# Managed separately: doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
+# ============================================
+
+services:
+  # PostgreSQL
+  postgres:
+    image: postgres:17-alpine
+    container_name: blog-postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-blog}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+      - ../../src/main/resources/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d blog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blog-infra
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"postgresql","service":"blog-postgres"}]'
+
+  # Redis Cache + Session Store
+  redis:
+    image: redis:7-alpine
+    container_name: blog-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blog-infra
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"redis","service":"blog-redis"}]'
+      com.datadoghq.ad.check_names: '["redisdb"]'
+      com.datadoghq.ad.init_configs: '[{}]'
+      com.datadoghq.ad.instances: '[{"host":"%%host%%","port":"6379","password":"%%env_REDIS_PASSWORD%%"}]'
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+
+networks:
+  blog-infra:
+    name: blog-infra
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: cloud_postgres_data
+  redis_data:
+    name: cloud_redis_data
