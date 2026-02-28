@@ -76,7 +76,14 @@ jobs:
             docker load < frontend.tar.gz
             rm -f api.tar.gz frontend.tar.gz
             cd deploy/cloud
-            echo "Recreating containers with Doppler secrets..."
+
+            echo "Ensuring infrastructure stack is running..."
+            doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
+            echo "Waiting for infrastructure health..."
+            docker exec blog-postgres pg_isready -U postgres -d blog || sleep 5
+            docker exec blog-redis sh -c 'REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping' || sleep 5
+
+            echo "Deploying application stack..."
             doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate
             docker image prune -f
             echo "Deploy complete at $(date)"
