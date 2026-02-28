@@ -64,7 +64,10 @@ public class ResumeSkillService {
      * F-214: Merge skill entries — update existing, insert new, delete removed.
      */
     public Mono<Void> mergeSkills(Long profileId, List<ResumeProfileRequest.SkillEntry> incoming) {
-        if (incoming == null || incoming.isEmpty()) {
+        if (incoming == null) {
+            return Mono.empty(); // null = field not sent, preserve existing data
+        }
+        if (incoming.isEmpty()) {
             return deleteByProfileId(profileId);
         }
         return skillRepository.findByProfileIdOrderBySortOrderAsc(profileId)
