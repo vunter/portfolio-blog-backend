@@ -44,6 +44,9 @@ class AuthControllerTest {
     private RecaptchaService recaptchaService;
 
     @Mock
+    private dev.catananti.service.EmailChangeService emailChangeService;
+
+    @Mock
     private ServerHttpRequest mockRequest;
 
     @Mock
@@ -208,6 +211,72 @@ class AuthControllerTest {
                     .verifyComplete();
 
             verify(authService).refreshAccessToken("old-refresh-token");
+        }
+    }
+
+    @Nested
+    @DisplayName("GET /api/v1/admin/auth/verify-email-change")
+    class VerifyEmailChange {
+
+        @Test
+        @DisplayName("Should verify email change successfully")
+        void shouldVerifyEmailChange() {
+            when(emailChangeService.verifyEmailChange("test-token"))
+                    .thenReturn(Mono.just("new@example.com"));
+
+            StepVerifier.create(authController.verifyEmailChange("test-token"))
+                    .assertNext(response -> {
+                        assertThat(response.getStatusCode().value()).isEqualTo(200);
+                        assertThat(response.getBody()).containsEntry("email", "new@example.com");
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("Should return bad request on invalid token")
+        void shouldReturnBadRequestOnInvalidToken() {
+            when(emailChangeService.verifyEmailChange("bad-token"))
+                    .thenReturn(Mono.error(new RuntimeException("Invalid token")));
+
+            StepVerifier.create(authController.verifyEmailChange("bad-token"))
+                    .assertNext(response -> {
+                        assertThat(response.getStatusCode().value()).isEqualTo(400);
+                        assertThat(response.getBody()).containsKey("message");
+                    })
+                    .verifyComplete();
+        }
+    }
+
+    @Nested
+    @DisplayName("GET /api/v1/admin/auth/revert-email-change")
+    class RevertEmailChange {
+
+        @Test
+        @DisplayName("Should revert email change successfully")
+        void shouldRevertEmailChange() {
+            when(emailChangeService.revertEmailChange("revert-token"))
+                    .thenReturn(Mono.just("original@example.com"));
+
+            StepVerifier.create(authController.revertEmailChange("revert-token"))
+                    .assertNext(response -> {
+                        assertThat(response.getStatusCode().value()).isEqualTo(200);
+                        assertThat(response.getBody()).containsEntry("email", "original@example.com");
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("Should return bad request on invalid revert token")
+        void shouldReturnBadRequestOnInvalidRevertToken() {
+            when(emailChangeService.revertEmailChange("bad-token"))
+                    .thenReturn(Mono.error(new RuntimeException("Invalid token")));
+
+            StepVerifier.create(authController.revertEmailChange("bad-token"))
+                    .assertNext(response -> {
+                        assertThat(response.getStatusCode().value()).isEqualTo(400);
+                        assertThat(response.getBody()).containsKey("message");
+                    })
+                    .verifyComplete();
         }
     }
 }
