@@ -96,6 +96,16 @@ public class AdminArticleController {
         return articleAdminService.archiveArticle(id);
     }
 
+    @PutMapping("/bulk-status")
+    public Mono<ResponseEntity<Long>> bulkUpdateStatus(@RequestBody java.util.Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<Long> ids = ((List<Number>) body.get("ids")).stream().map(Number::longValue).toList();
+        String status = (String) body.get("status");
+        log.info("Bulk status update: {} articles → {}", ids.size(), status);
+        return articleAdminService.bulkUpdateStatus(ids, status)
+                .map(ResponseEntity::ok);
+    }
+
     // ==================== TRANSLATION ENDPOINTS ====================
 
     @PostMapping("/{id}/translate")

@@ -318,6 +318,32 @@ public class ArticleAdminService {
     }
 
     @Transactional
+    public Mono<Long> bulkUpdateStatus(List<Long> ids, String status) {
+        ArticleStatus targetStatus;
+        try {
+            targetStatus = ArticleStatus.valueOf(status);
+        } catch (IllegalArgumentException e) {
+            return Mono.error(new IllegalArgumentException("Invalid status: " + status));
+        }
+
+        return getCurrentUser()
+                .flatMap(user -> Flux.fromIterable(ids)
+                        .flatMap(id -> articleRepository.findById(id)
+                                .filter(article -> isAdmin(user) || isOwner(article, user))
+                                .flatMap(article -> {
+                                    article.setStatus(targetStatus.name());
+                                    article.setUpdatedAt(LocalDateTime.now());
+                                    if (targetStatus == ArticleStatus.PUBLISHED && article.getPublishedAt() == null) {
+                                        article.setPublishedAt(LocalDateTime.now());
+                                    }
+                                    return articleRepository.save(article);
+                                }))
+                        .count())
+                .flatMap(count -> invalidateFeedCaches().thenReturn(count))
+                .doOnSuccess(count -> log.info("Bulk status update: {} articles → {}", count, status));
+    }
+
+    @Transactional
     public Mono<Void> deleteArticle(Long id) {
         return articleRepository.findById(id)
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
