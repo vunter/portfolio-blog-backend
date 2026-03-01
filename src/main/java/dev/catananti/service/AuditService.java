@@ -127,6 +127,11 @@ public class AuditService {
                 "Password reset completed");
     }
 
+    public Mono<Void> logEmailChange(Long userId, String oldEmail, String newEmail) {
+        return logAction(AuditEventType.EMAIL_CHANGE.action(), "USER", userId.toString(), userId, oldEmail,
+                "Email changed from " + oldEmail + " to " + newEmail);
+    }
+
     public Mono<Void> logPasswordResetRequested(String email, String ipAddress) {
         return logAction(AuditEventType.PASSWORD_RESET_REQUESTED.action(), "USER", email, null, email,
                 "Password reset requested", ipAddress);

@@ -635,6 +635,56 @@ public class EmailService {
         return sendHtmlEmail(to, subject, html);
     }
 
+    /**
+     * Send email change verification link to the NEW email address.
+     */
+    public Mono<Void> sendEmailChangeVerification(String newEmail, String name, String token) {
+        String subject = msg("email.email.change.subject");
+        String verifyUrl = siteUrl + "/auth/verify-email-change?token=" + token;
+        String displayName = name != null ? name : msg("email.default.user");
+
+        String html = templateService.render("email-change-verify", baseVars(
+            "#8b5cf6 0%, #6d28d9 100%",
+            msg("email.email.change.header"),
+            Map.of(
+                "greeting", msg("email.greeting", displayName),
+                "bodyText", msg("email.email.change.body"),
+                "verifyUrl", verifyUrl,
+                "buttonText", msg("email.email.change.button"),
+                "importantTitle", msg("email.email.change.important"),
+                "expiresText", msg("email.email.change.expires"),
+                "onceText", msg("email.email.change.once"),
+                "ignoreText", msg("email.email.change.ignore"),
+                "fallbackText", msg("email.email.change.fallback")
+            )
+        ));
+
+        return sendHtmlEmail(newEmail, subject, html);
+    }
+
+    /**
+     * Send notification to the OLD email address that the email was changed.
+     */
+    public Mono<Void> sendEmailChangedNotification(String oldEmail, String name, String newEmail) {
+        String subject = msg("email.email.changed.subject");
+        String displayName = name != null ? name : msg("email.default.user");
+
+        String html = templateService.render("password-changed", baseVars(
+            "#f59e0b 0%, #d97706 100%",
+            msg("email.email.changed.header"),
+            Map.of(
+                "greeting", msg("email.greeting", displayName),
+                "successTitle", msg("email.email.changed.title"),
+                "successBody", msg("email.email.changed.body", newEmail),
+                "warningTitle", msg("email.email.changed.warning.title"),
+                "warningBody", msg("email.email.changed.warning.body"),
+                "supportEmail", supportEmail
+            )
+        ));
+
+        return sendHtmlEmail(oldEmail, subject, html);
+    }
+
     // ── Template helpers ──────────────────────────────────────────────────────
 
     /** Build the base variable map shared by all templates (gradient, header, footer). */

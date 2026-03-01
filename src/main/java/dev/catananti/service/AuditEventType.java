@@ -31,7 +31,8 @@ public enum AuditEventType {
     CACHE_INVALIDATE,
     DATA_EXPORT,
     DATA_IMPORT,
-    SETTINGS_UPDATE;
+    SETTINGS_UPDATE,
+    EMAIL_CHANGE;
 
     /**
      * Returns the action string used in audit log storage.

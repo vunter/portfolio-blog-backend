@@ -192,7 +192,21 @@ CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(tok
 CREATE INDEX IF NOT EXISTS idx_password_reset_user_id ON password_reset_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at);
 
--- Resume Templates table (for HTML resume templates and PDF generation)
+CREATE TABLE IF NOT EXISTS email_change_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    new_email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_change_token ON email_change_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_email_change_user_id ON email_change_tokens(user_id);
+
+-- Resume Templates table(for HTML resume templates and PDF generation)
 CREATE TABLE IF NOT EXISTS resume_templates (
     id BIGINT PRIMARY KEY,
     slug VARCHAR(255) UNIQUE NOT NULL,

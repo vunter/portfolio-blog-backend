@@ -7,6 +7,7 @@ import dev.catananti.dto.TokenResponse;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.RecaptchaService;
 import dev.catananti.util.IpAddressExtractor;
+import dev.catananti.service.EmailChangeService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +34,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final RecaptchaService recaptchaService;
+    private final EmailChangeService emailChangeService;
 
     @Value("${jwt.expiration:86400000}")
     private long jwtExpirationMs;
@@ -207,5 +209,18 @@ public class AuthController {
     private String extractAccessTokenFromCookie(ServerHttpRequest request) {
         HttpCookie cookie = request.getCookies().getFirst(ACCESS_TOKEN_COOKIE);
         return cookie != null ? cookie.getValue() : null;
+    }
+
+    @GetMapping("/verify-email-change")
+    public Mono<ResponseEntity<Map<String, String>>> verifyEmailChange(@RequestParam String token) {
+        return emailChangeService.verifyEmailChange(token)
+                .map(newEmail -> ResponseEntity.ok(Map.of(
+                        "message", "Email changed successfully",
+                        "email", newEmail)))
+                .onErrorResume(e -> {
+                    log.warn("Email change verification failed: {}", e.getMessage());
+                    return Mono.just(ResponseEntity.badRequest().body(Map.of(
+                            "message", "Invalid or expired verification link")));
+                });
     }
 }

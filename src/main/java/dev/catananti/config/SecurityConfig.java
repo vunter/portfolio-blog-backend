@@ -65,6 +65,7 @@ public class SecurityConfig {
             "/api/v1/admin/auth/forgot-password",
             "/api/v1/admin/auth/reset-password",
             "/api/v1/admin/auth/reset-password/validate",
+            "/api/v1/admin/auth/verify-email-change",
             "/api/v1/admin/mfa/verify",
             "/api/v1/admin/mfa/send-email-otp"
     );
