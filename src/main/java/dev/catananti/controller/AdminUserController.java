@@ -102,8 +102,18 @@ public class AdminUserController {
             @Valid @RequestBody ProfileUpdateRequest request,
             Authentication authentication) {
         log.info("Updating current user profile");
-        return userService.updateProfile(authentication.getName(), request)
-                .map(ResponseEntity::ok);
+        String currentEmail = authentication.getName();
+        boolean emailChanging = request.email() != null && !request.email().isBlank()
+                && !request.email().equalsIgnoreCase(currentEmail);
+        return userService.updateProfile(currentEmail, request)
+                .map(response -> {
+                    if (emailChanging) {
+                        return ResponseEntity.accepted()
+                                .header("X-Email-Change-Pending", "true")
+                                .body(response);
+                    }
+                    return ResponseEntity.ok(response);
+                });
     }
 
     @GetMapping("/{id}")

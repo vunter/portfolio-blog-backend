@@ -37,6 +37,7 @@ public class UserService {
     private final HtmlSanitizerService htmlSanitizerService;
     private final CloudflareEmailRoutingService cfEmailRoutingService;
     private final EmailService emailService;
+    private final EmailChangeService emailChangeService;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
     public Flux<UserResponse> getAllUsers(int page, int size) {
@@ -226,7 +227,7 @@ public class UserService {
                                         });
                                 }
 
-                                // Email uniqueness check
+                                // Email change — initiate verification (don't change directly)
                                 Mono<Void> emailCheck = Mono.empty();
                                 if (emailChanging) {
                                     String newEmail = request.email().toLowerCase().trim();
@@ -235,8 +236,7 @@ public class UserService {
                                             if (exists) {
                                                 return Mono.<Void>error(new ResponseStatusException(HttpStatus.CONFLICT, "error.email_in_use"));
                                             }
-                                            user.setEmail(newEmail);
-                                            return Mono.<Void>empty();
+                                            return emailChangeService.initiateEmailChange(user.getId(), newEmail, user.getName());
                                         });
                                 }
 

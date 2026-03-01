@@ -1,0 +1,20 @@
+<th:block xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: email(~{::content}, '')}">
+ <th:block th:fragment="content">
+ <p th:text="${greeting}">Hello User,</p>
+ <p th:text="${bodyText}">You requested to change your email address.</p>
+ <div class="button-center">
+ <a th:href="${verifyUrl}" class="button" style="background: #8b5cf6;" th:text="${buttonText}">Verify Email Change</a>
+ </div>
+ <div class="alert-box alert-warning">
+ <strong> <span th:text="${importantTitle}">Important</span></strong>
+ <ul style="margin-bottom: 0;">
+ <li th:text="${expiresText}">Link expires in 1 hour</li>
+ <li th:text="${onceText}">Can only be used once</li>
+ <li th:text="${ignoreText}">Ignore this email if you didn't request it</li>
+ </ul>
+ </div>
+ <hr class="divider"/>
+ <p class="small-text" th:text="${fallbackText}">If the button doesn't work, copy this link:</p>
+ <p class="small-text" style="word-break: break-all;" th:text="${verifyUrl}">https://catananti.dev/auth/verify-email-change?token=abc</p>
+ </th:block>
+</th:block>
