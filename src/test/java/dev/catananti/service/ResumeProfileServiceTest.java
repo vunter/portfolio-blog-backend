@@ -393,23 +393,21 @@ class ResumeProfileServiceTest {
 
         /**
          * F-214: Mock merge methods for update path.
-         * When incoming lists are null (as in buildTestRequest), merge methods
-         * delegate to deleteByProfileId, so we mock both.
+         * When incoming lists are null, the service skips them entirely (null = skip).
+         * Use lenient() since stubs may not be invoked when collections are absent.
          */
         private void mockMergeChildEntities(Long profId) {
-            // Merge methods on delegated services (null incoming → delete)
-            when(educationService.mergeEducations(eq(profId), any())).thenReturn(Mono.empty());
-            when(experienceService.mergeExperiences(eq(profId), any())).thenReturn(Mono.empty());
-            when(skillService.mergeSkills(eq(profId), any())).thenReturn(Mono.empty());
-            when(languageService.mergeLanguages(eq(profId), any())).thenReturn(Mono.empty());
-            when(certificationService.mergeCertifications(eq(profId), any())).thenReturn(Mono.empty());
-            // Inline merge for repository-managed types (null incoming → delete)
-            when(additionalInfoRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
-            when(homeCustomizationRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
-            when(testimonialRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
-            when(proficiencyRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
-            when(projectRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
-            when(learningTopicRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            lenient().when(educationService.mergeEducations(eq(profId), any())).thenReturn(Mono.empty());
+            lenient().when(experienceService.mergeExperiences(eq(profId), any())).thenReturn(Mono.empty());
+            lenient().when(skillService.mergeSkills(eq(profId), any())).thenReturn(Mono.empty());
+            lenient().when(languageService.mergeLanguages(eq(profId), any())).thenReturn(Mono.empty());
+            lenient().when(certificationService.mergeCertifications(eq(profId), any())).thenReturn(Mono.empty());
+            lenient().when(additionalInfoRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            lenient().when(homeCustomizationRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            lenient().when(testimonialRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            lenient().when(proficiencyRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            lenient().when(projectRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
+            lenient().when(learningTopicRepository.deleteByProfileId(profId)).thenReturn(Mono.empty());
         }
 
         @Test
