@@ -2,6 +2,7 @@ package dev.catananti.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.catananti.dto.AnalyticsComparison;
 import dev.catananti.dto.AnalyticsEventRequest;
 import dev.catananti.dto.AnalyticsSummary;
 import dev.catananti.entity.AnalyticsEvent;
@@ -232,6 +233,77 @@ public class AnalyticsService {
 
     public Mono<Long> getArticleViewCount(Long articleId) {
         return analyticsRepository.countByArticleIdAndEventType(articleId, "VIEW");
+    }
+
+    /**
+     * Compare current period metrics with the previous period of the same length.
+     */
+    public Mono<AnalyticsComparison> getAnalyticsComparison(int days) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime currentStart = now.minusDays(days);
+        LocalDateTime previousStart = now.minusDays(days * 2L);
+
+        return Mono.zip(
+                analyticsRepository.countByEventTypeSince("VIEW", currentStart),
+                analyticsRepository.countByEventTypeSince("LIKE", currentStart),
+                analyticsRepository.countByEventTypeSince("SHARE", currentStart),
+                countByEventTypeBetween("VIEW", previousStart, currentStart),
+                countByEventTypeBetween("LIKE", previousStart, currentStart),
+                countByEventTypeBetween("SHARE", previousStart, currentStart)
+        ).map(tuple -> AnalyticsComparison.builder()
+                .currentViews(tuple.getT1())
+                .currentLikes(tuple.getT2())
+                .currentShares(tuple.getT3())
+                .previousViews(tuple.getT4())
+                .previousLikes(tuple.getT5())
+                .previousShares(tuple.getT6())
+                .build());
+    }
+
+    public Mono<AnalyticsComparison> getAnalyticsComparisonByAuthor(int days, Long authorId) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime currentStart = now.minusDays(days);
+        LocalDateTime previousStart = now.minusDays(days * 2L);
+
+        return Mono.zip(
+                analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", currentStart),
+                analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", currentStart),
+                analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", currentStart),
+                countByAuthorIdAndEventTypeBetween(authorId, "VIEW", previousStart, currentStart),
+                countByAuthorIdAndEventTypeBetween(authorId, "LIKE", previousStart, currentStart),
+                countByAuthorIdAndEventTypeBetween(authorId, "SHARE", previousStart, currentStart)
+        ).map(tuple -> AnalyticsComparison.builder()
+                .currentViews(tuple.getT1())
+                .currentLikes(tuple.getT2())
+                .currentShares(tuple.getT3())
+                .previousViews(tuple.getT4())
+                .previousLikes(tuple.getT5())
+                .previousShares(tuple.getT6())
+                .build());
+    }
+
+    private Mono<Long> countByEventTypeBetween(String eventType, LocalDateTime from, LocalDateTime to) {
+        return databaseClient.sql(
+                "SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = :eventType AND created_at >= :from AND created_at < :to")
+                .bind("eventType", eventType)
+                .bind("from", from)
+                .bind("to", to)
+                .map((row, meta) -> row.get("cnt", Long.class))
+                .one()
+                .defaultIfEmpty(0L);
+    }
+
+    private Mono<Long> countByAuthorIdAndEventTypeBetween(Long authorId, String eventType, LocalDateTime from, LocalDateTime to) {
+        return databaseClient.sql(
+                "SELECT COUNT(*) AS cnt FROM analytics_events ae JOIN articles a ON ae.article_id = a.id " +
+                "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :from AND ae.created_at < :to")
+                .bind("authorId", authorId)
+                .bind("eventType", eventType)
+                .bind("from", from)
+                .bind("to", to)
+                .map((row, meta) -> row.get("cnt", Long.class))
+                .one()
+                .defaultIfEmpty(0L);
     }
 
     /**

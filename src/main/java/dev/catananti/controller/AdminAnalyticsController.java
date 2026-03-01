@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.dto.AnalyticsComparison;
 import dev.catananti.dto.AnalyticsSummary;
 import dev.catananti.entity.UserRole;
 import dev.catananti.repository.UserRepository;
@@ -61,6 +62,21 @@ public class AdminAnalyticsController {
                 return analyticsService.getAnalyticsSummary(days);
             } else {
                 return analyticsService.getAnalyticsSummaryByAuthor(days, user.getId());
+            }
+        });
+    }
+
+    @GetMapping("/compare")
+    @Operation(summary = "Get period comparison", description = "Get current vs previous period metrics scoped by role")
+    public Mono<AnalyticsComparison> getAnalyticsComparison(
+            @RequestParam(defaultValue = "30d") String period) {
+        log.debug("Fetching analytics comparison for period={}", period);
+        int days = parsePeriod(period);
+        return getCurrentUser().flatMap(user -> {
+            if (UserRole.ADMIN.matches(user.getRole())) {
+                return analyticsService.getAnalyticsComparison(days);
+            } else {
+                return analyticsService.getAnalyticsComparisonByAuthor(days, user.getId());
             }
         });
     }

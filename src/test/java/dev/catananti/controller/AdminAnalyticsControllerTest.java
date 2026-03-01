@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.dto.AnalyticsComparison;
 import dev.catananti.dto.AnalyticsSummary;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.AnalyticsService;
@@ -162,6 +163,50 @@ class AdminAnalyticsControllerTest {
 
             StepVerifier.create(withAdminAuth(controller.getAnalytics("14")))
                     .assertNext(result -> assertThat(result.getTotalViews()).isEqualTo(1000L))
+                    .verifyComplete();
+        }
+    }
+
+    @Nested
+    @DisplayName("GET /api/v1/admin/analytics/compare")
+    class GetAnalyticsComparison {
+
+        @Test
+        @DisplayName("Should return comparison for default period")
+        void shouldReturnComparisonDefault() {
+            AnalyticsComparison comparison = AnalyticsComparison.builder()
+                    .currentViews(1000L).currentLikes(250L).currentShares(50L)
+                    .previousViews(800L).previousLikes(200L).previousShares(40L)
+                    .build();
+            when(analyticsService.getAnalyticsComparison(30)).thenReturn(Mono.just(comparison));
+
+            StepVerifier.create(withAdminAuth(controller.getAnalyticsComparison("30d")))
+                    .assertNext(result -> {
+                        assertThat(result.getCurrentViews()).isEqualTo(1000L);
+                        assertThat(result.getPreviousViews()).isEqualTo(800L);
+                        assertThat(result.getCurrentLikes()).isEqualTo(250L);
+                        assertThat(result.getPreviousLikes()).isEqualTo(200L);
+                    })
+                    .verifyComplete();
+
+            verify(analyticsService).getAnalyticsComparison(30);
+        }
+
+        @Test
+        @DisplayName("Should return comparison for 7d period")
+        void shouldReturnComparison7d() {
+            AnalyticsComparison comparison = AnalyticsComparison.builder()
+                    .currentViews(500L).currentLikes(100L).currentShares(20L)
+                    .previousViews(400L).previousLikes(90L).previousShares(25L)
+                    .build();
+            when(analyticsService.getAnalyticsComparison(7)).thenReturn(Mono.just(comparison));
+
+            StepVerifier.create(withAdminAuth(controller.getAnalyticsComparison("7d")))
+                    .assertNext(result -> {
+                        assertThat(result.getCurrentViews()).isEqualTo(500L);
+                        assertThat(result.getCurrentShares()).isEqualTo(20L);
+                        assertThat(result.getPreviousShares()).isEqualTo(25L);
+                    })
                     .verifyComplete();
         }
     }
