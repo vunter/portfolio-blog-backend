@@ -1,0 +1,56 @@
+{
+  "en": {
+    "high": [
+      "fuck", "shit", "bitch", "asshole", "cunt", "dick", "pussy", "nigger", "nigga",
+      "faggot", "retard", "whore", "slut", "bastard", "motherfucker", "cocksucker",
+      "wanker", "twat", "prick", "douchebag"
+    ],
+    "medium": [
+      "damn", "hell", "crap", "ass", "piss", "bollocks", "bugger",
+      "bloody", "sod", "git", "tosser", "arse", "knob"
+    ],
+    "low": [
+      "idiot", "stupid", "dumb", "moron", "loser", "suck", "jerk", "fool",
+      "lame", "pathetic", "useless", "worthless"
+    ]
+  },
+  "pt": {
+    "high": [
+      "porra", "caralho", "puta", "merda", "foda", "fodase", "viado", "buceta",
+      "cacete", "desgraça", "arrombado", "cuzão", "piranha", "vagabunda"
+    ],
+    "medium": [
+      "droga", "bosta", "burro", "imbecil", "otário", "babaca", "mané",
+      "trouxa", "palhaço", "cretino", "idiota"
+    ],
+    "low": [
+      "bobo", "tonto", "chato", "inútil", "preguiçoso", "feio"
+    ]
+  },
+  "es": {
+    "high": [
+      "mierda", "puta", "joder", "coño", "cabrón", "pendejo", "verga",
+      "chingar", "maricón", "polla", "hijo de puta", "culero"
+    ],
+    "medium": [
+      "idiota", "estúpido", "imbécil", "tonto", "gilipollas", "capullo",
+      "mamón", "huevón", "boludo", "tarado"
+    ],
+    "low": [
+      "tonto", "bobo", "torpe", "inútil", "pesado", "payaso"
+    ]
+  },
+  "it": {
+    "high": [
+      "cazzo", "merda", "puttana", "vaffanculo", "stronzo", "minchia",
+      "figa", "troia", "porco", "bastardo", "figlio di puttana"
+    ],
+    "medium": [
+      "idiota", "stupido", "imbecille", "cretino", "scemo", "deficiente",
+      "coglione", "pirla"
+    ],
+    "low": [
+      "sciocco", "tonto", "stupido", "inutile", "pigro", "buffone"
+    ]
+  }
+}

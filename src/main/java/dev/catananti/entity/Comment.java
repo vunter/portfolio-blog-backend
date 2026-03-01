@@ -56,6 +56,9 @@ public class Comment implements Persistable<Long>, NewRecordAware {
     @Column("parent_id")
     private Long parentId;
 
+    @Column("moderation_note")
+    private String moderationNote;
+
     @Column("created_at")
     private LocalDateTime createdAt;
 

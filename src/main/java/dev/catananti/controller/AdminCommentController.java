@@ -67,4 +67,22 @@ public class AdminCommentController {
         log.info("Deleting comment: id={}", id);
         return commentService.adminDeleteComment(id);
     }
+
+    @PutMapping("/bulk-approve")
+    public Mono<List<CommentResponse>> bulkApprove(@RequestBody List<Long> ids) {
+        log.info("Bulk approving {} comments", ids.size());
+        return commentService.bulkApprove(ids).collectList();
+    }
+
+    @PutMapping("/bulk-reject")
+    public Mono<List<CommentResponse>> bulkReject(@RequestBody List<Long> ids) {
+        log.info("Bulk rejecting {} comments", ids.size());
+        return commentService.bulkReject(ids).collectList();
+    }
+
+    @PutMapping("/bulk-spam")
+    public Mono<List<CommentResponse>> bulkSpam(@RequestBody List<Long> ids) {
+        log.info("Bulk marking {} comments as spam", ids.size());
+        return commentService.bulkMarkAsSpam(ids).collectList();
+    }
 }

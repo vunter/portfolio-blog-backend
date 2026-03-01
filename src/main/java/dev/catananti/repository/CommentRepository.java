@@ -38,6 +38,9 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
 
     Mono<Void> deleteByParentId(Long parentId);
 
+    @Query("SELECT COUNT(*) FROM comments WHERE LOWER(author_email) = LOWER(:email) AND status = 'APPROVED'")
+    Mono<Long> countApprovedByAuthorEmail(String email);
+
     // ==================== AUTHOR-SCOPED QUERIES (ownership enforcement) ====================
 
     @Query("SELECT c.* FROM comments c JOIN articles a ON c.article_id = a.id WHERE a.author_id = :authorId AND c.status = :status ORDER BY c.created_at DESC LIMIT :limit OFFSET :offset")

@@ -35,9 +35,12 @@ public class CommentService {
     private final UserRepository userRepository;
     private final EmailService emailService;
     private final HtmlSanitizerService htmlSanitizerService;
+    private final ContentModerationService contentModerationService;
     private final IdService idService;
     private final NotificationEventService notificationEventService;
     private final BlogMetrics blogMetrics;
+
+    private static final long TRUSTED_COMMENTER_THRESHOLD = 3;
 
     // ==================== PUBLIC ENDPOINTS ====================
 
@@ -95,46 +98,62 @@ public class CommentService {
                         if (isSpam(sanitizedContent)) {
                             return Mono.error(new IllegalArgumentException("Comment rejected: detected as spam"));
                         }
-                        
-                        Comment comment = Comment.builder()
-                                .id(idService.nextId())
-                                .articleId(article.getId())
-                                .authorName(sanitizedAuthorName)
-                                .authorEmail(request.getAuthorEmail())
-                                .content(sanitizedContent)
-                                .status(CommentStatus.PENDING.name()) // Needs moderation
-                                .parentId(request.getParentId())
-                                .createdAt(LocalDateTime.now())
-                                .build();
 
-                        return commentRepository.save(comment)
-                                .flatMap(savedComment -> {
-                                    // Notify article author about new comment
-                                    if (article.getAuthorId() != null) {
-                                        return userRepository.findById(article.getAuthorId())
-                                                .flatMap(author -> emailService.sendCommentNotification(
-                                                        author.getEmail(),
-                                                        author.getName(),
-                                                        savedComment.getAuthorName(),
-                                                        article.getTitle(),
-                                                        article.getSlug(),
-                                                        savedComment.getContent()
-                                                ).onErrorResume(e -> {
-                                                    log.warn("Failed to send comment notification to {}: {}", 
-                                                            author.getEmail(), e.getMessage());
-                                                    return Mono.empty();
-                                                }))
-                                                .thenReturn(savedComment);
-                                    }
-                                    return Mono.just(savedComment);
-                                })
-                                .doOnSuccess(c -> {
-                                    log.info("Comment created for article {} by {} ({}): {}",
-                                            slug, c.getAuthorName(), c.getAuthorEmail(), c.getId());
-                                    notificationEventService.commentReceived(slug, c.getAuthorName());
-                                    blogMetrics.incrementCommentCreated();
-                                })
-                                .map(this::toPublicResponse);
+                        // Content moderation: profanity + auto-approval
+                        ContentModerationService.ModerationResult modResult =
+                                contentModerationService.analyzeContent(sanitizedContent, "en");
+
+                        return commentRepository.countApprovedByAuthorEmail(request.getAuthorEmail())
+                                .defaultIfEmpty(0L)
+                                .flatMap(approvedCount -> {
+                                    boolean isTrusted = approvedCount >= TRUSTED_COMMENTER_THRESHOLD;
+                                    String status = determineCommentStatus(modResult, isTrusted);
+                                    String moderationNote = modResult.getReasons().isEmpty() ? null
+                                            : String.join("; ", modResult.getReasons());
+
+                                    Comment comment = Comment.builder()
+                                            .id(idService.nextId())
+                                            .articleId(article.getId())
+                                            .authorName(sanitizedAuthorName)
+                                            .authorEmail(request.getAuthorEmail())
+                                            .content(sanitizedContent)
+                                            .status(status)
+                                            .moderationNote(moderationNote)
+                                            .parentId(request.getParentId())
+                                            .createdAt(LocalDateTime.now())
+                                            .build();
+
+                                    return commentRepository.save(comment)
+                                            .flatMap(savedComment -> {
+                                                // Notify article author only for pending comments
+                                                if (CommentStatus.PENDING.name().equals(status) && article.getAuthorId() != null) {
+                                                    return userRepository.findById(article.getAuthorId())
+                                                            .flatMap(author -> emailService.sendCommentNotification(
+                                                                    author.getEmail(),
+                                                                    author.getName(),
+                                                                    savedComment.getAuthorName(),
+                                                                    article.getTitle(),
+                                                                    article.getSlug(),
+                                                                    savedComment.getContent()
+                                                            ).onErrorResume(e -> {
+                                                                log.warn("Failed to send comment notification to {}: {}",
+                                                                        author.getEmail(), e.getMessage());
+                                                                return Mono.empty();
+                                                            }))
+                                                            .thenReturn(savedComment);
+                                                }
+                                                return Mono.just(savedComment);
+                                            })
+                                            .doOnSuccess(c -> {
+                                                log.info("Comment created for article {} by {} ({}) status={}: {}",
+                                                        slug, c.getAuthorName(), c.getAuthorEmail(), c.getStatus(), c.getId());
+                                                if (!CommentStatus.REJECTED.name().equals(c.getStatus())) {
+                                                    notificationEventService.commentReceived(slug, c.getAuthorName());
+                                                }
+                                                blogMetrics.incrementCommentCreated();
+                                            })
+                                            .map(this::toPublicResponse);
+                                });
                     }));
                 });
     }
@@ -203,6 +222,21 @@ public class CommentService {
     @Transactional
     public Mono<CommentResponse> markAsSpam(Long id) {
         return updateCommentStatus(id, CommentStatus.SPAM.name());
+    }
+
+    @Transactional
+    public Flux<CommentResponse> bulkApprove(List<Long> ids) {
+        return Flux.fromIterable(ids).flatMap(this::approveComment);
+    }
+
+    @Transactional
+    public Flux<CommentResponse> bulkReject(List<Long> ids) {
+        return Flux.fromIterable(ids).flatMap(this::rejectComment);
+    }
+
+    @Transactional
+    public Flux<CommentResponse> bulkMarkAsSpam(List<Long> ids) {
+        return Flux.fromIterable(ids).flatMap(this::markAsSpam);
     }
 
     @Transactional
@@ -349,6 +383,7 @@ public class CommentService {
                 .authorEmail(comment.getAuthorEmail())
                 .content(comment.getContent())
                 .status(comment.getStatus())
+                .moderationNote(comment.getModerationNote())
                 .parentId(comment.getParentId() != null ? String.valueOf(comment.getParentId()) : null)
                 .replies(comment.getReplies() != null ? 
                         comment.getReplies().stream().map(this::toResponse).toList() : 
@@ -381,6 +416,15 @@ public class CommentService {
         // Excessive length (>10000 chars)
         if (content.length() > 10000) return true;
         return false;
+    }
+
+    private String determineCommentStatus(ContentModerationService.ModerationResult result, boolean isTrusted) {
+        return switch (result.getSeverity()) {
+            case HIGH -> CommentStatus.REJECTED.name();
+            case MEDIUM -> isTrusted ? CommentStatus.APPROVED.name() : CommentStatus.PENDING.name();
+            case LOW -> CommentStatus.APPROVED.name();
+            case NONE -> CommentStatus.APPROVED.name();
+        };
     }
 
     // ==================== OWNERSHIP ENFORCEMENT ====================

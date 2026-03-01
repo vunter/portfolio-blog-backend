@@ -55,6 +55,9 @@ class CommentServiceTest {
     @Mock
     private BlogMetrics blogMetrics;
 
+    @Mock
+    private ContentModerationService contentModerationService;
+
     @InjectMocks
     private CommentService commentService;
 
@@ -143,7 +146,7 @@ class CommentServiceTest {
                 .authorName("Jane Doe")
                 .authorEmail("jane@example.com")
                 .content("Nice post!")
-                .status("PENDING")
+                .status("APPROVED")
                 .createdAt(LocalDateTime.now())
                 .build();
 
@@ -153,6 +156,11 @@ class CommentServiceTest {
                 .thenReturn(Mono.just(savedComment));
         when(htmlSanitizerService.stripHtml(anyString()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        when(contentModerationService.analyzeContent(anyString(), anyString()))
+                .thenReturn(ContentModerationService.ModerationResult.builder()
+                        .severity(ContentModerationService.Severity.NONE).safe(true).reasons(java.util.List.of()).build());
+        when(commentRepository.countApprovedByAuthorEmail(anyString()))
+                .thenReturn(Mono.just(0L));
 
         // When
         Mono<CommentResponse> result = commentService.createComment("test-article", request);
@@ -161,7 +169,7 @@ class CommentServiceTest {
         StepVerifier.create(result)
                 .assertNext(comment -> {
                     assertThat(comment.getAuthorName()).isEqualTo("Jane Doe");
-                    assertThat(comment.getStatus()).isEqualTo("PENDING");
+                    assertThat(comment.getStatus()).isEqualTo("APPROVED");
                 })
                 .verifyComplete();
     }
@@ -421,18 +429,23 @@ class CommentServiceTest {
         Comment savedReply = Comment.builder()
                 .id(200L).articleId(articleId).authorName("Reply Author")
                 .authorEmail("reply@example.com").content("This is a reply")
-                .status("PENDING").parentId(100L).createdAt(LocalDateTime.now()).build();
+                .status("APPROVED").parentId(100L).createdAt(LocalDateTime.now()).build();
 
         when(articleRepository.findBySlug("test-article")).thenReturn(Mono.just(testArticle));
         when(commentRepository.findById(100L)).thenReturn(Mono.just(parentComment));
         when(commentRepository.save(any(Comment.class))).thenReturn(Mono.just(savedReply));
         when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        when(contentModerationService.analyzeContent(anyString(), anyString()))
+                .thenReturn(ContentModerationService.ModerationResult.builder()
+                        .severity(ContentModerationService.Severity.NONE).safe(true).reasons(java.util.List.of()).build());
+        when(commentRepository.countApprovedByAuthorEmail(anyString()))
+                .thenReturn(Mono.just(0L));
 
         StepVerifier.create(commentService.createComment("test-article", request))
                 .assertNext(comment -> {
                     assertThat(comment.getParentId()).isEqualTo("100");
                     assertThat(comment.getAuthorName()).isEqualTo("Reply Author");
-                    assertThat(comment.getStatus()).isEqualTo("PENDING");
+                    assertThat(comment.getStatus()).isEqualTo("APPROVED");
                 })
                 .verifyComplete();
     }
@@ -470,6 +483,12 @@ class CommentServiceTest {
         when(articleRepository.findBySlug("test-article")).thenReturn(Mono.just(testArticle));
         when(commentRepository.save(any(Comment.class))).thenReturn(Mono.just(savedComment));
         when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        when(contentModerationService.analyzeContent(anyString(), anyString()))
+                .thenReturn(ContentModerationService.ModerationResult.builder()
+                        .severity(ContentModerationService.Severity.MEDIUM).safe(false)
+                        .reasons(java.util.List.of("en:medium:test")).build());
+        when(commentRepository.countApprovedByAuthorEmail(anyString()))
+                .thenReturn(Mono.just(0L));
         when(userRepository.findById(50L)).thenReturn(Mono.just(author));
         when(emailService.sendCommentNotification(
                 eq("author@example.com"), eq("Author"), eq("Commenter"),

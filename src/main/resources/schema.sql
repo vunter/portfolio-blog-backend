@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS comments (
     content TEXT NOT NULL,
     status VARCHAR(50) DEFAULT 'PENDING',
     parent_id BIGINT REFERENCES comments(id),
+    moderation_note VARCHAR(500),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
