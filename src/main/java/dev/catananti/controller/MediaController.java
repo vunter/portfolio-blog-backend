@@ -129,6 +129,7 @@ public class MediaController {
             String purpose,
             String altText,
             String url,
+            String thumbnailUrl,
             String createdAt
     ) {
         static MediaAssetResponse from(MediaAsset asset) {
@@ -140,6 +141,7 @@ public class MediaController {
                     asset.getPurpose(),
                     asset.getAltText(),
                     asset.getUrl(),
+                    asset.getThumbnailUrl(),
                     asset.getCreatedAt() != null ? asset.getCreatedAt().toString() : null
             );
         }

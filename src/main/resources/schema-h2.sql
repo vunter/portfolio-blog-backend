@@ -551,6 +551,7 @@ CREATE TABLE IF NOT EXISTS media_assets (
     purpose           VARCHAR(50)   NOT NULL DEFAULT 'GENERAL',
     alt_text          VARCHAR(500),
     uploader_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    thumbnail_url     VARCHAR(1000),
     created_at        TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 );
 

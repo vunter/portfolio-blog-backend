@@ -648,6 +648,7 @@ CREATE TABLE IF NOT EXISTS media_assets (
     purpose           VARCHAR(50)   NOT NULL DEFAULT 'GENERAL',
     alt_text          VARCHAR(500),
     uploader_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    thumbnail_url     VARCHAR(1000),
     created_at        TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -655,6 +656,13 @@ CREATE INDEX IF NOT EXISTS idx_media_assets_purpose     ON media_assets(purpose)
 CREATE INDEX IF NOT EXISTS idx_media_assets_uploader    ON media_assets(uploader_id);
 CREATE INDEX IF NOT EXISTS idx_media_assets_created     ON media_assets(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_media_assets_storage_key ON media_assets(storage_key);
+
+-- Add thumbnail_url column to existing media_assets table (idempotent)
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='media_assets' AND column_name='thumbnail_url') THEN
+        ALTER TABLE media_assets ADD COLUMN thumbnail_url VARCHAR(1000);
+    END IF;
+END $$;
 
 -- ============================================
 -- MFA / Two-Factor Authentication

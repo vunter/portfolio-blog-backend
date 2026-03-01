@@ -61,6 +61,10 @@ public class MediaAsset implements Persistable<Long>, NewRecordAware {
     /** The public-facing URL for this asset */
     private String url;
 
+    /** URL of the thumbnail variant (150px width), null if not generated */
+    @Column("thumbnail_url")
+    private String thumbnailUrl;
+
     @Column("uploader_id")
     private Long uploaderId;
 

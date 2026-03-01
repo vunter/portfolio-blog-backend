@@ -15,10 +15,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.ByteArrayOutputStream;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -35,6 +35,7 @@ public class MediaService {
     private final StorageProvider storageProvider;
     private final MediaAssetRepository mediaAssetRepository;
     private final IdService idService;
+    private final ImageProcessingService imageProcessingService;
 
     @Value("${app.upload.max-size:10485760}")
     private long maxFileSize; // 10MB default
@@ -75,47 +76,87 @@ public class MediaService {
 
                             // Generate storage key
                             String datePath = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy/MM"));
-                            String storedFilename = UUID.randomUUID() + "." + ext;
+                            String fileId = UUID.randomUUID().toString();
+                            String storedFilename = fileId + "." + ext;
                             String storageKey = datePath + "/" + storedFilename;
                             String contentType = filePart.headers().getContentType() != null
                                     ? filePart.headers().getContentType().toString()
                                     : "application/octet-stream";
 
-                            // Store file
-                            return storageProvider.store(storageKey, data, contentType)
-                                    .flatMap(url -> {
-                                        // Create and persist media asset
-                                        MediaAsset asset = MediaAsset.builder()
-                                                .id(idService.nextId())
-                                                .originalFilename(filePart.filename())
-                                                .storedFilename(storedFilename)
-                                                .storageKey(storageKey)
-                                                .contentType(contentType)
-                                                .fileSize((long) data.length)
-                                                .purpose(purpose != null ? purpose.toUpperCase() : "GENERAL")
-                                                .altText(altText)
-                                                .url(url)
-                                                .uploaderId(uploaderId)
-                                                .createdAt(LocalDateTime.now())
-                                                .newRecord(true)
-                                                .build();
+                            boolean isImage = ALLOWED_CONTENT_TYPES.contains(contentType)
+                                    && !"image/gif".equals(contentType);
 
-                                        return mediaAssetRepository.save(asset);
-                                    });
+                            Mono<Map<String, ImageProcessingService.ImageVariant>> processingMono =
+                                    isImage
+                                            ? imageProcessingService.processImage(data, contentType)
+                                            : Mono.just(Map.of("",
+                                                    new ImageProcessingService.ImageVariant("", data, 0, 0)));
+
+                            return processingMono.flatMap(variants -> {
+                                ImageProcessingService.ImageVariant original = variants.get("");
+                                byte[] originalBytes = original != null ? original.data() : data;
+
+                                // Store original (EXIF-stripped if processed)
+                                return storageProvider.store(storageKey, originalBytes, contentType)
+                                        .flatMap(url -> {
+                                            // Store thumbnail variant if generated
+                                            ImageProcessingService.ImageVariant thumb = variants.get("-thumb");
+                                            Mono<String> thumbMono;
+                                            if (thumb != null) {
+                                                String thumbKey = datePath + "/" + fileId + "-thumb." + ext;
+                                                thumbMono = storageProvider.store(thumbKey, thumb.data(), contentType);
+                                            } else {
+                                                thumbMono = Mono.empty();
+                                            }
+
+                                            return thumbMono.defaultIfEmpty("")
+                                                    .flatMap(thumbnailUrl -> {
+                                                        // Store medium/large variants (fire-and-forget for non-blocking)
+                                                        storeVariantAsync(variants.get("-medium"),
+                                                                datePath + "/" + fileId + "-medium." + ext, contentType);
+                                                        storeVariantAsync(variants.get("-large"),
+                                                                datePath + "/" + fileId + "-large." + ext, contentType);
+
+                                                        MediaAsset asset = MediaAsset.builder()
+                                                                .id(idService.nextId())
+                                                                .originalFilename(filePart.filename())
+                                                                .storedFilename(storedFilename)
+                                                                .storageKey(storageKey)
+                                                                .contentType(contentType)
+                                                                .fileSize((long) originalBytes.length)
+                                                                .purpose(purpose != null ? purpose.toUpperCase() : "GENERAL")
+                                                                .altText(altText)
+                                                                .url(url)
+                                                                .thumbnailUrl(thumbnailUrl.isEmpty() ? null : thumbnailUrl)
+                                                                .uploaderId(uploaderId)
+                                                                .createdAt(LocalDateTime.now())
+                                                                .newRecord(true)
+                                                                .build();
+
+                                                        return mediaAssetRepository.save(asset);
+                                                    });
+                                        });
+                            });
                         }));
     }
 
     /**
-     * Delete a media asset by its ID.
+     * Delete a media asset by its ID, including any thumbnail variant.
      */
     public Mono<Void> delete(Long id) {
         return mediaAssetRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Media asset not found")))
-                .flatMap(asset ->
-                        storageProvider.delete(asset.getStorageKey())
-                                .then(mediaAssetRepository.delete(asset))
-                                .doOnSuccess(_ -> log.info("Media asset deleted: id={}, key={}", id, asset.getStorageKey()))
-                );
+                .flatMap(asset -> {
+                    Mono<Void> deleteOriginal = storageProvider.delete(asset.getStorageKey());
+                    Mono<Void> deleteThumb = Mono.empty();
+                    if (asset.getThumbnailUrl() != null && !asset.getThumbnailUrl().isEmpty()) {
+                        String thumbKey = deriveVariantKey(asset.getStorageKey(), "-thumb");
+                        deleteThumb = storageProvider.delete(thumbKey).onErrorResume(e -> Mono.empty());
+                    }
+                    return deleteOriginal.then(deleteThumb)
+                            .then(mediaAssetRepository.delete(asset))
+                            .doOnSuccess(_ -> log.info("Media asset deleted: id={}, key={}", id, asset.getStorageKey()));
+                });
     }
 
     /**
@@ -270,5 +311,29 @@ public class MediaService {
     private MediaAsset markExisting(MediaAsset asset) {
         asset.setNewRecord(false);
         return asset;
+    }
+
+    /**
+     * Fire-and-forget upload for non-critical variants (medium, large).
+     */
+    private void storeVariantAsync(ImageProcessingService.ImageVariant variant,
+                                   String key, String contentType) {
+        if (variant != null) {
+            storageProvider.store(key, variant.data(), contentType)
+                    .doOnError(e -> log.warn("Failed to store variant {}: {}", key, e.getMessage()))
+                    .subscribe();
+        }
+    }
+
+    /**
+     * Derive a variant storage key by inserting a suffix before the file extension.
+     * e.g., "2026/01/abc.jpg" + "-thumb" → "2026/01/abc-thumb.jpg"
+     */
+    private String deriveVariantKey(String storageKey, String suffix) {
+        int dotIndex = storageKey.lastIndexOf('.');
+        if (dotIndex > 0) {
+            return storageKey.substring(0, dotIndex) + suffix + storageKey.substring(dotIndex);
+        }
+        return storageKey + suffix;
     }
 }
