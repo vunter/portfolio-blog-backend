@@ -52,6 +52,9 @@ class UserServiceTest {
     @Mock
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    @Mock
+    private EmailChangeService emailChangeService;
+
     @InjectMocks
     private UserService userService;
 
@@ -424,9 +427,10 @@ class UserServiceTest {
     @DisplayName("Should update profile - email change with conflict")
     void shouldRejectProfileEmailConflict() {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
+        when(passwordEncoder.matches("correctpass", "hashedPassword")).thenReturn(true);
         when(userRepository.existsByEmail("taken@example.com")).thenReturn(Mono.just(true));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "taken@example.com", null, null, null, null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "taken@example.com", null, null, null, "correctpass", null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .expectErrorMatches(e -> e instanceof org.springframework.web.server.ResponseStatusException
@@ -604,9 +608,11 @@ class UserServiceTest {
     @DisplayName("Should update profile with username and bio")
     void shouldUpdateProfileUsernameAndBio() {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
+        when(passwordEncoder.matches("correctpass", "hashedPassword")).thenReturn(true);
+        when(userRepository.existsByUsername("newusername")).thenReturn(Mono.just(false));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, "newusername", null, "My bio", null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, "newusername", null, "My bio", "correctpass", null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .assertNext(r -> assertThat(r).isNotNull())
@@ -617,13 +623,15 @@ class UserServiceTest {
     @DisplayName("Should update profile - email change success")
     void shouldUpdateProfileEmailSuccess() {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
+        when(passwordEncoder.matches("correctpass", "hashedPassword")).thenReturn(true);
         when(userRepository.existsByEmail("newemail@example.com")).thenReturn(Mono.just(false));
+        when(emailChangeService.initiateEmailChange(testUserId, "newemail@example.com", "Test User")).thenReturn(Mono.empty());
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "newemail@example.com", null, null, null, null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "newemail@example.com", null, null, null, "correctpass", null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
-                .assertNext(r -> assertThat(r.getEmail()).isEqualTo("newemail@example.com"))
+                .assertNext(r -> assertThat(r.getEmail()).isEqualTo("test@example.com"))
                 .verifyComplete();
     }
 

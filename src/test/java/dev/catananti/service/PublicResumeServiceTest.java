@@ -113,6 +113,7 @@ class PublicResumeServiceTest {
         void templateNotFound_returnsError() {
             when(resumeTemplateRepository.findByAlias("missing")).thenReturn(Mono.empty());
             when(resumeTemplateRepository.findBySlug("missing")).thenReturn(Mono.empty());
+            when(userRepository.findByUsername("missing")).thenReturn(Mono.empty());
 
             StepVerifier.create(publicResumeService.generateResumePdf("missing", "en"))
                     .expectError(ResourceNotFoundException.class)
@@ -157,6 +158,7 @@ class PublicResumeServiceTest {
         void templateNotFound_returns404() {
             when(resumeTemplateRepository.findByAlias("unknown")).thenReturn(Mono.empty());
             when(resumeTemplateRepository.findBySlug("unknown")).thenReturn(Mono.empty());
+            when(userRepository.findByUsername("unknown")).thenReturn(Mono.empty());
 
             StepVerifier.create(publicResumeService.getResumeHtml("unknown", "en"))
                     .expectError(ResourceNotFoundException.class)
@@ -234,6 +236,7 @@ class PublicResumeServiceTest {
         void notFound_returnsError() {
             when(resumeTemplateRepository.findByAlias("nonexistent")).thenReturn(Mono.empty());
             when(resumeTemplateRepository.findBySlug("nonexistent")).thenReturn(Mono.empty());
+            when(userRepository.findByUsername("nonexistent")).thenReturn(Mono.empty());
 
             StepVerifier.create(publicResumeService.getProfileByAlias("nonexistent", "en"))
                     .expectError(ResourceNotFoundException.class)
