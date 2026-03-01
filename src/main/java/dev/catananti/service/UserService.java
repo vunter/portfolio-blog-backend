@@ -167,13 +167,9 @@ public class UserService {
             .flatMap(user -> {
                 boolean changed = false;
 
+                // Simple field updates (no password required)
                 if (request.name() != null && !request.name().isBlank()) {
                     user.setName(htmlSanitizerService.stripHtml(request.name()));
-                    changed = true;
-                }
-
-                if (request.username() != null) {
-                    user.setUsername(htmlSanitizerService.stripHtml(request.username()));
                     changed = true;
                 }
 
@@ -195,41 +191,75 @@ public class UserService {
                     changed = true;
                 }
 
-                // Email change
-                if (request.email() != null && !request.email().isBlank()
-                    && !request.email().equalsIgnoreCase(user.getEmail())) {
-                    String newEmail = request.email().toLowerCase().trim();
-                    return userRepository.existsByEmail(newEmail)
-                        .flatMap(exists -> {
-                            if (exists) {
-                                return Mono.error(new ResponseStatusException(HttpStatus.CONFLICT, "error.email_in_use"));
-                            }
-                            user.setEmail(newEmail);
-                            user.setUpdatedAt(LocalDateTime.now());
-                            return userRepository.save(user).map(UserResponse::fromEntity);
-                        });
-                }
+                // Detect sensitive changes requiring password confirmation
+                boolean emailChanging = request.email() != null && !request.email().isBlank()
+                        && !request.email().equalsIgnoreCase(user.getEmail());
+                String sanitizedUsername = request.username() != null
+                        ? htmlSanitizerService.stripHtml(request.username()) : null;
+                boolean usernameChanging = sanitizedUsername != null
+                        && !sanitizedUsername.equals(user.getUsername() != null ? user.getUsername() : "");
+                boolean passwordChanging = request.newPassword() != null && !request.newPassword().isBlank();
+                boolean needsPasswordValidation = emailChanging || usernameChanging || passwordChanging;
 
-                // Password change — offload BCrypt to boundedElastic (F-233)
-                if (request.newPassword() != null && !request.newPassword().isBlank()) {
+                if (needsPasswordValidation) {
                     if (request.currentPassword() == null || request.currentPassword().isBlank()) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.current_password_required"));
                     }
-                    final boolean finalChanged = changed;
+
                     return Mono.fromCallable(() -> passwordEncoder.matches(request.currentPassword(), user.getPasswordHash()))
                             .subscribeOn(Schedulers.boundedElastic())
                             .flatMap(matches -> {
                                 if (!matches) {
-                                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.current_password_incorrect"));
+                                    return Mono.<UserResponse>error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.current_password_incorrect"));
                                 }
-                                return Mono.fromCallable(() -> passwordEncoder.encode(request.newPassword()))
-                                        .subscribeOn(Schedulers.boundedElastic());
-                            })
-                            .flatMap(encoded -> {
-                                user.setPasswordHash(encoded);
-                                user.setUpdatedAt(LocalDateTime.now());
-                                return userRepository.save(user).map(UserResponse::fromEntity);
+
+                                // Username uniqueness check
+                                Mono<Void> usernameCheck = Mono.empty();
+                                if (usernameChanging) {
+                                    usernameCheck = userRepository.existsByUsername(sanitizedUsername)
+                                        .flatMap(exists -> {
+                                            if (exists && !sanitizedUsername.equalsIgnoreCase(user.getUsername())) {
+                                                return Mono.<Void>error(new ResponseStatusException(HttpStatus.CONFLICT, "error.username_in_use"));
+                                            }
+                                            user.setUsername(sanitizedUsername);
+                                            return Mono.<Void>empty();
+                                        });
+                                }
+
+                                // Email uniqueness check
+                                Mono<Void> emailCheck = Mono.empty();
+                                if (emailChanging) {
+                                    String newEmail = request.email().toLowerCase().trim();
+                                    emailCheck = userRepository.existsByEmail(newEmail)
+                                        .flatMap(exists -> {
+                                            if (exists) {
+                                                return Mono.<Void>error(new ResponseStatusException(HttpStatus.CONFLICT, "error.email_in_use"));
+                                            }
+                                            user.setEmail(newEmail);
+                                            return Mono.<Void>empty();
+                                        });
+                                }
+
+                                // Password encoding
+                                Mono<Void> passwordUpdate = Mono.empty();
+                                if (passwordChanging) {
+                                    passwordUpdate = Mono.fromCallable(() -> passwordEncoder.encode(request.newPassword()))
+                                            .subscribeOn(Schedulers.boundedElastic())
+                                            .doOnNext(user::setPasswordHash)
+                                            .then();
+                                }
+
+                                return usernameCheck.then(emailCheck).then(passwordUpdate)
+                                        .then(Mono.defer(() -> {
+                                            user.setUpdatedAt(LocalDateTime.now());
+                                            return userRepository.save(user).map(UserResponse::fromEntity);
+                                        }));
                             });
+                }
+
+                // Username provided but unchanged — apply without password
+                if (sanitizedUsername != null && !usernameChanging) {
+                    user.setUsername(sanitizedUsername);
                 }
 
                 if (changed) {
