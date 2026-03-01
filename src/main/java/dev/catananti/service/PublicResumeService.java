@@ -110,14 +110,19 @@ public class PublicResumeService {
         String validLang = validateLocale(lang);
         String normalizedAlias = alias.toLowerCase();
         return resolveTemplate(normalizedAlias)
-                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Resume not found for alias: " + alias)))
                 .flatMap(template -> {
                     Long ownerId = template.getOwnerId();
                     if (ownerId == null) {
-                        return Mono.error(new ResourceNotFoundException("Resume template has no owner: " + alias));
+                        return Mono.<ResumeProfileResponse>error(new ResourceNotFoundException("Resume template has no owner: " + alias));
                     }
                     return resumeProfileService.getProfileByOwnerIdWithFallback(ownerId, validLang);
-                });
+                })
+                // Fallback: resolve by username if no template alias/slug matches
+                .switchIfEmpty(Mono.defer(() ->
+                    userRepository.findByUsername(normalizedAlias)
+                        .flatMap(user -> resumeProfileService.getProfileByOwnerIdWithFallback(user.getId(), validLang))
+                ))
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Resume not found for alias: " + alias)));
     }
 
     /**
@@ -203,6 +208,11 @@ public class PublicResumeService {
                                 return Mono.empty();
                             });
                 })
+                // Fallback: resolve by username if no template alias/slug matches
+                .switchIfEmpty(Mono.defer(() ->
+                    userRepository.findByUsername(normalizedAlias)
+                        .flatMap(user -> resumeProfileService.generateResumeHtml(user.getId(), lang))
+                ))
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Resume not found for alias: " + alias)));
     }
 
