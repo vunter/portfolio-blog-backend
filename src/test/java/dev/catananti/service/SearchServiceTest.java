@@ -7,6 +7,7 @@ import dev.catananti.entity.Article;
 import dev.catananti.entity.User;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
+import dev.catananti.repository.SearchQueryRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +52,9 @@ class SearchServiceTest {
     private R2dbcEntityTemplate r2dbcTemplate;
 
     @Mock
+    private SearchQueryRepository searchQueryRepository;
+
+    @Mock
     private DatabaseClient databaseClient;
 
     @Mock
@@ -75,6 +79,7 @@ class SearchServiceTest {
         lenient().when(executeSpec.map(any(BiFunction.class))).thenReturn(tagsFetchSpec);
         lenient().when(tagsFetchSpec.all()).thenReturn(Flux.empty());
         lenient().when(tagsFetchSpec.one()).thenReturn(Mono.empty());
+        lenient().when(searchQueryRepository.save(any())).thenReturn(Mono.empty());
 
         publishedArticle = Article.builder()
                 .id(1L)

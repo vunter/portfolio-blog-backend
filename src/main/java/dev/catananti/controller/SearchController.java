@@ -13,6 +13,7 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
@@ -41,7 +42,8 @@ public class SearchController {
             @RequestParam(defaultValue = "10") @Min(1) @Max(50) int size,
             @RequestParam(required = false) String locale,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
+            ServerHttpRequest httpRequest) {
         log.info("Search request: query='{}', page={}, size={}", q, page, size);
         log.info("[search-analytics] term='{}' tags={} sortBy={} page={}", q, tags, sortBy, page);
 
@@ -57,7 +59,7 @@ public class SearchController {
                 .dateTo(dateTo)
                 .build();
 
-        return searchService.searchArticles(request);
+        return searchService.searchArticles(request, httpRequest);
     }
 
     @GetMapping("/suggestions")

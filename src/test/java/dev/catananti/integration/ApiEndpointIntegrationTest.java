@@ -297,10 +297,10 @@ class ApiEndpointIntegrationTest {
         @DisplayName("GET /api/v1/search?q=java — returns search results (200)")
         void search_200() {
             var results = pageOf(List.of(buildArticle("java-guide", "Java Guide")));
-            when(searchService.searchArticles(any(SearchRequest.class)))
+            when(searchService.searchArticles(any(SearchRequest.class), any()))
                     .thenReturn(Mono.just(results));
 
-            StepVerifier.create(searchController.search("java", null, "date", "desc", 0, 10, null, null, null))
+            StepVerifier.create(searchController.search("java", null, "date", "desc", 0, 10, null, null, null, null))
                     .assertNext(page -> assertThat(page.getContent().get(0).getSlug()).isEqualTo("java-guide"))
                     .verifyComplete();
         }

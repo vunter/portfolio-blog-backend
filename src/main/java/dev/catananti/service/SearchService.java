@@ -5,15 +5,19 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.SearchRequest;
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleStatus;
+import dev.catananti.entity.SearchQuery;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
+import dev.catananti.repository.SearchQueryRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.util.DigestUtils;
+import dev.catananti.util.IpAddressExtractor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -41,6 +45,7 @@ public class SearchService {
     private final UserRepository userRepository;
     private final CommentRepository commentRepository;
     private final R2dbcEntityTemplate r2dbcTemplate;
+    private final SearchQueryRepository searchQueryRepository;
 
     @Value("${app.search.use-fts:false}")
     private boolean useFts;
@@ -62,6 +67,10 @@ public class SearchService {
     }
 
     public Mono<PageResponse<ArticleResponse>> searchArticles(SearchRequest request) {
+        return searchArticles(request, null);
+    }
+
+    public Mono<PageResponse<ArticleResponse>> searchArticles(SearchRequest request, ServerHttpRequest httpRequest) {
         String query = request.getQuery() != null ? request.getQuery().trim() : "";
         // F-291: Sanitize LIKE special characters to prevent wildcard injection
         String sanitizedQuery = DigestUtils.escapeLikePattern(query);
@@ -103,7 +112,12 @@ public class SearchService {
                             .toList();
                 })
                 .zipWith(countMono)
-                .map(tuple -> buildPageResponse(tuple.getT1(), tuple.getT2(), request.getPage(), request.getSize()));
+                .map(tuple -> buildPageResponse(tuple.getT1(), tuple.getT2(), request.getPage(), request.getSize()))
+                .doOnNext(pageResponse -> {
+                    if (!query.isEmpty()) {
+                        logSearchQuery(query, (int) pageResponse.getTotalElements(), httpRequest);
+                    }
+                });
     }
 
     private Flux<Article> searchByQueryAndTags(String query, List<String> tags, int limit, int offset, String sortBy,
@@ -441,6 +455,22 @@ public class SearchService {
 
     private PageResponse<ArticleResponse> buildPageResponse(List<ArticleResponse> content, Long total, int page, int size) {
         return PageResponse.of(content, page, size, total);
+    }
+
+    private void logSearchQuery(String query, int resultsCount, ServerHttpRequest httpRequest) {
+        String anonymizedIp = httpRequest != null
+                ? IpAddressExtractor.anonymizeIp(IpAddressExtractor.extractClientIp(httpRequest))
+                : null;
+        searchQueryRepository.save(SearchQuery.builder()
+                .queryText(query.trim().toLowerCase())
+                .resultsCount(resultsCount)
+                .userIp(anonymizedIp)
+                .createdAt(LocalDateTime.now())
+                .build())
+                .subscribe(
+                        saved -> log.debug("Search query logged: '{}' ({} results)", query, resultsCount),
+                        err -> log.warn("Failed to log search query: {}", err.getMessage())
+                );
     }
 
     public Flux<String> getSuggestions(String prefix) {

@@ -738,3 +738,17 @@ CREATE INDEX IF NOT EXISTS idx_articles_excerpt_trgm ON articles USING gin (exce
 CREATE INDEX IF NOT EXISTS idx_subscribers_email_trgm ON subscribers USING gin (email gin_trgm_ops);
 -- For resume_templates, LIKE search uses jsonb_each_text(name); index the default locale for partial coverage
 CREATE INDEX IF NOT EXISTS idx_resume_templates_name_en_trgm ON resume_templates USING gin ((name->>'en') gin_trgm_ops);
+
+-- ============================================
+-- Search Query Analytics
+-- ============================================
+CREATE TABLE IF NOT EXISTS search_queries (
+    id BIGSERIAL PRIMARY KEY,
+    query_text VARCHAR(500) NOT NULL,
+    results_count INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT,
+    user_ip VARCHAR(45),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_search_queries_created ON search_queries(created_at);
+CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text);

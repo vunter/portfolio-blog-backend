@@ -78,10 +78,10 @@ class SearchControllerTest {
                     .first(true).last(true)
                     .build();
 
-            when(searchService.searchArticles(any(SearchRequest.class)))
+            when(searchService.searchArticles(any(SearchRequest.class), any()))
                     .thenReturn(Mono.just(result));
 
-            StepVerifier.create(controller.search("java", null, "date", "desc", 0, 10, null, null, null))
+            StepVerifier.create(controller.search("java", null, "date", "desc", 0, 10, null, null, null, null))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                         assertThat(page.getContent().getFirst().getTitle()).contains("Java");
@@ -99,10 +99,10 @@ class SearchControllerTest {
                     .first(true).last(true)
                     .build();
 
-            when(searchService.searchArticles(any(SearchRequest.class)))
+            when(searchService.searchArticles(any(SearchRequest.class), any()))
                     .thenReturn(Mono.just(result));
 
-            StepVerifier.create(controller.search(null, List.of("spring-boot"), "date", "desc", 0, 10, null, null, null))
+            StepVerifier.create(controller.search(null, List.of("spring-boot"), "date", "desc", 0, 10, null, null, null, null))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                     })
@@ -118,10 +118,10 @@ class SearchControllerTest {
                     .first(true).last(true)
                     .build();
 
-            when(searchService.searchArticles(any(SearchRequest.class)))
+            when(searchService.searchArticles(any(SearchRequest.class), any()))
                     .thenReturn(Mono.just(empty));
 
-            StepVerifier.create(controller.search("xylophone-quantum", null, "date", "desc", 0, 10, null, null, null))
+            StepVerifier.create(controller.search("xylophone-quantum", null, "date", "desc", 0, 10, null, null, null, null))
                     .assertNext(page -> {
                         assertThat(page.getContent()).isEmpty();
                         assertThat(page.getTotalElements()).isZero();
@@ -138,10 +138,10 @@ class SearchControllerTest {
                     .first(false).last(true)
                     .build();
 
-            when(searchService.searchArticles(any(SearchRequest.class)))
+            when(searchService.searchArticles(any(SearchRequest.class), any()))
                     .thenReturn(Mono.just(result));
 
-            StepVerifier.create(controller.search("spring", null, "views", "asc", 2, 5, null, null, null))
+            StepVerifier.create(controller.search("spring", null, "views", "asc", 2, 5, null, null, null, null))
                     .assertNext(page -> {
                         assertThat(page.getPage()).isEqualTo(2);
                         assertThat(page.getSize()).isEqualTo(5);

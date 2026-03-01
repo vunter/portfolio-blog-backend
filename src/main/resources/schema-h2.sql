@@ -604,3 +604,17 @@ CREATE TABLE IF NOT EXISTS user_social_accounts (
 
 CREATE INDEX IF NOT EXISTS idx_user_social_accounts_user ON user_social_accounts(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_social_accounts_provider ON user_social_accounts(provider, provider_id);
+
+-- ============================================
+-- Search Query Analytics
+-- ============================================
+CREATE TABLE IF NOT EXISTS search_queries (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    query_text VARCHAR(500) NOT NULL,
+    results_count INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT,
+    user_ip VARCHAR(45),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_search_queries_created ON search_queries(created_at);
+CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text);

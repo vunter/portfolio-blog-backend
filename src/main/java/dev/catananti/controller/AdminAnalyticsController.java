@@ -11,12 +11,18 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/admin/analytics")
@@ -30,6 +36,7 @@ public class AdminAnalyticsController {
 
     private final AnalyticsService analyticsService;
     private final UserRepository userRepository;
+    private final DatabaseClient databaseClient;
 
     @GetMapping("/summary")
     @Operation(summary = "Get analytics summary", description = "Get analytics summary scoped by role")
@@ -55,6 +62,47 @@ public class AdminAnalyticsController {
             } else {
                 return analyticsService.getAnalyticsSummaryByAuthor(days, user.getId());
             }
+        });
+    }
+
+    @GetMapping("/search")
+    @Operation(summary = "Get search analytics", description = "Get search query analytics for the last 30 days")
+    public Mono<Map<String, Object>> getSearchAnalytics() {
+        log.debug("Fetching search analytics");
+        return Mono.zip(
+                databaseClient.sql("SELECT COUNT(*) AS cnt FROM search_queries WHERE created_at > NOW() - INTERVAL '30' DAY")
+                        .map((row, meta) -> row.get("cnt", Long.class)).one().defaultIfEmpty(0L),
+                databaseClient.sql("SELECT COUNT(DISTINCT query_text) AS cnt FROM search_queries WHERE created_at > NOW() - INTERVAL '30' DAY")
+                        .map((row, meta) -> row.get("cnt", Long.class)).one().defaultIfEmpty(0L),
+                databaseClient.sql("""
+                        SELECT query_text, COUNT(*) AS cnt FROM search_queries
+                        WHERE created_at > NOW() - INTERVAL '30' DAY
+                        GROUP BY query_text ORDER BY cnt DESC LIMIT 10
+                        """)
+                        .map((row, meta) -> {
+                            Map<String, Object> entry = new LinkedHashMap<>();
+                            entry.put("queryText", row.get("query_text", String.class));
+                            entry.put("count", row.get("cnt", Long.class));
+                            return entry;
+                        }).all().collectList().defaultIfEmpty(new ArrayList<>()),
+                databaseClient.sql("""
+                        SELECT query_text, COUNT(*) AS cnt FROM search_queries
+                        WHERE results_count = 0 AND created_at > NOW() - INTERVAL '30' DAY
+                        GROUP BY query_text ORDER BY cnt DESC LIMIT 10
+                        """)
+                        .map((row, meta) -> {
+                            Map<String, Object> entry = new LinkedHashMap<>();
+                            entry.put("queryText", row.get("query_text", String.class));
+                            entry.put("count", row.get("cnt", Long.class));
+                            return entry;
+                        }).all().collectList().defaultIfEmpty(new ArrayList<>())
+        ).map(tuple -> {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("totalSearches", tuple.getT1());
+            result.put("uniqueSearches", tuple.getT2());
+            result.put("topSearches", tuple.getT3());
+            result.put("zeroResultSearches", tuple.getT4());
+            return result;
         });
     }
 
