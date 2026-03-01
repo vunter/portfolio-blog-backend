@@ -16,6 +16,12 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Query("SELECT COUNT(*) > 0 FROM users WHERE email = :email")
     Mono<Boolean> existsByEmail(String email);
 
+    @Query("SELECT * FROM users WHERE LOWER(username) = LOWER(:username)")
+    Mono<User> findByUsername(String username);
+
+    @Query("SELECT COUNT(*) > 0 FROM users WHERE LOWER(username) = LOWER(:username)")
+    Mono<Boolean> existsByUsername(String username);
+
     @Query("SELECT * FROM users WHERE role = :role")
     Flux<User> findByRole(String role);
 
