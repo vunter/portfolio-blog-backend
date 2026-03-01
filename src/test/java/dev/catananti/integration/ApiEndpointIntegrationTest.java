@@ -144,13 +144,16 @@ class ApiEndpointIntegrationTest {
         @Mock
         private InteractionDeduplicationService deduplicationService;
 
+        @Mock
+        private ReadingHistoryService readingHistoryService;
+
         private ArticleController articleController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
-            articleController = new ArticleController(articleService, java.util.Optional.of(deduplicationService));
+            articleController = new ArticleController(articleService, java.util.Optional.of(deduplicationService), readingHistoryService);
             client = WebTestClient.bindToController(articleController)
                     .configureClient().build();
         }

@@ -4,6 +4,7 @@ import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.InteractionDeduplicationService;
+import dev.catananti.service.ReadingHistoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,11 +40,14 @@ class ArticleControllerIntegrationTest {
     @Mock
     private InteractionDeduplicationService deduplicationService;
 
+    @Mock
+    private ReadingHistoryService readingHistoryService;
+
     private ArticleController articleController;
 
     @BeforeEach
     void setUp() {
-        articleController = new ArticleController(articleService, Optional.of(deduplicationService));
+        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService);
     }
 
     private ArticleResponse createTestArticle(String slug, String title) {

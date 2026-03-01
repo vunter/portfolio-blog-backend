@@ -765,3 +765,16 @@ CREATE TABLE IF NOT EXISTS article_reviews (
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);
+
+-- ============================================
+-- Reading History
+-- ============================================
+CREATE TABLE IF NOT EXISTS reading_history (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    last_read_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    read_count INTEGER NOT NULL DEFAULT 1,
+    CONSTRAINT uq_reading_history_user_article UNIQUE (user_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id, last_read_at DESC);

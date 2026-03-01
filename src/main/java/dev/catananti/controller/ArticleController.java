@@ -4,6 +4,7 @@ import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.InteractionDeduplicationService;
+import dev.catananti.service.ReadingHistoryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -16,6 +17,7 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
@@ -36,6 +38,7 @@ public class ArticleController {
     private final ArticleService articleService;
     // F-065: Using Optional<> with @RequiredArgsConstructor — Spring auto-wraps absent beans
     private final Optional<InteractionDeduplicationService> deduplicationService;
+    private final ReadingHistoryService readingHistoryService;
 
     @GetMapping
     @Operation(summary = "Get published articles", description = "Get paginated list of published articles")
@@ -82,12 +85,24 @@ public class ArticleController {
     @Operation(summary = "Record article view", description = "Increment the view count for an article (deduplicated per IP)")
     public Mono<Void> incrementViews(
             @PathVariable @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
+            @AuthenticationPrincipal String email,
             ServerHttpRequest request) {
         log.debug("View tracked for slug='{}'", slug);
-        return deduplicationService
+        Mono<Void> viewMono = deduplicationService
                 .map(svc -> svc.recordViewIfNew(slug, request)
                         .flatMap(isNew -> isNew ? articleService.incrementViews(slug) : Mono.<Void>empty()))
                 .orElseGet(() -> articleService.incrementViews(slug));
+
+        // Track reading history for authenticated users
+        if (email != null) {
+            Mono<Void> historyMono = readingHistoryService.recordReadingByEmailAndSlug(email, slug)
+                    .onErrorResume(e -> {
+                        log.warn("Failed to record reading history for slug='{}': {}", slug, e.getMessage());
+                        return Mono.empty();
+                    });
+            return viewMono.then(historyMono);
+        }
+        return viewMono;
     }
 
     @PostMapping("/{slug}/like")

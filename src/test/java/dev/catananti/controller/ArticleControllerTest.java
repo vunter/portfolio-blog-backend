@@ -5,6 +5,7 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.InteractionDeduplicationService;
+import dev.catananti.service.ReadingHistoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,9 @@ class ArticleControllerTest {
     private InteractionDeduplicationService deduplicationService;
     
     @Mock
+    private ReadingHistoryService readingHistoryService;
+    
+    @Mock
     private ServerHttpRequest mockRequest;
 
     // F-065: Manual construction needed since deduplicationService is Optional<>
@@ -44,7 +48,7 @@ class ArticleControllerTest {
 
     @BeforeEach
     void setUp() {
-        articleController = new ArticleController(articleService, Optional.of(deduplicationService));
+        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService);
     }
 
     @Test
@@ -136,7 +140,7 @@ class ArticleControllerTest {
                 .thenReturn(Mono.empty());
 
         // When & Then
-        StepVerifier.create(articleController.incrementViews("test-article", mockRequest))
+        StepVerifier.create(articleController.incrementViews("test-article", null, mockRequest))
                 .verifyComplete();
 
         verify(articleService).incrementViews("test-article");
