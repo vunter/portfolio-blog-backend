@@ -43,6 +43,9 @@ public class EmailChangeToken implements Persistable<Long>, NewRecordAware {
     @Column("new_email")
     private String newEmail;
 
+    @Column("old_email")
+    private String oldEmail;
+
     @Column("token")
     private String token;
 

@@ -223,4 +223,17 @@ public class AuthController {
                             "message", "Invalid or expired verification link")));
                 });
     }
+
+    @GetMapping("/revert-email-change")
+    public Mono<ResponseEntity<Map<String, String>>> revertEmailChange(@RequestParam String token) {
+        return emailChangeService.revertEmailChange(token)
+                .map(restoredEmail -> ResponseEntity.ok(Map.of(
+                        "message", "Email reverted successfully",
+                        "email", restoredEmail)))
+                .onErrorResume(e -> {
+                    log.warn("Email revert failed: {}", e.getMessage());
+                    return Mono.just(ResponseEntity.badRequest().body(Map.of(
+                            "message", "Invalid or expired revert link")));
+                });
+    }
 }

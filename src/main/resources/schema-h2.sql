@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS email_change_tokens (
     id BIGINT PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     new_email VARCHAR(255) NOT NULL,
+    old_email VARCHAR(255),
     token VARCHAR(255) NOT NULL,
     expires_at TIMESTAMP NOT NULL,
     used BOOLEAN DEFAULT FALSE,

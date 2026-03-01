@@ -663,13 +663,14 @@ public class EmailService {
     }
 
     /**
-     * Send notification to the OLD email address that the email was changed.
+     * Send notification to the OLD email address that the email was changed,
+     * including a revert link to undo the change.
      */
-    public Mono<Void> sendEmailChangedNotification(String oldEmail, String name, String newEmail) {
+    public Mono<Void> sendEmailChangedNotification(String oldEmail, String name, String newEmail, String revertUrl) {
         String subject = msg("email.email.changed.subject");
         String displayName = name != null ? name : msg("email.default.user");
 
-        String html = templateService.render("password-changed", baseVars(
+        String html = templateService.render("email-changed-with-revert", baseVars(
             "#f59e0b 0%, #d97706 100%",
             msg("email.email.changed.header"),
             Map.of(
@@ -678,11 +679,37 @@ public class EmailService {
                 "successBody", msg("email.email.changed.body", newEmail),
                 "warningTitle", msg("email.email.changed.warning.title"),
                 "warningBody", msg("email.email.changed.warning.body"),
-                "supportEmail", supportEmail
+                "revertUrl", revertUrl,
+                "revertButtonText", msg("email.email.changed.revert.button"),
+                "revertExpires", msg("email.email.changed.revert.expires"),
+                "fallbackText", msg("email.email.changed.revert.fallback")
             )
         ));
 
         return sendHtmlEmail(oldEmail, subject, html);
+    }
+
+    /**
+     * Send notification to the reverted-from email that the email was reverted.
+     */
+    public Mono<Void> sendEmailRevertedNotification(String revertedFromEmail, String name, String restoredEmail) {
+        String subject = msg("email.email.reverted.subject");
+        String displayName = name != null ? name : msg("email.default.user");
+
+        String html = templateService.render("password-changed", baseVars(
+            "#f59e0b 0%, #d97706 100%",
+            msg("email.email.reverted.header"),
+            Map.of(
+                "greeting", msg("email.greeting", displayName),
+                "successTitle", msg("email.email.reverted.title"),
+                "successBody", msg("email.email.reverted.body", restoredEmail),
+                "warningTitle", msg("email.email.changed.warning.title"),
+                "warningBody", msg("email.email.changed.warning.body"),
+                "supportEmail", supportEmail
+            )
+        ));
+
+        return sendHtmlEmail(revertedFromEmail, subject, html);
     }
 
     // ── Template helpers ──────────────────────────────────────────────────────

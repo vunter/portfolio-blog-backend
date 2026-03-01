@@ -33,6 +33,7 @@ public class EmailChangeService {
     private final AuditService auditService;
 
     private static final Duration TOKEN_VALIDITY = Duration.ofHours(1);
+    private static final Duration REVERT_TOKEN_VALIDITY = Duration.ofHours(48);
     private static final int MAX_TOKENS_PER_HOUR = 3;
     private static final int TOKEN_LENGTH = 32;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -117,10 +118,27 @@ public class EmailChangeService {
                                         user.setEmail(token.getNewEmail());
                                         user.setUpdatedAt(LocalDateTime.now());
 
+                                        // Create revert token (48h validity)
+                                        String revertPlainToken = generateSecureToken();
+                                        String revertHashedToken = DigestUtils.sha256Hex(revertPlainToken);
+                                        EmailChangeToken revertToken = EmailChangeToken.builder()
+                                                .id(idService.nextId())
+                                                .userId(user.getId())
+                                                .newEmail(oldEmail)
+                                                .oldEmail(token.getNewEmail())
+                                                .token(revertHashedToken)
+                                                .expiresAt(LocalDateTime.now().plus(REVERT_TOKEN_VALIDITY))
+                                                .used(false)
+                                                .createdAt(LocalDateTime.now())
+                                                .build();
+
+                                        String revertUrl = siteUrl + "/auth/revert-email-change?token=" + revertPlainToken;
+
                                         return userRepository.save(user)
                                                 .then(tokenRepository.markAsUsed(token.getId(), LocalDateTime.now()))
+                                                .then(tokenRepository.save(revertToken))
                                                 .then(auditService.logEmailChange(user.getId(), oldEmail, token.getNewEmail()))
-                                                .then(emailService.sendEmailChangedNotification(oldEmail, user.getName(), token.getNewEmail())
+                                                .then(emailService.sendEmailChangedNotification(oldEmail, user.getName(), token.getNewEmail(), revertUrl)
                                                         .onErrorResume(e -> {
                                                             log.warn("Failed to send email changed notification: {}", e.getMessage());
                                                             return Mono.empty();
@@ -134,5 +152,39 @@ public class EmailChangeService {
         byte[] bytes = new byte[TOKEN_LENGTH];
         SECURE_RANDOM.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /**
+     * Revert an email change using a revert token sent to the old email address.
+     * Only tokens with oldEmail set (revert tokens) are accepted.
+     */
+    @Transactional
+    public Mono<String> revertEmailChange(String plainToken) {
+        String hashedToken = DigestUtils.sha256Hex(plainToken);
+        return tokenRepository.findByTokenAndUsedFalse(hashedToken)
+                .filter(EmailChangeToken::isValid)
+                .filter(token -> token.getOldEmail() != null)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "error.invalid_or_expired_token")))
+                .flatMap(token -> userRepository.findById(token.getUserId())
+                        .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                "error.user_not_found")))
+                        .flatMap(user -> {
+                            String revertedFromEmail = user.getEmail();
+                            String restoredEmail = token.getNewEmail();
+
+                            user.setEmail(restoredEmail);
+                            user.setUpdatedAt(LocalDateTime.now());
+
+                            return userRepository.save(user)
+                                    .then(tokenRepository.markAsUsed(token.getId(), LocalDateTime.now()))
+                                    .then(auditService.logEmailRevert(user.getId(), revertedFromEmail, restoredEmail))
+                                    .then(emailService.sendEmailRevertedNotification(revertedFromEmail, user.getName(), restoredEmail)
+                                            .onErrorResume(e -> {
+                                                log.warn("Failed to send email reverted notification: {}", e.getMessage());
+                                                return Mono.empty();
+                                            }))
+                                    .thenReturn(restoredEmail);
+                        }));
     }
 }

@@ -32,7 +32,8 @@ public enum AuditEventType {
     DATA_EXPORT,
     DATA_IMPORT,
     SETTINGS_UPDATE,
-    EMAIL_CHANGE;
+    EMAIL_CHANGE,
+    EMAIL_REVERT;
 
     /**
      * Returns the action string used in audit log storage.
