@@ -245,6 +245,8 @@ public class AuthService {
                                 .orElse(Mono.just(false));
                         case "EMAIL" -> emailOtpService.map(svc -> svc.verifyOtp(userId, code))
                                 .orElse(Mono.just(false));
+                        case "BACKUP" -> mfaService.map(svc -> svc.verifyBackupCode(userId, code))
+                                .orElse(Mono.just(false));
                         default -> Mono.just(false);
                     };
                     return verifyMono.flatMap(valid -> {

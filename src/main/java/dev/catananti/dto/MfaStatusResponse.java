@@ -15,4 +15,6 @@ public class MfaStatusResponse {
     private boolean mfaEnabled;
     private List<String> methods;
     private String preferredMethod;
+    @Builder.Default
+    private long backupCodesRemaining = 0;
 }

@@ -694,6 +694,18 @@ CREATE TABLE IF NOT EXISTS user_mfa_config (
 CREATE INDEX IF NOT EXISTS idx_user_mfa_config_user ON user_mfa_config(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_mfa_config_method ON user_mfa_config(user_id, method);
 
+CREATE TABLE IF NOT EXISTS mfa_backup_codes (
+    id              BIGINT PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash       VARCHAR(128) NOT NULL,
+    used            BOOLEAN DEFAULT FALSE,
+    used_at         TIMESTAMP,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_mfa_backup_codes_user ON mfa_backup_codes(user_id);
+CREATE INDEX IF NOT EXISTS idx_mfa_backup_codes_unused ON mfa_backup_codes(user_id) WHERE NOT used;
+
 -- ============================================
 -- F-285: pg_trgm GIN indexes for LIKE queries
 -- ============================================

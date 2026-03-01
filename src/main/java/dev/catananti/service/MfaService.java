@@ -8,12 +8,15 @@ import com.google.zxing.qrcode.QRCodeWriter;
 import dev.catananti.dto.MfaSetupResponse;
 import dev.catananti.dto.MfaStatusResponse;
 import dev.catananti.entity.UserMfaConfig;
+import dev.catananti.entity.MfaBackupCode;
 import dev.catananti.repository.UserMfaConfigRepository;
+import dev.catananti.repository.MfaBackupCodeRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.security.AesEncryptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -23,9 +26,12 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
@@ -38,6 +44,7 @@ import java.util.List;
 public class MfaService {
 
     private final UserMfaConfigRepository mfaConfigRepository;
+    private final MfaBackupCodeRepository backupCodeRepository;
     private final UserRepository userRepository;
     private final AesEncryptor aesEncryptor;
     private final IdService idService;
@@ -45,8 +52,11 @@ public class MfaService {
     private final String issuer;
     private final int digits;
     private final int periodSeconds;
+    private static final int BACKUP_CODE_COUNT = 10;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     public MfaService(UserMfaConfigRepository mfaConfigRepository,
+                      MfaBackupCodeRepository backupCodeRepository,
                       UserRepository userRepository,
                       AesEncryptor aesEncryptor,
                       IdService idService,
@@ -54,6 +64,7 @@ public class MfaService {
                       @Value("${mfa.totp.digits:6}") int digits,
                       @Value("${mfa.totp.period-seconds:30}") int periodSeconds) {
         this.mfaConfigRepository = mfaConfigRepository;
+        this.backupCodeRepository = backupCodeRepository;
         this.userRepository = userRepository;
         this.aesEncryptor = aesEncryptor;
         this.idService = idService;
@@ -152,6 +163,7 @@ public class MfaService {
      */
     public Mono<Void> disableMfa(Long userId) {
         return mfaConfigRepository.deleteByUserId(userId)
+                .then(backupCodeRepository.deleteByUserId(userId))
                 .then(userRepository.findById(userId))
                 .flatMap(user -> {
                     user.setMfaEnabled(false);
@@ -173,17 +185,99 @@ public class MfaService {
                 .map(UserMfaConfig::getMethod)
                 .collectList()
                 .flatMap(methods ->
-                    userRepository.findById(userId)
-                            .map(user -> MfaStatusResponse.builder()
-                                    .mfaEnabled(Boolean.TRUE.equals(user.getMfaEnabled()))
-                                    .methods(methods)
-                                    .preferredMethod(user.getMfaPreferredMethod())
-                                    .build())
+                    Mono.zip(
+                        userRepository.findById(userId),
+                        backupCodeRepository.countByUserIdAndUsedFalse(userId).defaultIfEmpty(0L)
+                    ).map(tuple -> MfaStatusResponse.builder()
+                            .mfaEnabled(Boolean.TRUE.equals(tuple.getT1().getMfaEnabled()))
+                            .methods(methods)
+                            .preferredMethod(tuple.getT1().getMfaPreferredMethod())
+                            .backupCodesRemaining(tuple.getT2())
+                            .build())
                 )
                 .defaultIfEmpty(MfaStatusResponse.builder()
                         .mfaEnabled(false)
                         .methods(List.of())
                         .build());
+    }
+
+    // ==================== Backup Codes ====================
+
+    /**
+     * Generate a new set of backup codes for a user (replaces any existing ones).
+     * Returns the plain-text codes (shown once to the user).
+     */
+    public Mono<List<String>> generateBackupCodes(Long userId) {
+        return backupCodeRepository.deleteByUserId(userId)
+                .then(Mono.defer(() -> {
+                    List<String> plainCodes = new ArrayList<>();
+                    List<MfaBackupCode> entities = new ArrayList<>();
+                    LocalDateTime now = LocalDateTime.now();
+
+                    for (int i = 0; i < BACKUP_CODE_COUNT; i++) {
+                        String code = generateRandomCode();
+                        plainCodes.add(code);
+                        entities.add(MfaBackupCode.builder()
+                                .id(idService.nextId())
+                                .userId(userId)
+                                .codeHash(hashCode(code))
+                                .used(false)
+                                .createdAt(now)
+                                .build());
+                    }
+
+                    return Flux.fromIterable(entities)
+                            .flatMap(backupCodeRepository::save)
+                            .then(Mono.just(plainCodes));
+                }));
+    }
+
+    /**
+     * Verify a backup code during MFA login. Marks the code as used if valid.
+     */
+    public Mono<Boolean> verifyBackupCode(Long userId, String code) {
+        String hash = hashCode(code.trim().replace("-", "").replace(" ", ""));
+        return backupCodeRepository.findByUserIdAndUsedFalse(userId)
+                .filter(bc -> bc.getCodeHash().equals(hash))
+                .next()
+                .flatMap(bc -> {
+                    bc.setUsed(true);
+                    bc.setUsedAt(LocalDateTime.now());
+                    bc.setNewRecord(false);
+                    return backupCodeRepository.save(bc).thenReturn(true);
+                })
+                .defaultIfEmpty(false);
+    }
+
+    /**
+     * Get the count of remaining unused backup codes.
+     */
+    public Mono<Long> getRemainingBackupCodeCount(Long userId) {
+        return backupCodeRepository.countByUserIdAndUsedFalse(userId);
+    }
+
+    private static String generateRandomCode() {
+        // 8-digit alphanumeric code formatted as XXXX-XXXX
+        String chars = "abcdefghjkmnpqrstuvwxyz23456789";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            sb.append(chars.charAt(SECURE_RANDOM.nextInt(chars.length())));
+        }
+        return sb.substring(0, 4) + "-" + sb.substring(4, 8);
+    }
+
+    private static String hashCode(String code) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(code.toLowerCase().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to hash backup code", e);
+        }
     }
 
     // ==================== Private Helpers ====================

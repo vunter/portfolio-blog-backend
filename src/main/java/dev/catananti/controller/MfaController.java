@@ -119,6 +119,27 @@ public class MfaController {
                 .flatMap(mfaService::getStatus);
     }
 
+    /**
+     * Generate new backup codes (replaces existing ones).
+     */
+    @PostMapping("/backup-codes")
+    public Mono<ResponseEntity<Map<String, Object>>> generateBackupCodes(@AuthenticationPrincipal String email) {
+        log.info("Backup codes generation requested for user={}", email);
+        return resolveUserId(email)
+                .flatMap(mfaService::generateBackupCodes)
+                .map(codes -> ResponseEntity.ok(Map.<String, Object>of("codes", codes)));
+    }
+
+    /**
+     * Get remaining backup codes count.
+     */
+    @GetMapping("/backup-codes/count")
+    public Mono<Map<String, Long>> backupCodesCount(@AuthenticationPrincipal String email) {
+        return resolveUserId(email)
+                .flatMap(mfaService::getRemainingBackupCodeCount)
+                .map(count -> Map.of("remaining", count));
+    }
+
     private Mono<Long> resolveUserId(String email) {
         return userRepository.findByEmail(email)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
