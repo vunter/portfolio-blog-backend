@@ -4,6 +4,7 @@ import dev.catananti.dto.ArticleRequest;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleReview;
 import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.Tag;
 import dev.catananti.entity.User;
@@ -11,6 +12,7 @@ import dev.catananti.entity.UserRole;
 import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ArticleRepository;
+import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
@@ -41,6 +43,7 @@ public class ArticleAdminService {
     private static final int WORDS_PER_MINUTE = 200;
 
     private final ArticleRepository articleRepository;
+    private final ArticleReviewRepository articleReviewRepository;
     private final TagRepository tagRepository;
     private final R2dbcEntityTemplate r2dbcTemplate;
     private final SubscriberRepository subscriberRepository;
@@ -356,6 +359,99 @@ public class ArticleAdminService {
                         .doOnSuccess(v -> log.info("Article deleted: {} (slug={})", id, article.getSlug()))
                 )
                 .then();
+    }
+
+    // ==================== REVIEW WORKFLOW ====================
+
+    @Transactional
+    public Mono<ArticleResponse> submitForReview(Long id) {
+        return articleRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
+                .flatMap(article -> verifyOwnership(article).thenReturn(article))
+                .flatMap(article -> {
+                    if (!ArticleStatus.DRAFT.matches(article.getStatus())) {
+                        return Mono.error(new IllegalStateException("Only DRAFT articles can be submitted for review"));
+                    }
+                    article.setStatus(ArticleStatus.REVIEW.name());
+                    article.setUpdatedAt(LocalDateTime.now());
+                    return articleRepository.save(article);
+                })
+                .doOnSuccess(a -> {
+                    log.info("Article submitted for review: {}", a.getSlug());
+                    notificationEventService.articleSubmittedForReview(a.getTitle(), a.getSlug());
+                })
+                .flatMap(articleService::enrichArticleWithMetadata)
+                .map(articleService::mapToResponse);
+    }
+
+    @Transactional
+    public Mono<ArticleResponse> approveReview(Long id) {
+        return articleRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
+                .flatMap(article -> getCurrentUser().flatMap(user -> {
+                    if (!isAdmin(user)) {
+                        return Mono.error(new org.springframework.security.access.AccessDeniedException("Only admins can approve reviews"));
+                    }
+                    if (!ArticleStatus.REVIEW.matches(article.getStatus())) {
+                        return Mono.error(new IllegalStateException("Only articles in REVIEW status can be approved"));
+                    }
+                    article.setStatus(ArticleStatus.PUBLISHED.name());
+                    article.setPublishedAt(LocalDateTime.now());
+                    article.setUpdatedAt(LocalDateTime.now());
+
+                    ArticleReview review = ArticleReview.builder()
+                            .articleId(id)
+                            .reviewerId(user.getId())
+                            .status("APPROVED")
+                            .createdAt(LocalDateTime.now())
+                            .build();
+
+                    return articleRepository.save(article)
+                            .flatMap(saved -> articleReviewRepository.save(review).thenReturn(saved));
+                }))
+                .doOnSuccess(a -> {
+                    log.info("Article review approved: {}", a.getSlug());
+                    notificationEventService.articlePublished(a.getTitle(), a.getSlug());
+                })
+                .flatMap(article -> invalidateFeedCaches()
+                        .then(notifySubscribersAboutNewArticle(article))
+                        .thenReturn(article))
+                .flatMap(articleService::enrichArticleWithMetadata)
+                .map(articleService::mapToResponse);
+    }
+
+    @Transactional
+    public Mono<ArticleResponse> requestChanges(Long id, String feedback) {
+        return articleRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
+                .flatMap(article -> getCurrentUser().flatMap(user -> {
+                    if (!isAdmin(user)) {
+                        return Mono.error(new org.springframework.security.access.AccessDeniedException("Only admins can request changes"));
+                    }
+                    if (!ArticleStatus.REVIEW.matches(article.getStatus())) {
+                        return Mono.error(new IllegalStateException("Only articles in REVIEW status can have changes requested"));
+                    }
+                    article.setStatus(ArticleStatus.DRAFT.name());
+                    article.setUpdatedAt(LocalDateTime.now());
+
+                    ArticleReview review = ArticleReview.builder()
+                            .articleId(id)
+                            .reviewerId(user.getId())
+                            .status("CHANGES_REQUESTED")
+                            .feedback(feedback)
+                            .createdAt(LocalDateTime.now())
+                            .build();
+
+                    return articleRepository.save(article)
+                            .flatMap(saved -> articleReviewRepository.save(review).thenReturn(saved));
+                }))
+                .doOnSuccess(a -> log.info("Changes requested for article: {}", a.getSlug()))
+                .flatMap(articleService::enrichArticleWithMetadata)
+                .map(articleService::mapToResponse);
+    }
+
+    public Flux<ArticleReview> getReviewHistory(Long id) {
+        return articleReviewRepository.findByArticleIdOrderByCreatedAtDesc(id);
     }
 
     // ==================== PRIVATE HELPERS ====================

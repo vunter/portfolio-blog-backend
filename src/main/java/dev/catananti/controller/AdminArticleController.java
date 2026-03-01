@@ -5,6 +5,7 @@ import dev.catananti.dto.ArticleI18nResponse;
 import dev.catananti.dto.ArticleRequest;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
+import dev.catananti.entity.ArticleReview;
 import dev.catananti.service.ArticleAdminService;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.ArticleTranslationService;
@@ -19,9 +20,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @RestController
@@ -43,7 +46,7 @@ public class AdminArticleController {
     public Mono<PageResponse<ArticleResponse>> getAllArticles(
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size,
-            @RequestParam(required = false) @Pattern(regexp = "^(DRAFT|PUBLISHED|ARCHIVED|SCHEDULED)?$", message = "Invalid status") String status,
+            @RequestParam(required = false) @Pattern(regexp = "^(DRAFT|PUBLISHED|ARCHIVED|SCHEDULED|REVIEW)?$", message = "Invalid status") String status,
             @RequestParam(required = false) String search) {
         log.debug("Admin fetching articles: page={}, size={}, status={}", page, size, status);
         if (search != null && !search.isBlank()) {
@@ -104,6 +107,32 @@ public class AdminArticleController {
         log.info("Bulk status update: {} articles → {}", ids.size(), status);
         return articleAdminService.bulkUpdateStatus(ids, status)
                 .map(ResponseEntity::ok);
+    }
+
+    // ==================== REVIEW WORKFLOW ====================
+
+    @PostMapping("/{id}/submit-review")
+    public Mono<ArticleResponse> submitForReview(@PathVariable Long id) {
+        log.info("Submitting article id={} for review", id);
+        return articleAdminService.submitForReview(id);
+    }
+
+    @PostMapping("/{id}/approve-review")
+    public Mono<ArticleResponse> approveReview(@PathVariable Long id) {
+        log.info("Approving review for article id={}", id);
+        return articleAdminService.approveReview(id);
+    }
+
+    @PostMapping("/{id}/request-changes")
+    public Mono<ArticleResponse> requestChanges(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        String feedback = body.getOrDefault("feedback", "");
+        log.info("Requesting changes for article id={}", id);
+        return articleAdminService.requestChanges(id, feedback);
+    }
+
+    @GetMapping("/{id}/reviews")
+    public Flux<ArticleReview> getReviews(@PathVariable Long id) {
+        return articleAdminService.getReviewHistory(id);
     }
 
     // ==================== TRANSLATION ENDPOINTS ====================

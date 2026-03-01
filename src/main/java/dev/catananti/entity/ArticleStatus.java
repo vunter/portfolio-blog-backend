@@ -9,6 +9,7 @@ public enum ArticleStatus {
     DRAFT,
     PUBLISHED,
     SCHEDULED,
+    REVIEW,
     ARCHIVED;
 
     /**

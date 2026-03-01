@@ -752,3 +752,16 @@ CREATE TABLE IF NOT EXISTS search_queries (
 );
 CREATE INDEX IF NOT EXISTS idx_search_queries_created ON search_queries(created_at);
 CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text);
+
+-- ============================================
+-- Article Reviews (review workflow)
+-- ============================================
+CREATE TABLE IF NOT EXISTS article_reviews (
+    id BIGSERIAL PRIMARY KEY,
+    article_id BIGINT NOT NULL REFERENCES articles(id),
+    reviewer_id BIGINT REFERENCES users(id),
+    status VARCHAR(30) NOT NULL,
+    feedback TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);

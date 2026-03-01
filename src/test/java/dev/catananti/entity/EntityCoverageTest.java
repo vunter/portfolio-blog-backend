@@ -510,6 +510,7 @@ class EntityCoverageTest {
             assertThat(ArticleStatus.DRAFT.matches("DRAFT")).isTrue();
             assertThat(ArticleStatus.PUBLISHED.matches("PUBLISHED")).isTrue();
             assertThat(ArticleStatus.SCHEDULED.matches("SCHEDULED")).isTrue();
+            assertThat(ArticleStatus.REVIEW.matches("REVIEW")).isTrue();
             assertThat(ArticleStatus.ARCHIVED.matches("ARCHIVED")).isTrue();
         }
 
@@ -520,9 +521,9 @@ class EntityCoverageTest {
         }
 
         @Test
-        @DisplayName("Should have exactly 4 values")
+        @DisplayName("Should have exactly 5 values")
         void shouldHaveFourValues() {
-            assertThat(ArticleStatus.values()).hasSize(4);
+            assertThat(ArticleStatus.values()).hasSize(5);
         }
     }
 

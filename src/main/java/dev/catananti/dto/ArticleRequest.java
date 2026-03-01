@@ -41,7 +41,7 @@ public class ArticleRequest {
     @Pattern(regexp = "^(https?://.*)?$", message = "Cover image URL must be a valid HTTP(S) URL")
     private String coverImageUrl;
 
-    @Pattern(regexp = "^(DRAFT|PUBLISHED|SCHEDULED|ARCHIVED)?$", message = "Status must be DRAFT, PUBLISHED, SCHEDULED, or ARCHIVED")
+    @Pattern(regexp = "^(DRAFT|PUBLISHED|SCHEDULED|REVIEW|ARCHIVED)?$", message = "Status must be DRAFT, PUBLISHED, SCHEDULED, REVIEW, or ARCHIVED")
     private String status;
 
     private LocalDateTime scheduledAt;

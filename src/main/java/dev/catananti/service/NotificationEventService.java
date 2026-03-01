@@ -48,6 +48,10 @@ public class NotificationEventService {
         publish(NotificationType.ARTICLE.value(), "created", articleTitle, Map.of("slug", slug));
     }
 
+    public void articleSubmittedForReview(String articleTitle, String slug) {
+        publish(NotificationType.ARTICLE.value(), "submitted_for_review", articleTitle, Map.of("slug", slug));
+    }
+
     public void commentReceived(String articleSlug, String authorName) {
         publish(NotificationType.COMMENT.value(), "created", "New comment on " + articleSlug, Map.of("articleSlug", articleSlug, "author", authorName));
     }
