@@ -82,9 +82,12 @@ public class EmailChangeService {
 
                     return tokenRepository.save(token)
                             .flatMap(saved -> emailService.sendEmailChangeVerification(
-                                    newEmail, userName, plainToken))
-                            .doOnSuccess(v -> log.info("Email change verification sent to: {} for userId: {}", newEmail, userId))
-                            .doOnError(e -> log.error("Failed to initiate email change for userId {}: {}", userId, e.getMessage()));
+                                    newEmail, userName, plainToken)
+                                    .doOnSuccess(v -> log.info("Email change verification sent to: {} for userId: {}", newEmail, userId))
+                                    .onErrorResume(e -> {
+                                        log.warn("Email send failed for email change (userId: {}), token saved for retry: {}", userId, e.getMessage());
+                                        return Mono.empty();
+                                    }));
                 });
     }
 
