@@ -67,6 +67,7 @@ public class SecurityConfig {
             "/api/v1/admin/auth/reset-password/validate",
             "/api/v1/admin/auth/verify-email-change",
             "/api/v1/admin/auth/revert-email-change",
+            "/api/v1/admin/auth/oauth2/providers",
             "/api/v1/admin/mfa/verify",
             "/api/v1/admin/mfa/send-email-otp"
     );
@@ -156,6 +157,8 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/status/**").permitAll()
                         // F-016: Uses PUBLIC_AUTH_PATHS constant shared with CSRF exemption
                         .pathMatchers(PUBLIC_AUTH_PATHS.toArray(new String[0])).permitAll()
+                        .pathMatchers("/api/v1/admin/auth/oauth2/authorize/**").permitAll()
+                        .pathMatchers("/api/v1/admin/auth/oauth2/callback/**").permitAll()
                         .pathMatchers("/api", "/api/v1", "/api/health").permitAll()
                         // Public resume endpoints
                         .pathMatchers("/api/v1/resume/css/**").permitAll()

@@ -588,3 +588,18 @@ CREATE TABLE IF NOT EXISTS mfa_backup_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mfa_backup_codes_user ON mfa_backup_codes(user_id);
+
+CREATE TABLE IF NOT EXISTS user_social_accounts (
+    id              BIGINT PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider        VARCHAR(20) NOT NULL,
+    provider_id     VARCHAR(255) NOT NULL,
+    provider_email  VARCHAR(255),
+    display_name    VARCHAR(255),
+    avatar_url      VARCHAR(1000),
+    linked_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(provider, provider_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_social_accounts_user ON user_social_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_social_accounts_provider ON user_social_accounts(provider, provider_id);
