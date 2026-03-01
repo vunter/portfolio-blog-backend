@@ -5,6 +5,7 @@ import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.stereotype.Repository;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
@@ -19,6 +20,13 @@ public interface RefreshTokenRepository extends ReactiveCrudRepository<RefreshTo
     @Modifying
     @Query("UPDATE refresh_tokens SET revoked = true WHERE user_id = :userId")
     Mono<Void> revokeAllByUserId(Long userId);
+
+    @Modifying
+    @Query("UPDATE refresh_tokens SET revoked = true WHERE user_id = :userId AND token != :currentToken")
+    Mono<Void> revokeAllByUserIdExcept(Long userId, String currentToken);
+
+    @Query("SELECT * FROM refresh_tokens WHERE user_id = :userId AND revoked = false AND expires_at > NOW() ORDER BY created_at DESC")
+    Flux<RefreshToken> findActiveByUserId(Long userId);
 
     @Modifying
     @Query("DELETE FROM refresh_tokens WHERE expires_at < :now")

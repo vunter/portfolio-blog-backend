@@ -122,7 +122,11 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     token VARCHAR(255) UNIQUE NOT NULL,
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    revoked BOOLEAN DEFAULT FALSE
+    revoked BOOLEAN DEFAULT FALSE,
+    ip_address VARCHAR(45),
+    user_agent VARCHAR(500),
+    device_name VARCHAR(100),
+    last_used_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);

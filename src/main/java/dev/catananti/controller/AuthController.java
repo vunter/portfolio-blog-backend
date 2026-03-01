@@ -6,6 +6,8 @@ import dev.catananti.dto.RegisterRequest;
 import dev.catananti.dto.TokenResponse;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.RecaptchaService;
+import dev.catananti.service.RefreshTokenService;
+import dev.catananti.repository.UserRepository;
 import dev.catananti.util.IpAddressExtractor;
 import dev.catananti.service.EmailChangeService;
 import jakarta.validation.Valid;
@@ -35,6 +37,8 @@ public class AuthController {
     private final AuthService authService;
     private final RecaptchaService recaptchaService;
     private final EmailChangeService emailChangeService;
+    private final RefreshTokenService refreshTokenService;
+    private final UserRepository userRepository;
 
     @Value("${jwt.expiration:86400000}")
     private long jwtExpirationMs;
@@ -69,8 +73,9 @@ public class AuthController {
                                         ServerHttpResponse httpResponse) {
         log.info("Login V2 attempt for user='{}' from ip={}", request.getEmail(), IpAddressExtractor.extractClientIp(httpRequest));
         String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
+        String userAgent = httpRequest.getHeaders().getFirst("User-Agent");
         return recaptchaService.verify(request.getRecaptchaToken(), "login")
-                .then(authService.loginWithRefreshToken(request, clientIp))
+                .then(authService.loginWithRefreshToken(request, clientIp, userAgent))
                 .doOnNext(response -> {
                     addAccessTokenCookie(httpResponse, response.getAccessToken());
                     addRefreshTokenCookie(httpResponse, response.getRefreshToken(), Boolean.TRUE.equals(request.getRememberMe()));
@@ -98,12 +103,13 @@ public class AuthController {
     public Mono<TokenResponse> refreshToken(ServerHttpRequest httpRequest,
                                              ServerHttpResponse httpResponse) {
         log.info("Token refresh requested");
-        // F-074: Fully reactive — no blocking null check before reactive chain
+        String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
+        String userAgent = httpRequest.getHeaders().getFirst("User-Agent");
         return Mono.justOrEmpty(httpRequest.getCookies().getFirst(REFRESH_TOKEN_COOKIE))
                 .map(HttpCookie::getValue)
                 .filter(StringUtils::hasText)
                 .switchIfEmpty(Mono.error(new IllegalArgumentException("Refresh token is required")))
-                .flatMap(refreshToken -> authService.refreshAccessToken(refreshToken)
+                .flatMap(refreshToken -> authService.refreshAccessToken(refreshToken, clientIp, userAgent)
                         .doOnNext(response -> {
                             addAccessTokenCookie(httpResponse, response.getAccessToken());
                             addRefreshTokenCookie(httpResponse, response.getRefreshToken(), true);
@@ -235,5 +241,46 @@ public class AuthController {
                     return Mono.just(ResponseEntity.badRequest().body(Map.of(
                             "message", "Invalid or expired revert link")));
                 });
+    }
+
+    @GetMapping("/sessions")
+    public Mono<ResponseEntity<java.util.List<Map<String, Object>>>> getActiveSessions(
+            @AuthenticationPrincipal String email) {
+        return userRepository.findByEmail(email)
+                .flatMapMany(user -> refreshTokenService.getActiveSessions(user.getId()))
+                .map(session -> {
+                    Map<String, Object> dto = new java.util.LinkedHashMap<>();
+                    dto.put("id", session.getId());
+                    dto.put("deviceName", session.getDeviceName());
+                    dto.put("ipAddress", session.getIpAddress());
+                    dto.put("createdAt", session.getCreatedAt());
+                    dto.put("lastUsedAt", session.getLastUsedAt());
+                    dto.put("expiresAt", session.getExpiresAt());
+                    return dto;
+                })
+                .collectList()
+                .map(ResponseEntity::ok);
+    }
+
+    @DeleteMapping("/sessions/{sessionId}")
+    public Mono<ResponseEntity<Void>> revokeSession(
+            @PathVariable Long sessionId,
+            @AuthenticationPrincipal String email) {
+        return userRepository.findByEmail(email)
+                .flatMap(user -> refreshTokenService.revokeTokenById(sessionId, user.getId()))
+                .then(Mono.just(ResponseEntity.noContent().<Void>build()));
+    }
+
+    @DeleteMapping("/sessions")
+    public Mono<ResponseEntity<Void>> revokeAllOtherSessions(
+            @AuthenticationPrincipal String email,
+            ServerHttpRequest httpRequest) {
+        String currentRefreshToken = extractRefreshTokenFromCookie(httpRequest);
+        if (currentRefreshToken == null) {
+            return Mono.just(ResponseEntity.badRequest().build());
+        }
+        return userRepository.findByEmail(email)
+                .flatMap(user -> refreshTokenService.revokeAllExceptCurrent(user.getId(), currentRefreshToken))
+                .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 }

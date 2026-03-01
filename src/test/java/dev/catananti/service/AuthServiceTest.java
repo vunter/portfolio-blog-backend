@@ -253,9 +253,9 @@ class AuthServiceTest {
         when(passwordEncoder.matches("password123", testUser.getPasswordHash())).thenReturn(true);
         when(loginAttemptService.clearFailedAttempts("test@example.com")).thenReturn(Mono.empty());
         when(tokenProvider.generateToken("test@example.com", "ADMIN")).thenReturn("access-token");
-        when(refreshTokenService.createRefreshToken(testUser.getId())).thenReturn(Mono.just(refreshToken));
+        when(refreshTokenService.createRefreshToken(testUser.getId(), "127.0.0.1", "TestAgent")).thenReturn(Mono.just(refreshToken));
 
-        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1"))
+        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1", "TestAgent"))
                 .assertNext(resp -> {
                     assertThat(resp.getAccessToken()).isEqualTo("access-token");
                     assertThat(resp.getRefreshToken()).isEqualTo("refresh-tok");
@@ -272,7 +272,7 @@ class AuthServiceTest {
         when(loginAttemptService.isBlocked("test@example.com")).thenReturn(Mono.just(true));
         when(loginAttemptService.getRemainingLockoutTime("test@example.com")).thenReturn(Mono.just(120000L));
 
-        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1"))
+        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1", null))
                 .expectError(AccountLockedException.class)
                 .verify();
     }
@@ -287,7 +287,7 @@ class AuthServiceTest {
         when(loginAttemptService.recordFailedAttempt(eq("test@example.com"), anyString())).thenReturn(Mono.just(1));
         when(loginAttemptService.getRemainingAttempts("test@example.com")).thenReturn(Mono.just(4));
 
-        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1"))
+        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1", null))
                 .expectError(BadCredentialsException.class)
                 .verify();
     }
@@ -300,7 +300,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail("ghost@example.com")).thenReturn(Mono.empty());
         when(loginAttemptService.recordFailedAttempt(eq("ghost@example.com"), anyString())).thenReturn(Mono.just(1));
 
-        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1"))
+        StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1", null))
                 .expectError(BadCredentialsException.class)
                 .verify();
     }
@@ -311,11 +311,11 @@ class AuthServiceTest {
         RefreshToken newRefreshToken = RefreshToken.builder()
                 .id(2L).userId(testUser.getId()).token("new-refresh-tok").build();
 
-        when(refreshTokenService.verifyAndRotate("old-refresh-tok")).thenReturn(Mono.just(newRefreshToken));
+        when(refreshTokenService.verifyAndRotate("old-refresh-tok", null, null)).thenReturn(Mono.just(newRefreshToken));
         when(userRepository.findById(testUser.getId())).thenReturn(Mono.just(testUser));
         when(tokenProvider.generateToken("test@example.com", "ADMIN")).thenReturn("new-access-token");
 
-        StepVerifier.create(authService.refreshAccessToken("old-refresh-tok"))
+        StepVerifier.create(authService.refreshAccessToken("old-refresh-tok", null, null))
                 .assertNext(resp -> {
                     assertThat(resp.getAccessToken()).isEqualTo("new-access-token");
                     assertThat(resp.getRefreshToken()).isEqualTo("new-refresh-tok");
@@ -330,10 +330,10 @@ class AuthServiceTest {
         RefreshToken newRefreshToken = RefreshToken.builder()
                 .id(2L).userId(999L).token("tok").build();
 
-        when(refreshTokenService.verifyAndRotate("tok")).thenReturn(Mono.just(newRefreshToken));
+        when(refreshTokenService.verifyAndRotate("tok", null, null)).thenReturn(Mono.just(newRefreshToken));
         when(userRepository.findById(999L)).thenReturn(Mono.empty());
 
-        StepVerifier.create(authService.refreshAccessToken("tok"))
+        StepVerifier.create(authService.refreshAccessToken("tok", null, null))
                 .expectError(SecurityException.class)
                 .verify();
     }

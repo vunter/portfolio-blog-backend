@@ -376,7 +376,7 @@ class ApiEndpointIntegrationTest {
                     .email("admin@test.com")
                     .name("Admin")
                     .build();
-            when(authService.loginWithRefreshToken(any(LoginRequest.class), anyString()))
+            when(authService.loginWithRefreshToken(any(LoginRequest.class), anyString(), any()))
                     .thenReturn(Mono.just(resp));
 
             // When & Then
@@ -421,7 +421,7 @@ class ApiEndpointIntegrationTest {
                     .email("admin@test.com")
                     .name("Admin")
                     .build();
-            when(authService.refreshAccessToken("old-refresh"))
+            when(authService.refreshAccessToken(eq("old-refresh"), anyString(), any()))
                     .thenReturn(Mono.just(resp));
 
             // When & Then — refresh token is read from cookie now

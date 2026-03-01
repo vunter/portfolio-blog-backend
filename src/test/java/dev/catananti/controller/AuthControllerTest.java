@@ -198,7 +198,7 @@ class AuthControllerTest {
                     .tokenType("Bearer")
                     .build();
 
-            when(authService.refreshAccessToken("old-refresh-token"))
+            when(authService.refreshAccessToken(eq("old-refresh-token"), anyString(), any()))
                     .thenReturn(Mono.just(response));
 
             // When & Then
@@ -210,7 +210,7 @@ class AuthControllerTest {
                     })
                     .verifyComplete();
 
-            verify(authService).refreshAccessToken("old-refresh-token");
+            verify(authService).refreshAccessToken(eq("old-refresh-token"), anyString(), any());
         }
     }
 

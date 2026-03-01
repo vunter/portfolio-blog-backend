@@ -163,7 +163,7 @@ public class AuthService {
                 });
     }
 
-    public Mono<TokenResponse> loginWithRefreshToken(LoginRequest request, String clientIp) {
+    public Mono<TokenResponse> loginWithRefreshToken(LoginRequest request, String clientIp, String userAgent) {
         String loginKey = request.getEmail().toLowerCase();
 
         return isBlocked(loginKey)
@@ -172,24 +172,23 @@ public class AuthService {
                         return getRemainingLockoutTime(loginKey)
                                 .flatMap(remaining -> Mono.error(new AccountLockedException(remaining / 60 + 1)));
                     }
-                    return performLoginWithRefreshToken(request, loginKey, clientIp);
+                    return performLoginWithRefreshToken(request, loginKey, clientIp, userAgent);
                 });
     }
 
-    private Mono<TokenResponse> performLoginWithRefreshToken(LoginRequest request, String loginKey, String clientIp) {
+    private Mono<TokenResponse> performLoginWithRefreshToken(LoginRequest request, String loginKey, String clientIp, String userAgent) {
         return verifyCredentials(loginKey, request.getPassword(), clientIp)
                 .flatMap(user -> {
-                    // Check if MFA is enabled for this user
                     if (Boolean.TRUE.equals(user.getMfaEnabled())) {
                         return issueMfaChallenge(user);
                     }
-                    return issueFullTokens(user, clientIp);
+                    return issueFullTokens(user, clientIp, userAgent);
                 });
     }
 
-    private Mono<TokenResponse> issueFullTokens(User user, String clientIp) {
+    private Mono<TokenResponse> issueFullTokens(User user, String clientIp, String userAgent) {
         String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
-        return refreshTokenService.createRefreshToken(user.getId())
+        return refreshTokenService.createRefreshToken(user.getId(), clientIp, userAgent)
                 .map(refreshToken -> {
                     log.debug("User logged in with refresh token: {} from IP: {}", user.getEmail(), clientIp);
                     return TokenResponse.builder()
@@ -256,7 +255,7 @@ public class AuthService {
                         return redisTemplate.delete(redisKey)
                                 .then(userRepository.findById(userId))
                                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
-                                .flatMap(user -> issueFullTokens(user, "mfa-verified"));
+                                .flatMap(user -> issueFullTokens(user, "mfa-verified", null));
                     });
                 });
     }
@@ -271,8 +270,8 @@ public class AuthService {
                 .map(Long::valueOf);
     }
 
-    public Mono<TokenResponse> refreshAccessToken(String refreshToken) {
-        return refreshTokenService.verifyAndRotate(refreshToken)
+    public Mono<TokenResponse> refreshAccessToken(String refreshToken, String clientIp, String userAgent) {
+        return refreshTokenService.verifyAndRotate(refreshToken, clientIp, userAgent)
                 .flatMap(newRefreshToken -> userRepository.findById(newRefreshToken.getUserId())
                         .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
                         .map(user -> {

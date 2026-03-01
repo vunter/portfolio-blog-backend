@@ -44,6 +44,18 @@ public class RefreshToken implements Persistable<Long>, NewRecordAware {
 
     private boolean revoked;
 
+    @Column("ip_address")
+    private String ipAddress;
+
+    @Column("user_agent")
+    private String userAgent;
+
+    @Column("device_name")
+    private String deviceName;
+
+    @Column("last_used_at")
+    private LocalDateTime lastUsedAt;
+
     public boolean isExpired() {
         return LocalDateTime.now().isAfter(expiresAt);
     }
