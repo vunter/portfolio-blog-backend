@@ -8,12 +8,16 @@ import dev.catananti.repository.UserSocialAccountRepository;
 import dev.catananti.security.JwtTokenProvider;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
 
@@ -27,6 +31,10 @@ public class OAuth2Service {
     private final JwtTokenProvider tokenProvider;
     private final IdService idService;
     private final WebClient webClient;
+    private final ReactiveStringRedisTemplate redisTemplate;
+
+    private static final String OAUTH2_STATE_PREFIX = "oauth2:state:";
+    private static final Duration STATE_TTL = Duration.ofMinutes(5);
 
     @Value("${oauth2.google.client-id:}")
     private String googleClientId;
@@ -45,12 +53,14 @@ public class OAuth2Service {
                          UserSocialAccountRepository socialAccountRepository,
                          RefreshTokenService refreshTokenService,
                          JwtTokenProvider tokenProvider,
-                         IdService idService) {
+                         IdService idService,
+                         ReactiveStringRedisTemplate redisTemplate) {
         this.userRepository = userRepository;
         this.socialAccountRepository = socialAccountRepository;
         this.refreshTokenService = refreshTokenService;
         this.tokenProvider = tokenProvider;
         this.idService = idService;
+        this.redisTemplate = redisTemplate;
         this.webClient = WebClient.builder().build();
     }
 
@@ -78,6 +88,27 @@ public class OAuth2Service {
                 + "&redirect_uri=" + redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/github"
                 + "&scope=user:email"
                 + "&state=" + state;
+    }
+
+    /**
+     * Store OAuth2 state in Redis with short TTL for CSRF protection.
+     */
+    public Mono<Boolean> storeState(String state) {
+        return redisTemplate.opsForValue()
+                .set(OAUTH2_STATE_PREFIX + state, "1", STATE_TTL);
+    }
+
+    /**
+     * Validate and consume OAuth2 state (one-time use).
+     */
+    public Mono<Boolean> validateAndConsumeState(String state) {
+        if (state == null || state.isBlank()) {
+            return Mono.just(false);
+        }
+        String key = OAUTH2_STATE_PREFIX + state;
+        return redisTemplate.opsForValue().get(key)
+                .flatMap(val -> redisTemplate.delete(key).thenReturn(true))
+                .defaultIfEmpty(false);
     }
 
     @SuppressWarnings("unchecked")
@@ -212,12 +243,14 @@ public class OAuth2Service {
                     }
                     return userRepository.findByEmail(email.toLowerCase())
                             .flatMap(existingUser -> {
-                                // Link the social account to the existing user
                                 return linkAccount(existingUser.getId(), provider, providerId, email, name, avatar)
                                         .then(issueTokens(existingUser, clientIp));
                             })
                             .switchIfEmpty(Mono.defer(() -> createSocialUser(provider, providerId, email, name, avatar, clientIp)));
-                }));
+                }))
+                .retryWhen(Retry.max(1)
+                        .filter(e -> e instanceof DataIntegrityViolationException)
+                        .doBeforeRetry(signal -> log.warn("Retrying findOrCreateUser after unique constraint violation")));
     }
 
     private Mono<TokenResponse> createSocialUser(String provider, String providerId,

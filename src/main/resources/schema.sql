@@ -758,8 +758,8 @@ CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text)
 -- ============================================
 CREATE TABLE IF NOT EXISTS article_reviews (
     id BIGSERIAL PRIMARY KEY,
-    article_id BIGINT NOT NULL REFERENCES articles(id),
-    reviewer_id BIGINT REFERENCES users(id),
+    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    reviewer_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
     status VARCHAR(30) NOT NULL,
     feedback TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()

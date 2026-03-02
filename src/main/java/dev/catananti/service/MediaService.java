@@ -320,8 +320,12 @@ public class MediaService {
                                    String key, String contentType) {
         if (variant != null) {
             storageProvider.store(key, variant.data(), contentType)
-                    .doOnError(e -> log.warn("Failed to store variant {}: {}", key, e.getMessage()))
-                    .subscribe();
+                    .doOnSuccess(url -> log.debug("Stored variant: {}", key))
+                    .doOnError(e -> log.error("Failed to store image variant {}: {}", key, e.getMessage(), e))
+                    .subscribe(
+                            url -> {},
+                            error -> log.error("Image variant storage error for {}: {}", key, error.getMessage())
+                    );
         }
     }
 

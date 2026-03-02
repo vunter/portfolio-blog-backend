@@ -48,40 +48,45 @@ public class OAuth2Controller {
             case "github" -> oAuth2Service.getGithubAuthUrl(state);
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider: " + provider);
         };
-        return Mono.just(ResponseEntity.status(HttpStatus.FOUND)
-                .location(URI.create(authUrl))
-                .build());
+        return oAuth2Service.storeState(state)
+                .thenReturn(ResponseEntity.status(HttpStatus.FOUND)
+                        .location(URI.create(authUrl))
+                        .<Void>build());
     }
 
     @GetMapping("/callback/{provider}")
     public Mono<ResponseEntity<Void>> callback(@PathVariable String provider,
                                                 @RequestParam String code,
-                                                @RequestParam(required = false) String state,
+                                                @RequestParam String state,
                                                 ServerHttpRequest httpRequest,
                                                 ServerHttpResponse httpResponse) {
-        String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
-        log.info("OAuth2 callback for provider={} from IP={}", provider, clientIp);
+        return oAuth2Service.validateAndConsumeState(state)
+                .flatMap(valid -> {
+                    if (!valid) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Invalid or expired OAuth2 state. Please try again."));
+                    }
+                    String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
+                    log.info("OAuth2 callback for provider={} from IP={}", provider, clientIp);
 
-        Mono<dev.catananti.dto.TokenResponse> callbackMono = switch (provider.toLowerCase()) {
-            case "google" -> oAuth2Service.handleGoogleCallback(code, clientIp);
-            case "github" -> oAuth2Service.handleGithubCallback(code, clientIp);
-            default -> Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider"));
-        };
+                    Mono<dev.catananti.dto.TokenResponse> callbackMono = switch (provider.toLowerCase()) {
+                        case "google" -> oAuth2Service.handleGoogleCallback(code, clientIp);
+                        case "github" -> oAuth2Service.handleGithubCallback(code, clientIp);
+                        default -> Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider"));
+                    };
 
-        return callbackMono.map(tokenResponse -> {
-            // Set cookies like normal login
-            httpResponse.addCookie(ResponseCookie.from("access_token", tokenResponse.getAccessToken())
-                    .httpOnly(true).secure(true).path("/").sameSite("Lax")
-                    .maxAge(tokenResponse.getExpiresIn()).build());
-            httpResponse.addCookie(ResponseCookie.from("refresh_token", tokenResponse.getRefreshToken())
-                    .httpOnly(true).secure(true).path("/api/v1/admin/auth")
-                    .sameSite("Lax").maxAge(7 * 24 * 3600).build());
-
-            // Redirect to frontend admin page
-            return ResponseEntity.status(HttpStatus.FOUND)
-                    .location(URI.create("/admin"))
-                    .<Void>build();
-        });
+                    return callbackMono.map(tokenResponse -> {
+                        httpResponse.addCookie(ResponseCookie.from("access_token", tokenResponse.getAccessToken())
+                                .httpOnly(true).secure(true).path("/").sameSite("Lax")
+                                .maxAge(tokenResponse.getExpiresIn()).build());
+                        httpResponse.addCookie(ResponseCookie.from("refresh_token", tokenResponse.getRefreshToken())
+                                .httpOnly(true).secure(true).path("/api/v1/admin/auth")
+                                .sameSite("Lax").maxAge(7 * 24 * 3600).build());
+                        return ResponseEntity.status(HttpStatus.FOUND)
+                                .location(URI.create("/admin"))
+                                .<Void>build();
+                    });
+                });
     }
 
     @GetMapping("/accounts")
