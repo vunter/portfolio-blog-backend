@@ -3,8 +3,10 @@ package dev.catananti.controller;
 import dev.catananti.dto.CommentRequest;
 import dev.catananti.dto.CommentResponse;
 import dev.catananti.dto.PageResponse;
+import dev.catananti.dto.UserResponse;
 import dev.catananti.service.CommentService;
 import dev.catananti.service.RecaptchaService;
+import dev.catananti.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -32,6 +34,9 @@ class CommentControllerTest {
 
     @Mock
     private RecaptchaService recaptchaService;
+
+    @Mock
+    private UserService userService;
 
     @InjectMocks
     private CommentController controller;
@@ -121,12 +126,20 @@ class CommentControllerTest {
                     .createdAt(LocalDateTime.now())
                     .build();
 
+            UserResponse user = UserResponse.builder()
+                    .name("John Doe")
+                    .username("johndoe")
+                    .email("john@example.com")
+                    .build();
+
+            when(userService.getUserByEmail("john@example.com"))
+                    .thenReturn(Mono.just(user));
             when(recaptchaService.verify("valid-token", "comment"))
                     .thenReturn(Mono.empty());
             when(commentService.createComment("spring-boot-guide", commentRequest))
                     .thenReturn(Mono.just(created));
 
-            StepVerifier.create(controller.createComment("spring-boot-guide", commentRequest))
+            StepVerifier.create(controller.createComment("spring-boot-guide", commentRequest, "john@example.com"))
                     .assertNext(result -> {
                         assertThat(result.getId()).isEqualTo("102");
                         assertThat(result.getStatus()).isEqualTo("PENDING");
@@ -134,6 +147,7 @@ class CommentControllerTest {
                     })
                     .verifyComplete();
 
+            verify(userService).getUserByEmail("john@example.com");
             verify(recaptchaService).verify("valid-token", "comment");
             verify(commentService).createComment("spring-boot-guide", commentRequest);
         }

@@ -149,7 +149,9 @@ public class SecurityConfig {
                 )
                 // Path matchers are grouped by access level (public, role-based, authenticated) — current structure is acceptable
                 .authorizeExchange(auth -> auth
-                        // Public article endpoints
+                        // Comments require authentication (any role)
+                        .pathMatchers(HttpMethod.POST, "/api/v1/articles/*/comments").authenticated()
+                        // Public article endpoints (reads)
                         .pathMatchers("/api/v1/articles/**").permitAll()
                         .pathMatchers("/api/v1/tags/**").permitAll()
                         .pathMatchers("/api/v1/search/**").permitAll()

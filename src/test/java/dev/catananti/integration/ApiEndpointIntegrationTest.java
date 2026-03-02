@@ -163,10 +163,10 @@ class ApiEndpointIntegrationTest {
         void listArticles_200() {
             var articles = List.of(buildArticle("first-post", "First Post"),
                     buildArticle("second-post", "Second Post"));
-            when(articleService.getPublishedArticles(eq(0), eq(10), any(), any(), any(), any()))
+            when(articleService.getPublishedArticles(eq(0), eq(10), any(), any(), any(), any(), any()))
                     .thenReturn(Mono.just(pageOf(articles)));
 
-            StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null))
+            StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null, null))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(2);
                         assertThat(page.getContent().get(0).getSlug()).isEqualTo("first-post");
@@ -772,6 +772,7 @@ class ApiEndpointIntegrationTest {
 
         @Mock private CommentService commentService;
         @Mock private RecaptchaService recaptchaService;
+        @Mock private UserService userService;
         @InjectMocks private CommentController commentController;
 
         private WebTestClient client;
@@ -805,17 +806,20 @@ class ApiEndpointIntegrationTest {
                     .content("Great article!")
                     .build();
             var response = buildComment("my-post", "New Commenter");
+            var user = UserResponse.builder()
+                    .name("New Commenter")
+                    .username("newcommer")
+                    .email("commenter@test.com")
+                    .build();
+            when(userService.getUserByEmail("commenter@test.com"))
+                    .thenReturn(Mono.just(user));
             when(commentService.createComment(eq("my-post"), any(CommentRequest.class)))
                     .thenReturn(Mono.just(response));
 
-            // When & Then
-            client.post().uri("/api/v1/articles/my-post/comments")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(request)
-                    .exchange()
-                    .expectStatus().isCreated()
-                    .expectBody()
-                    .jsonPath("$.authorName").isEqualTo("New Commenter");
+            // When & Then — call controller directly since auth is now required
+            StepVerifier.create(commentController.createComment("my-post", request, "commenter@test.com"))
+                    .assertNext(result -> assertThat(result.getAuthorName()).isEqualTo("New Commenter"))
+                    .verifyComplete();
         }
 
         @Test

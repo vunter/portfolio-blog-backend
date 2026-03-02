@@ -5,6 +5,7 @@ import dev.catananti.dto.CommentResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.CommentService;
 import dev.catananti.service.RecaptchaService;
+import dev.catananti.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -18,6 +19,7 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
@@ -32,6 +34,7 @@ public class CommentController {
 
     private final CommentService commentService;
     private final RecaptchaService recaptchaService;
+    private final UserService userService;
 
     @GetMapping
     @Operation(summary = "Get approved comments for article", description = "Returns paginated list of approved comments")
@@ -79,9 +82,15 @@ public class CommentController {
             @Size(min = 1, max = 200, message = "Slug must be 1-200 characters") 
             @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format")
             @Parameter(description = "Article slug") String slug,
-            @Valid @RequestBody CommentRequest request) {
-        log.info("Creating comment for slug={}", slug);
-        return recaptchaService.verify(request.getRecaptchaToken(), "comment")
-                .then(commentService.createComment(slug, request));
+            @Valid @RequestBody CommentRequest request,
+            @AuthenticationPrincipal String email) {
+        log.info("Creating comment for slug={} by user={}", slug, email);
+        return userService.getUserByEmail(email)
+                .flatMap(user -> {
+                    request.setAuthorName(user.getName() != null ? user.getName() : user.getUsername());
+                    request.setAuthorEmail(user.getEmail());
+                    return recaptchaService.verify(request.getRecaptchaToken(), "comment")
+                            .then(commentService.createComment(slug, request));
+                });
     }
 }
