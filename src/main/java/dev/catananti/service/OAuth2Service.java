@@ -13,6 +13,7 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
@@ -122,13 +123,11 @@ public class OAuth2Service {
     public Mono<TokenResponse> handleGoogleCallback(String code, String clientIp) {
         return webClient.post()
                 .uri("https://oauth2.googleapis.com/token")
-                .bodyValue(Map.of(
-                        "code", code,
-                        "client_id", googleClientId,
-                        "client_secret", googleClientSecret,
-                        "redirect_uri", redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/google",
-                        "grant_type", "authorization_code"
-                ))
+                .body(BodyInserters.fromFormData("code", code)
+                        .with("client_id", googleClientId)
+                        .with("client_secret", googleClientSecret)
+                        .with("redirect_uri", redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/google")
+                        .with("grant_type", "authorization_code"))
                 .retrieve()
                 .bodyToMono(Map.class)
                 .flatMap(tokenData -> {
@@ -163,11 +162,9 @@ public class OAuth2Service {
         return webClient.post()
                 .uri("https://github.com/login/oauth/access_token")
                 .header("Accept", "application/json")
-                .bodyValue(Map.of(
-                        "code", code,
-                        "client_id", githubClientId,
-                        "client_secret", githubClientSecret
-                ))
+                .body(BodyInserters.fromFormData("code", code)
+                        .with("client_id", githubClientId)
+                        .with("client_secret", githubClientSecret))
                 .retrieve()
                 .bodyToMono(Map.class)
                 .flatMap(tokenData -> {
