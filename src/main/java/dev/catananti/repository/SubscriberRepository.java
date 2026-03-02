@@ -20,9 +20,10 @@ public interface SubscriberRepository extends ReactiveCrudRepository<Subscriber,
 
     Mono<Subscriber> findByUnsubscribeToken(String token);
 
+    @Query("SELECT * FROM subscribers WHERE status = :status LIMIT 1000")
     Flux<Subscriber> findByStatus(String status);
 
-    @Query("SELECT * FROM subscribers WHERE status = 'CONFIRMED' ORDER BY created_at DESC")
+    @Query("SELECT * FROM subscribers WHERE status = 'CONFIRMED' ORDER BY created_at DESC LIMIT 1000")
     Flux<Subscriber> findAllConfirmed();
 
     @Query("SELECT * FROM subscribers ORDER BY created_at DESC LIMIT :limit OFFSET :offset")

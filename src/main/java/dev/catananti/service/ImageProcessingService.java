@@ -6,13 +6,19 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Image processing service that generates size variants and strips EXIF metadata.
@@ -46,6 +52,30 @@ public class ImageProcessingService {
         if ("webp".equals(format)) {
             variants.put("", new ImageVariant("", imageBytes, 0, 0));
             return variants;
+        }
+
+        // Check image dimensions before full decompression to prevent OOM
+        try (ImageInputStream iis = ImageIO.createImageInputStream(new ByteArrayInputStream(imageBytes))) {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
+            if (readers.hasNext()) {
+                ImageReader reader = readers.next();
+                try {
+                    reader.setInput(iis);
+                    int w = reader.getWidth(0);
+                    int h = reader.getHeight(0);
+                    long pixels = (long) w * h;
+                    if (pixels > 50_000_000) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Image dimensions too large: " + w + "x" + h);
+                    }
+                } finally {
+                    reader.dispose();
+                }
+            }
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (IOException e) {
+            log.warn("Failed to check image dimensions: {}", e.getMessage());
         }
 
         try {

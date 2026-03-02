@@ -22,7 +22,7 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Query("SELECT COUNT(*) > 0 FROM users WHERE LOWER(username) = LOWER(:username)")
     Mono<Boolean> existsByUsername(String username);
 
-    @Query("SELECT * FROM users WHERE role = :role")
+    @Query("SELECT * FROM users WHERE role = :role LIMIT 1000")
     Flux<User> findByRole(String role);
 
     @Query("SELECT * FROM users ORDER BY created_at DESC LIMIT :limit OFFSET :offset")

@@ -47,8 +47,20 @@ public class CommentService {
     public Flux<CommentResponse> getApprovedCommentsByArticleSlug(String slug) {
         return articleRepository.findBySlug(slug)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
-                .flatMapMany(article -> commentRepository.findApprovedByArticleId(article.getId()))
-                .flatMap(this::enrichWithReplies)
+                .flatMapMany(article -> commentRepository.findAllApprovedByArticleId(article.getId()))
+                .collectList()
+                .flatMapMany(allComments -> {
+                    // Build tree in memory to avoid N+1 queries
+                    var rootComments = allComments.stream()
+                            .filter(c -> c.getParentId() == null)
+                            .toList();
+                    var repliesByParentId = allComments.stream()
+                            .filter(c -> c.getParentId() != null)
+                            .collect(java.util.stream.Collectors.groupingBy(Comment::getParentId));
+                    rootComments.forEach(root -> root.setReplies(
+                            repliesByParentId.getOrDefault(root.getId(), Collections.emptyList())));
+                    return Flux.fromIterable(rootComments);
+                })
                 .map(this::toPublicResponse);
     }
 

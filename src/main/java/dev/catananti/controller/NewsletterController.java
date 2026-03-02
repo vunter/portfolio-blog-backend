@@ -46,7 +46,7 @@ public class NewsletterController {
     @Operation(summary = "Confirm subscription", description = "Confirm newsletter subscription with token")
     public Mono<Map<String, String>> confirmSubscription(
             @RequestParam @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(min = 10, max = 200) String token) {
-        log.info("Newsletter subscription confirmation: token={}", token);
+        log.debug("Newsletter subscription confirmation");
         return newsletterService.confirmSubscription(token)
                 .flatMap(this::localizeResult);
     }
@@ -55,7 +55,8 @@ public class NewsletterController {
     @Operation(summary = "Unsubscribe from newsletter", description = "Unsubscribe an email from the newsletter")
     public Mono<Map<String, String>> unsubscribe(
             @RequestParam @Email(message = "Invalid email format") String email) {
-        log.info("Newsletter unsubscription: email={}", email);
+        String masked = email.length() > 3 ? email.substring(0, 3) + "***" : "***";
+        log.debug("Newsletter unsubscription: email={}", masked);
         // Always return success to prevent email enumeration
         return newsletterService.unsubscribe(email)
                 .flatMap(this::localizeResult)
@@ -67,7 +68,7 @@ public class NewsletterController {
     @Operation(summary = "Unsubscribe by token", description = "Unsubscribe using a unique token from email")
     public Mono<Map<String, String>> unsubscribeByToken(
             @RequestParam @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(min = 10, max = 200) String token) {
-        log.info("Newsletter unsubscription by token: token={}", token);
+        log.debug("Newsletter unsubscription by token");
         return newsletterService.unsubscribeByToken(token)
                 .flatMap(this::localizeResult);
     }

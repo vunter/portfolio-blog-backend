@@ -10,8 +10,10 @@ import reactor.core.publisher.Mono;
 @Repository
 public interface MediaAssetRepository extends R2dbcRepository<MediaAsset, Long> {
 
+    @Query("SELECT * FROM media_assets WHERE uploader_id = :uploaderId ORDER BY created_at DESC LIMIT 1000")
     Flux<MediaAsset> findByUploaderIdOrderByCreatedAtDesc(Long uploaderId);
 
+    @Query("SELECT * FROM media_assets WHERE purpose = :purpose ORDER BY created_at DESC LIMIT 1000")
     Flux<MediaAsset> findByPurposeOrderByCreatedAtDesc(String purpose);
 
     @Query("SELECT * FROM media_assets WHERE uploader_id = :uploaderId ORDER BY created_at DESC LIMIT :limit OFFSET :offset")

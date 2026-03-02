@@ -1,7 +1,9 @@
 package dev.catananti.security;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Cipher;
@@ -9,6 +11,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Base64;
 
 /**
@@ -27,8 +30,10 @@ public class AesEncryptor {
 
     private final SecretKeySpec keySpec;
     private final SecureRandom secureRandom = new SecureRandom();
+    private final Environment environment;
 
-    public AesEncryptor(@Value("${mfa.encryption-key:}") String encryptionKey) {
+    public AesEncryptor(@Value("${mfa.encryption-key:}") String encryptionKey, Environment environment) {
+        this.environment = environment;
         if (encryptionKey == null || encryptionKey.isBlank()) {
             log.warn("MFA_ENCRYPTION_KEY not configured — MFA TOTP secrets will NOT be encrypted. " +
                      "Set MFA_ENCRYPTION_KEY (32-byte hex or Base64) in production.");
@@ -39,6 +44,17 @@ public class AesEncryptor {
                 throw new IllegalArgumentException("MFA_ENCRYPTION_KEY must be exactly 32 bytes (256 bits), got " + keyBytes.length);
             }
             this.keySpec = new SecretKeySpec(keyBytes, "AES");
+        }
+    }
+
+    @PostConstruct
+    public void validateConfiguration() {
+        if (keySpec == null) {
+            log.warn("⚠️ MFA encryption key not configured! TOTP secrets will be stored in PLAINTEXT.");
+            if (Arrays.stream(environment.getActiveProfiles())
+                    .anyMatch(p -> p.equals("prod") || p.equals("cloud"))) {
+                throw new IllegalStateException("MFA_ENCRYPTION_KEY is required in production");
+            }
         }
     }
 

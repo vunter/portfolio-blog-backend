@@ -368,14 +368,23 @@ class AuthServiceTest {
     }
 
     @Test
-    @DisplayName("Should reject registration when email already exists")
+    @DisplayName("Should return success and send email when email already exists (no enumeration)")
     void register_ShouldThrow_WhenEmailAlreadyRegistered() {
         RegisterRequest request = new RegisterRequest("User", "existing@example.com", "Password123!@", null);
         when(userRepository.existsByEmail("existing@example.com")).thenReturn(Mono.just(true));
+        when(emailService.sendTextEmail(eq("existing@example.com"), anyString(), anyString()))
+                .thenReturn(Mono.empty());
+        when(passwordEncoder.encode("dummy")).thenReturn("hashed-dummy");
 
         StepVerifier.create(authService.register(request, "127.0.0.1"))
-                .expectError(ResponseStatusException.class)
-                .verify();
+                .assertNext(resp -> {
+                    assertThat(resp.getAccessToken()).isEmpty();
+                    assertThat(resp.getEmail()).isEqualTo("existing@example.com");
+                })
+                .verifyComplete();
+
+        verify(emailService).sendTextEmail(eq("existing@example.com"), anyString(), anyString());
+        verify(userRepository, never()).save(any(User.class));
     }
 
     @Test

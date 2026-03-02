@@ -96,10 +96,8 @@ class CommentServiceTest {
         // Given
         when(articleRepository.findBySlug("test-article"))
                 .thenReturn(Mono.just(testArticle));
-        when(commentRepository.findApprovedByArticleId(articleId))
+        when(commentRepository.findAllApprovedByArticleId(articleId))
                 .thenReturn(Flux.just(testComment));
-        when(commentRepository.findApprovedRepliesByParentId(commentId))
-                .thenReturn(Flux.empty());
 
         // When
         Flux<CommentResponse> result = commentService.getApprovedCommentsByArticleSlug("test-article");

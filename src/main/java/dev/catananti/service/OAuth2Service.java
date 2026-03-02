@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -19,6 +20,8 @@ import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -35,6 +38,9 @@ public class OAuth2Service {
 
     private static final String OAUTH2_STATE_PREFIX = "oauth2:state:";
     private static final Duration STATE_TTL = Duration.ofMinutes(5);
+    private static final RedisScript<String> GETDEL_SCRIPT = RedisScript.of(
+            "local val = redis.call('GET', KEYS[1]); if val then redis.call('DEL', KEYS[1]); end; return val;",
+            String.class);
 
     @Value("${oauth2.google.client-id:}")
     private String googleClientId;
@@ -106,8 +112,9 @@ public class OAuth2Service {
             return Mono.just(false);
         }
         String key = OAUTH2_STATE_PREFIX + state;
-        return redisTemplate.opsForValue().get(key)
-                .flatMap(val -> redisTemplate.delete(key).thenReturn(true))
+        return redisTemplate.execute(GETDEL_SCRIPT, Collections.singletonList(key))
+                .next()
+                .map(val -> true)
                 .defaultIfEmpty(false);
     }
 
@@ -137,9 +144,15 @@ public class OAuth2Service {
                     String email = (String) userInfo.get("email");
                     String name = (String) userInfo.get("name");
                     String avatar = (String) userInfo.get("picture");
-                    return findOrCreateUser("google", providerId, email, name, avatar, clientIp);
+                    Boolean emailVerified = (Boolean) userInfo.get("email_verified");
+                    if (!Boolean.TRUE.equals(emailVerified)) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Email not verified by Google. Please verify your email and try again."));
+                    }
+                    return findOrCreateUser("google", providerId, email, name, avatar, clientIp, true);
                 })
                 .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("Google OAuth2 error: {}", e.getMessage());
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Google authentication failed"));
                 });
@@ -159,23 +172,50 @@ public class OAuth2Service {
                 .bodyToMono(Map.class)
                 .flatMap(tokenData -> {
                     String accessToken = (String) tokenData.get("access_token");
-                    return webClient.get()
+                    var userInfoMono = webClient.get()
                             .uri("https://api.github.com/user")
                             .header("Authorization", "Bearer " + accessToken)
                             .header("Accept", "application/json")
                             .retrieve()
                             .bodyToMono(Map.class);
+                    var emailsMono = webClient.get()
+                            .uri("https://api.github.com/user/emails")
+                            .header("Authorization", "Bearer " + accessToken)
+                            .header("Accept", "application/json")
+                            .retrieve()
+                            .bodyToFlux(Map.class)
+                            .collectList();
+                    return Mono.zip(userInfoMono, emailsMono);
                 })
-                .flatMap(userInfo -> {
+                .flatMap(tuple -> {
+                    Map userInfo = tuple.getT1();
+                    List<Map> emails = (List<Map>) (List<?>) tuple.getT2();
                     String providerId = String.valueOf(userInfo.get("id"));
-                    String email = (String) userInfo.get("email");
                     String name = (String) userInfo.get("name");
                     String avatar = (String) userInfo.get("avatar_url");
                     String login = (String) userInfo.get("login");
                     if (name == null || name.isBlank()) name = login;
-                    return findOrCreateUser("github", providerId, email, name, avatar, clientIp);
+                    // Use only verified email from GitHub /user/emails endpoint
+                    String email = emails.stream()
+                            .filter(e -> Boolean.TRUE.equals(e.get("verified")) && Boolean.TRUE.equals(e.get("primary")))
+                            .map(e -> (String) e.get("email"))
+                            .findFirst()
+                            .orElse(null);
+                    if (email == null) {
+                        email = emails.stream()
+                                .filter(e -> Boolean.TRUE.equals(e.get("verified")))
+                                .map(e -> (String) e.get("email"))
+                                .findFirst()
+                                .orElse(null);
+                    }
+                    if (email == null) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "No verified email found on GitHub. Please verify your email and try again."));
+                    }
+                    return findOrCreateUser("github", providerId, email, name, avatar, clientIp, true);
                 })
                 .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("GitHub OAuth2 error: {}", e.getMessage());
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "GitHub authentication failed"));
                 });
@@ -232,7 +272,7 @@ public class OAuth2Service {
 
     private Mono<TokenResponse> findOrCreateUser(String provider, String providerId,
                                                    String email, String name, String avatar,
-                                                   String clientIp) {
+                                                   String clientIp, boolean emailVerified) {
         return socialAccountRepository.findByProviderAndProviderId(provider, providerId)
                 .flatMap(existing -> userRepository.findById(existing.getUserId())
                         .flatMap(user -> issueTokens(user, clientIp)))
@@ -240,6 +280,10 @@ public class OAuth2Service {
                     if (email == null || email.isBlank()) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                 "Email not provided by " + provider + ". Please grant email access."));
+                    }
+                    if (!emailVerified) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Email not verified by " + provider + ". Please verify your email and try again."));
                     }
                     return userRepository.findByEmail(email.toLowerCase())
                             .flatMap(existingUser -> {

@@ -10,7 +10,7 @@ import reactor.core.publisher.Mono;
 @Repository
 public interface CommentRepository extends ReactiveCrudRepository<Comment, Long> {
 
-    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at DESC")
+    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at DESC LIMIT 500")
     Flux<Comment> findApprovedByArticleId(Long articleId);
 
     @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
@@ -18,6 +18,9 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
 
     @Query("SELECT * FROM comments WHERE parent_id = :parentId AND status = 'APPROVED' ORDER BY created_at ASC")
     Flux<Comment> findApprovedRepliesByParentId(Long parentId);
+
+    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' ORDER BY created_at ASC LIMIT 500")
+    Flux<Comment> findAllApprovedByArticleId(Long articleId);
 
     @Query("SELECT * FROM comments WHERE article_id = :articleId ORDER BY created_at DESC LIMIT 100")
     Flux<Comment> findAllByArticleId(Long articleId);

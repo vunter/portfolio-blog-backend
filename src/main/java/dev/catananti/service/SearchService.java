@@ -491,7 +491,7 @@ public class SearchService {
 
         return r2dbcTemplate.getDatabaseClient()
                 .sql(sql)
-                .bind("$1", prefix + "%")
+                .bind("$1", DigestUtils.escapeLikePattern(prefix) + "%")
                 .map((row, metadata) -> row.get("title", String.class))
                 .all();
     }

@@ -60,7 +60,7 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
            "WHERE t.slug = :tagSlug AND a.status = :status")
     Mono<Long> countByTagSlugAndStatus(String tagSlug, String status);
 
-    @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC")
+    @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC LIMIT 100")
     Flux<Article> findAllPublishedOrderByPublishedAtDesc();
 
     Mono<Boolean> existsBySlug(String slug);

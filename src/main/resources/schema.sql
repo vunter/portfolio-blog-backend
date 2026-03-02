@@ -778,3 +778,54 @@ CREATE TABLE IF NOT EXISTS reading_history (
     CONSTRAINT uq_reading_history_user_article UNIQUE (user_id, article_id)
 );
 CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id, last_read_at DESC);
+
+-- ============================================
+-- H8: Fix missing ON DELETE clauses for user deletion support
+-- ============================================
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'articles_author_id_fkey') THEN
+        ALTER TABLE articles DROP CONSTRAINT articles_author_id_fkey;
+        ALTER TABLE articles ADD CONSTRAINT articles_author_id_fkey FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'article_versions_changed_by_fkey') THEN
+        ALTER TABLE article_versions DROP CONSTRAINT article_versions_changed_by_fkey;
+        ALTER TABLE article_versions ADD CONSTRAINT article_versions_changed_by_fkey FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'role_upgrade_requests_reviewed_by_fkey') THEN
+        ALTER TABLE role_upgrade_requests DROP CONSTRAINT role_upgrade_requests_reviewed_by_fkey;
+        ALTER TABLE role_upgrade_requests ADD CONSTRAINT role_upgrade_requests_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+-- ============================================
+-- M9: CHECK constraints for enum columns
+-- ============================================
+DO $$ BEGIN
+    ALTER TABLE users ADD CONSTRAINT chk_users_role CHECK (role IN ('VIEWER','DEV','EDITOR','ADMIN'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE articles ADD CONSTRAINT chk_articles_status CHECK (status IN ('DRAFT','PUBLISHED','SCHEDULED','ARCHIVED','REVIEW'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE comments ADD CONSTRAINT chk_comments_status CHECK (status IN ('PENDING','APPROVED','REJECTED','SPAM'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- ============================================
+-- M10: Missing performance indexes
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_article_tags_tag_id ON article_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_comments_article_status ON comments(article_id, status);
+CREATE INDEX IF NOT EXISTS idx_comments_parent_status ON comments(parent_id, status);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user_created ON bookmarks(user_id, created_at DESC);

@@ -47,7 +47,9 @@ public class AuthService {
     private final ReactiveStringRedisTemplate redisTemplate;
 
     private static final String MFA_TOKEN_PREFIX = "mfa:token:";
+    private static final String MFA_ATTEMPTS_PREFIX = "mfa:attempts:";
     private static final Duration MFA_TOKEN_TTL = Duration.ofMinutes(5);
+    private static final int MAX_MFA_ATTEMPTS = 5;
 
     @Value("${jwt.expiration:86400000}")
     private long jwtExpirationMs;
@@ -236,7 +238,22 @@ public class AuthService {
      */
     public Mono<TokenResponse> completeMfaLogin(String mfaToken, String code, String method) {
         String redisKey = MFA_TOKEN_PREFIX + mfaToken;
-        return redisTemplate.opsForValue().get(redisKey)
+        String attemptsKey = MFA_ATTEMPTS_PREFIX + mfaToken;
+        return redisTemplate.opsForValue().increment(attemptsKey)
+                .flatMap(attempts -> {
+                    if (attempts == 1) {
+                        return redisTemplate.expire(attemptsKey, MFA_TOKEN_TTL).thenReturn(attempts);
+                    }
+                    return Mono.just(attempts);
+                })
+                .flatMap(attempts -> {
+                    if (attempts > MAX_MFA_ATTEMPTS) {
+                        return redisTemplate.delete(redisKey)
+                                .then(redisTemplate.delete(attemptsKey))
+                                .then(Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                        "Too many attempts. Please login again.")));
+                    }
+                    return redisTemplate.opsForValue().get(redisKey)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "MFA token expired or invalid")))
                 .flatMap(userIdStr -> {
                     Long userId = Long.valueOf(userIdStr);
@@ -253,12 +270,14 @@ public class AuthService {
                         if (!valid) {
                             return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid MFA code"));
                         }
-                        // Delete mfaToken from Redis (one-time use)
+                        // Delete mfaToken and attempts counter from Redis (one-time use)
                         return redisTemplate.delete(redisKey)
+                                .then(redisTemplate.delete(attemptsKey))
                                 .then(userRepository.findById(userId))
                                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
                                 .flatMap(user -> issueFullTokens(user, "mfa-verified", null));
                     });
+                });
                 });
     }
 
@@ -298,7 +317,24 @@ public class AuthService {
         return userRepository.existsByEmail(email)
                 .flatMap(exists -> {
                     if (exists) {
-                        return Mono.<User>error(new ResponseStatusException(HttpStatus.CONFLICT, "error.email_already_registered"));
+                        // Send informational email instead of revealing account existence
+                        return emailService.sendTextEmail(email,
+                                        "Account registration attempt",
+                                        "An account with this email already exists. If this was you, try logging in.")
+                                .onErrorResume(e -> {
+                                    log.warn("Failed to send existing-account email: {}", e.getMessage());
+                                    return Mono.empty();
+                                })
+                                .then(Mono.fromCallable(() -> passwordEncoder.encode("dummy"))
+                                        .subscribeOn(Schedulers.boundedElastic()))
+                                .thenReturn(TokenResponse.builder()
+                                        .accessToken("")
+                                        .refreshToken("")
+                                        .tokenType("Bearer")
+                                        .expiresIn(jwtExpirationMs / 1000)
+                                        .email(email)
+                                        .name(request.name())
+                                        .build());
                     }
 
                     User user = User.builder()
@@ -318,28 +354,28 @@ public class AuthService {
                             .flatMap(encodedPassword -> {
                                 user.setPasswordHash(encodedPassword);
                                 return userRepository.save(user);
-                            });
-                })
-                .flatMap(user -> {
-                    String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
-
-                    return emailService.sendRegistrationWelcome(user.getEmail(), user.getName())
-                            .onErrorResume(e -> {
-                                log.warn("Failed to send welcome email to {}: {}", user.getEmail(), e.getMessage());
-                                return Mono.empty();
                             })
-                            .then(refreshTokenService.createRefreshToken(user.getId()))
-                            .map(refreshToken -> {
-                                log.info("New user registered: {} from IP: {}", user.getEmail(), clientIp);
+                            .flatMap(savedUser -> {
+                                String accessToken = tokenProvider.generateToken(savedUser.getEmail(), savedUser.getRole());
 
-                                return TokenResponse.builder()
-                                        .accessToken(accessToken)
-                                        .refreshToken(refreshToken.getToken())
-                                        .tokenType("Bearer")
-                                        .expiresIn(jwtExpirationMs / 1000)
-                                        .email(user.getEmail())
-                                        .name(user.getName())
-                                        .build();
+                                return emailService.sendRegistrationWelcome(savedUser.getEmail(), savedUser.getName())
+                                        .onErrorResume(e -> {
+                                            log.warn("Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
+                                            return Mono.empty();
+                                        })
+                                        .then(refreshTokenService.createRefreshToken(savedUser.getId()))
+                                        .map(refreshToken -> {
+                                            log.info("New user registered: {} from IP: {}", savedUser.getEmail(), clientIp);
+
+                                            return TokenResponse.builder()
+                                                    .accessToken(accessToken)
+                                                    .refreshToken(refreshToken.getToken())
+                                                    .tokenType("Bearer")
+                                                    .expiresIn(jwtExpirationMs / 1000)
+                                                    .email(savedUser.getEmail())
+                                                    .name(savedUser.getName())
+                                                    .build();
+                                        });
                             });
                 });
     }

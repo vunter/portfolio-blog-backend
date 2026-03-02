@@ -8,14 +8,17 @@ import dev.catananti.repository.UserRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
+import java.time.Duration;
 
 @RestController
 @RequestMapping("/api/v1/admin/mfa")
@@ -27,6 +30,11 @@ public class MfaController {
     private final EmailOtpService emailOtpService;
     private final AuthService authService;
     private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final ReactiveStringRedisTemplate redisTemplate;
+
+    private static final String OTP_SENDS_PREFIX = "mfa:otp-sends:";
+    private static final int MAX_OTP_SENDS = 3;
 
     /**
      * Initiate MFA setup (TOTP or EMAIL).
@@ -92,11 +100,25 @@ public class MfaController {
         if (mfaToken == null || mfaToken.isBlank()) {
             return Mono.just(ResponseEntity.badRequest().body(Map.of("message", "mfaToken is required")));
         }
-        return authService.resolveMfaTokenUserId(mfaToken)
-                .flatMap(userId -> emailOtpService.sendOtp(userId)
-                        .thenReturn(ResponseEntity.ok(Map.of("message", "OTP sent to your email"))))
-                .onErrorResume(e -> Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(Map.of("message", "Invalid or expired MFA token"))));
+        String sendsKey = OTP_SENDS_PREFIX + mfaToken;
+        return redisTemplate.opsForValue().increment(sendsKey)
+                .flatMap(sends -> {
+                    if (sends == 1) {
+                        return redisTemplate.expire(sendsKey, Duration.ofMinutes(5)).thenReturn(sends);
+                    }
+                    return Mono.just(sends);
+                })
+                .flatMap(sends -> {
+                    if (sends > MAX_OTP_SENDS) {
+                        return Mono.just(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                                .body(Map.of("message", "Too many OTP requests")));
+                    }
+                    return authService.resolveMfaTokenUserId(mfaToken)
+                            .flatMap(userId -> emailOtpService.sendOtp(userId)
+                                    .thenReturn(ResponseEntity.ok(Map.of("message", "OTP sent to your email"))))
+                            .onErrorResume(e -> Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                    .body(Map.of("message", "Invalid or expired MFA token"))));
+                });
     }
 
     /**
@@ -104,10 +126,20 @@ public class MfaController {
      */
     @DeleteMapping("/disable")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public Mono<Void> disable(@AuthenticationPrincipal String email) {
+    public Mono<Void> disable(@AuthenticationPrincipal String email, @RequestBody Map<String, String> body) {
+        String password = body.get("password");
+        if (password == null || password.isBlank()) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password required"));
+        }
         log.info("MFA disable requested for user={}", email);
-        return resolveUserId(email)
-                .flatMap(mfaService::disableMfa);
+        return userRepository.findByEmail(email)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND)))
+                .flatMap(user -> {
+                    if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid password"));
+                    }
+                    return mfaService.disableMfa(user.getId());
+                });
     }
 
     /**

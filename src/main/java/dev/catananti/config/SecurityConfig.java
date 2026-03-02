@@ -175,7 +175,7 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
                         // Actuator - health/info/prometheus public (prometheus protected by nginx basic auth externally)
                         .pathMatchers("/actuator/health/**", "/actuator/info").permitAll()
-                        .pathMatchers("/actuator/prometheus").permitAll()
+                        .pathMatchers("/actuator/prometheus").hasRole("ADMIN")
                         .pathMatchers("/actuator/**").hasRole("ADMIN")
                         // Kubernetes probes
                         .pathMatchers("/livez", "/readyz").permitAll()

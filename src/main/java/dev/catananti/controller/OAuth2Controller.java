@@ -77,11 +77,11 @@ public class OAuth2Controller {
 
                     return callbackMono.map(tokenResponse -> {
                         httpResponse.addCookie(ResponseCookie.from("access_token", tokenResponse.getAccessToken())
-                                .httpOnly(true).secure(true).path("/").sameSite("Lax")
+                                .httpOnly(true).secure(true).path("/api").sameSite("Strict")
                                 .maxAge(tokenResponse.getExpiresIn()).build());
                         httpResponse.addCookie(ResponseCookie.from("refresh_token", tokenResponse.getRefreshToken())
                                 .httpOnly(true).secure(true).path("/api/v1/admin/auth")
-                                .sameSite("Lax").maxAge(7 * 24 * 3600).build());
+                                .sameSite("Strict").maxAge(7 * 24 * 3600).build());
                         return ResponseEntity.status(HttpStatus.FOUND)
                                 .location(URI.create("/admin"))
                                 .<Void>build();
