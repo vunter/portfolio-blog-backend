@@ -121,6 +121,7 @@ public class OAuth2Service {
 
     @SuppressWarnings("unchecked")
     public Mono<TokenResponse> handleGoogleCallback(String code, String clientIp) {
+        log.info("Starting Google token exchange for IP={}", clientIp);
         return webClient.post()
                 .uri("https://oauth2.googleapis.com/token")
                 .body(BodyInserters.fromFormData("code", code)
@@ -129,22 +130,46 @@ public class OAuth2Service {
                         .with("redirect_uri", redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/google")
                         .with("grant_type", "authorization_code"))
                 .retrieve()
-                .bodyToMono(Map.class)
+                .bodyToMono(String.class)
+                .doOnNext(body -> log.info("Google token response received, length={}", body.length()))
+                .map(body -> {
+                    try {
+                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        return (Map<String, Object>) mapper.readValue(body, Map.class);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to parse Google token response", e);
+                    }
+                })
                 .flatMap(tokenData -> {
                     String accessToken = (String) tokenData.get("access_token");
+                    log.info("Got Google access token, fetching user info");
                     return webClient.get()
                             .uri("https://www.googleapis.com/oauth2/v2/userinfo")
                             .header("Authorization", "Bearer " + accessToken)
                             .retrieve()
-                            .bodyToMono(Map.class);
+                            .bodyToMono(String.class);
+                })
+                .map(body -> {
+                    try {
+                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        return (Map<String, Object>) mapper.readValue(body, Map.class);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to parse Google userinfo response", e);
+                    }
                 })
                 .flatMap(userInfo -> {
+                    log.info("Google userInfo keys: {}", userInfo.keySet());
                     String providerId = (String) userInfo.get("id");
                     String email = (String) userInfo.get("email");
                     String name = (String) userInfo.get("name");
                     String avatar = (String) userInfo.get("picture");
-                    Boolean emailVerified = (Boolean) userInfo.get("email_verified");
-                    if (!Boolean.TRUE.equals(emailVerified)) {
+                    // Google v2 API uses "verified_email", OpenID uses "email_verified"
+                    Object emailVerifiedRaw = userInfo.containsKey("verified_email")
+                            ? userInfo.get("verified_email")
+                            : userInfo.get("email_verified");
+                    boolean emailVerified = Boolean.TRUE.equals(emailVerifiedRaw)
+                            || "true".equals(String.valueOf(emailVerifiedRaw));
+                    if (!emailVerified) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                 "Email not verified by Google. Please verify your email and try again."));
                     }
@@ -159,6 +184,7 @@ public class OAuth2Service {
 
     @SuppressWarnings("unchecked")
     public Mono<TokenResponse> handleGithubCallback(String code, String clientIp) {
+        log.info("Starting GitHub token exchange for IP={}", clientIp);
         return webClient.post()
                 .uri("https://github.com/login/oauth/access_token")
                 .header("Accept", "application/json")
@@ -166,7 +192,15 @@ public class OAuth2Service {
                         .with("client_id", githubClientId)
                         .with("client_secret", githubClientSecret))
                 .retrieve()
-                .bodyToMono(Map.class)
+                .bodyToMono(String.class)
+                .map(body -> {
+                    try {
+                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        return (Map<String, Object>) mapper.readValue(body, Map.class);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to parse GitHub token response", e);
+                    }
+                })
                 .flatMap(tokenData -> {
                     String accessToken = (String) tokenData.get("access_token");
                     var userInfoMono = webClient.get()
@@ -174,14 +208,30 @@ public class OAuth2Service {
                             .header("Authorization", "Bearer " + accessToken)
                             .header("Accept", "application/json")
                             .retrieve()
-                            .bodyToMono(Map.class);
+                            .bodyToMono(String.class)
+                            .map(body -> {
+                                try {
+                                    var mapper = new tools.jackson.databind.ObjectMapper();
+                                    return (Map<String, Object>) mapper.readValue(body, Map.class);
+                                } catch (Exception e) {
+                                    throw new RuntimeException("Failed to parse GitHub user response", e);
+                                }
+                            });
                     var emailsMono = webClient.get()
                             .uri("https://api.github.com/user/emails")
                             .header("Authorization", "Bearer " + accessToken)
                             .header("Accept", "application/json")
                             .retrieve()
-                            .bodyToFlux(Map.class)
-                            .collectList();
+                            .bodyToMono(String.class)
+                            .map(body -> {
+                                try {
+                                    var mapper = new tools.jackson.databind.ObjectMapper();
+                                    return (List<Map<String, Object>>) mapper.readValue(body,
+                                            mapper.getTypeFactory().constructCollectionType(List.class, Map.class));
+                                } catch (Exception e) {
+                                    throw new RuntimeException("Failed to parse GitHub emails response", e);
+                                }
+                            });
                     return Mono.zip(userInfoMono, emailsMono);
                 })
                 .flatMap(tuple -> {

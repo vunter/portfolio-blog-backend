@@ -22,6 +22,7 @@ public class UserResponse {
     private String bio;
     private String role;
     private Boolean active;
+    private Boolean hasPassword;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -35,6 +36,7 @@ public class UserResponse {
                 .bio(user.getBio())
                 .role(user.getRole())
                 .active(user.getActive())
+                .hasPassword(user.getPasswordHash() != null && !user.getPasswordHash().isEmpty())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())
                 .build();

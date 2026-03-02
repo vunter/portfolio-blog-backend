@@ -433,9 +433,8 @@ public class CommentService {
     private String determineCommentStatus(ContentModerationService.ModerationResult result, boolean isTrusted) {
         return switch (result.getSeverity()) {
             case HIGH -> CommentStatus.REJECTED.name();
-            case MEDIUM -> isTrusted ? CommentStatus.APPROVED.name() : CommentStatus.PENDING.name();
-            case LOW -> CommentStatus.APPROVED.name();
-            case NONE -> CommentStatus.APPROVED.name();
+            case MEDIUM -> CommentStatus.PENDING.name();
+            case LOW, NONE -> CommentStatus.APPROVED.name();
         };
     }
 

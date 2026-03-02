@@ -77,13 +77,13 @@ public class OAuth2Controller {
 
                     return callbackMono.map(tokenResponse -> {
                         httpResponse.addCookie(ResponseCookie.from("access_token", tokenResponse.getAccessToken())
-                                .httpOnly(true).secure(true).path("/api").sameSite("Strict")
+                                .httpOnly(true).secure(true).path("/api").sameSite("Lax")
                                 .maxAge(tokenResponse.getExpiresIn()).build());
                         httpResponse.addCookie(ResponseCookie.from("refresh_token", tokenResponse.getRefreshToken())
                                 .httpOnly(true).secure(true).path("/api/v1/admin/auth")
-                                .sameSite("Strict").maxAge(7 * 24 * 3600).build());
+                                .sameSite("Lax").maxAge(7 * 24 * 3600).build());
                         return ResponseEntity.status(HttpStatus.FOUND)
-                                .location(URI.create("/admin"))
+                                .location(URI.create("/auth/oauth-callback?expires_in=" + tokenResponse.getExpiresIn()))
                                 .<Void>build();
                     });
                 });
