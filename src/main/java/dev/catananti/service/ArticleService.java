@@ -58,17 +58,27 @@ public class ArticleService {
 
     public Mono<PageResponse<ArticleResponse>> getPublishedArticles(int page, int size, String locale, String sort,
                                                                       LocalDate dateFrom, LocalDate dateTo) {
+        return getPublishedArticles(page, size, locale, sort, dateFrom, dateTo, null);
+    }
+
+    public Mono<PageResponse<ArticleResponse>> getPublishedArticles(int page, int size, String locale, String sort,
+                                                                      LocalDate dateFrom, LocalDate dateTo, String search) {
         int offset = page * size;
         String status = ArticleStatus.PUBLISHED.name();
 
         boolean hasDateFilter = dateFrom != null || dateTo != null;
+        boolean hasSearch = search != null && !search.isBlank();
         LocalDateTime from = dateFrom != null ? dateFrom.atStartOfDay() : LocalDateTime.of(2000, 1, 1, 0, 0);
         LocalDateTime to = dateTo != null ? dateTo.atTime(LocalTime.MAX) : LocalDateTime.of(2099, 12, 31, 23, 59, 59);
 
         Flux<Article> articleFlux;
         Mono<Long> countMono;
 
-        if (hasDateFilter) {
+        if (hasSearch) {
+            String query = search.trim();
+            articleFlux = articleRepository.searchByStatusAndQuery(status, query, size, offset);
+            countMono = articleRepository.countSearchByStatusAndQuery(status, query);
+        } else if (hasDateFilter) {
             articleFlux = articleRepository.findByStatusAndDateRangeOrderByPublishedAtDesc(status, from, to, size, offset);
             countMono = articleRepository.countByStatusAndDateRange(status, from, to);
         } else if (sort != null && sort.startsWith("viewCount")) {

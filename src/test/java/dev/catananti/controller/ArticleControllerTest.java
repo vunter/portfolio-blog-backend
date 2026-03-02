@@ -77,11 +77,11 @@ class ArticleControllerTest {
                 .last(true)
                 .build();
 
-        when(articleService.getPublishedArticles(0, 10, null, null, null, null))
+        when(articleService.getPublishedArticles(0, 10, null, null, null, null, null))
                 .thenReturn(Mono.just(pageResponse));
 
         // When & Then
-        StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null))
+        StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null, null))
                 .assertNext(response -> {
                     assertThat(response.getContent()).hasSize(1);
                     assertThat(response.getContent().getFirst().getSlug()).isEqualTo("test-article");
@@ -89,7 +89,7 @@ class ArticleControllerTest {
                 })
                 .verifyComplete();
 
-        verify(articleService).getPublishedArticles(0, 10, null, null, null, null);
+        verify(articleService).getPublishedArticles(0, 10, null, null, null, null, null);
     }
 
     @Test

@@ -52,9 +52,10 @@ public class ArticleController {
             @RequestParam(required = false) String locale,
             @RequestParam(required = false) String sort,
             @RequestParam(required = false) LocalDate dateFrom,
-            @RequestParam(required = false) LocalDate dateTo) {
-        log.debug("Fetching published articles: page={}, size={}, locale={}", page, size, locale);
-        return articleService.getPublishedArticles(page, size, locale, sort, dateFrom, dateTo);
+            @RequestParam(required = false) LocalDate dateTo,
+            @RequestParam(required = false) String search) {
+        log.debug("Fetching published articles: page={}, size={}, locale={}, search={}", page, size, locale, search);
+        return articleService.getPublishedArticles(page, size, locale, sort, dateFrom, dateTo, search);
     }
 
     @GetMapping("/{slug}")

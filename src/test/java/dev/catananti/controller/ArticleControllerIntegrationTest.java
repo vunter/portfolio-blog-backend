@@ -82,10 +82,10 @@ class ArticleControllerIntegrationTest {
                 .last(true)
                 .build();
 
-        when(articleService.getPublishedArticles(eq(0), eq(10), any(), any(), any(), any()))
+        when(articleService.getPublishedArticles(eq(0), eq(10), any(), any(), any(), any(), any()))
                 .thenReturn(Mono.just(pageResponse));
 
-        StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null))
+        StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null, null))
                 .assertNext(result -> {
                     assertThat(result.getContent()).hasSize(2);
                     assertThat(result.getContent().get(0).getSlug()).isEqualTo("article-1");
@@ -131,10 +131,10 @@ class ArticleControllerIntegrationTest {
                 .last(true)
                 .build();
 
-        when(articleService.getPublishedArticles(eq(1), eq(5), any(), any(), any(), any()))
+        when(articleService.getPublishedArticles(eq(1), eq(5), any(), any(), any(), any(), any()))
                 .thenReturn(Mono.just(pageResponse));
 
-        StepVerifier.create(articleController.getPublishedArticles(1, 5, null, null, null, null))
+        StepVerifier.create(articleController.getPublishedArticles(1, 5, null, null, null, null, null))
                 .assertNext(result -> {
                     assertThat(result.getPage()).isEqualTo(1);
                     assertThat(result.getSize()).isEqualTo(5);
@@ -157,10 +157,10 @@ class ArticleControllerIntegrationTest {
                 .last(true)
                 .build();
 
-        when(articleService.getPublishedArticles(eq(0), eq(10), any(), any(), any(), any()))
+        when(articleService.getPublishedArticles(eq(0), eq(10), any(), any(), any(), any(), any()))
                 .thenReturn(Mono.just(pageResponse));
 
-        StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null))
+        StepVerifier.create(articleController.getPublishedArticles(0, 10, null, null, null, null, null))
                 .assertNext(result -> {
                     assertThat(result.getPage()).isEqualTo(0);
                     assertThat(result.getSize()).isEqualTo(10);
