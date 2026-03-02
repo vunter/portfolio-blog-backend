@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS users (
     id BIGINT PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255),
     name VARCHAR(255) NOT NULL,
     username VARCHAR(100) UNIQUE,
     avatar_url VARCHAR(500),
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS comments (
     author_email VARCHAR(255) NOT NULL,
     content TEXT NOT NULL,
     status VARCHAR(50) DEFAULT 'PENDING',
-    parent_id BIGINT REFERENCES comments(id),
+    parent_id BIGINT REFERENCES comments(id) ON DELETE CASCADE,
     moderation_note VARCHAR(500),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

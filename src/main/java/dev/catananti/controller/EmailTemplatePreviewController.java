@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -79,9 +80,10 @@ public class EmailTemplatePreviewController {
             TemplateInfo template = TEMPLATES.stream()
                 .filter(t -> t.id().equals(templateId))
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("Template not found: " + templateId));
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Template not found"));
 
-            return templateService.render(templateId, template.sampleData());
+            return templateService.render(template.id(), template.sampleData());
         }).subscribeOn(Schedulers.boundedElastic());
     }
 }
