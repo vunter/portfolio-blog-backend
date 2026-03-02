@@ -277,12 +277,14 @@
 			<artifactId>netty-nio-client</artifactId>
 		</dependency>
 
-		<!-- Sentry Error Tracking -->
+		<!-- Sentry Error Tracking — disabled: v8.4.0 incompatible with Spring Boot 4 -->
+		<!--
 		<dependency>
 			<groupId>io.sentry</groupId>
 			<artifactId>sentry-spring-boot-starter-jakarta</artifactId>
 			<version>8.4.0</version>
 		</dependency>
+		-->
 
 		<!-- 2FA: TOTP (Time-based One-Time Password) -->
 		<dependency>
