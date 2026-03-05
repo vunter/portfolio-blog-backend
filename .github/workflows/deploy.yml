@@ -77,10 +77,15 @@ jobs:
             rm -f api.tar.gz frontend.tar.gz
             cd deploy/cloud
 
-            echo "Ensuring infrastructure stack is running..."
-            doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
-            echo "Waiting for infrastructure health..."
-            sleep 5
+            echo "Ensuring infrastructure is running..."
+            if docker ps -q -f name=blog-postgres -f status=running | grep -q .; then
+              echo "Infrastructure already running, skipping..."
+            else
+              echo "Starting infrastructure stack..."
+              doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
+              echo "Waiting for infrastructure health..."
+              sleep 10
+            fi
             docker exec blog-postgres pg_isready -d blog || sleep 10
 
             echo "Applying database migrations..."

@@ -16,11 +16,11 @@ services:
       - SPRING_CONFIG_IMPORT=
       - SPRING_CLOUD_VAULT_ENABLED=false
       # Database
-      - DATABASE_URL=r2dbc:postgresql://postgres:5432/blog
+      - DATABASE_URL=r2dbc:postgresql://blog-postgres:5432/blog
       - DATABASE_USERNAME=${DB_USERNAME:-blogadmin}
       - DATABASE_PASSWORD=${DB_PASSWORD}
       # Redis
-      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_HOST=blog-redis
       - SPRING_DATA_REDIS_PORT=6379
       - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD}
       - SPRING_CACHE_TYPE=redis
