@@ -93,6 +93,7 @@ jobs:
             docker exec blog-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/schema.sql' || echo "Schema migration had warnings (non-fatal)"
 
             echo "Deploying application stack..."
+            doppler run -- docker compose -f docker-compose.cloud.yml down --remove-orphans 2>/dev/null || true
             doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate
             docker image prune -f
             echo "Deploy complete at $(date)"
