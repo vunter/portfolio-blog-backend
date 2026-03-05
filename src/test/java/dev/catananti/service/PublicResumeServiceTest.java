@@ -204,6 +204,8 @@ class PublicResumeServiceTest {
             when(resumeTemplateRepository.findByAlias("john-doe")).thenReturn(Mono.just(activeTemplate));
             when(resumeProfileService.getProfileByOwnerIdWithFallback(eq(ownerId), eq("en")))
                     .thenReturn(Mono.just(response));
+            when(userRepository.findById(ownerId))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder().build()));
 
             StepVerifier.create(publicResumeService.getProfileByAlias("john-doe", "en"))
                     .assertNext(profile -> {

@@ -142,6 +142,8 @@ class ArticleControllerTest {
         when(deduplicationService.recordViewIfNew(eq("test-article"), any())).thenReturn(Mono.just(true));
         when(articleService.incrementViews("test-article"))
                 .thenReturn(Mono.empty());
+        when(analyticsService.trackArticleView(anyString(), any(ServerHttpRequest.class)))
+                .thenReturn(Mono.empty());
 
         // When & Then
         StepVerifier.create(articleController.incrementViews("test-article", null, mockRequest))
@@ -154,6 +156,7 @@ class ArticleControllerTest {
     @DisplayName("Should like article and return like count")
     void likeArticle_ShouldComplete() {
         // Given
+        when(deduplicationService.hasLiked(eq("test-article"), any())).thenReturn(Mono.just(false));
         when(deduplicationService.recordLikeIfNew(eq("test-article"), any())).thenReturn(Mono.just(true));
         when(articleService.likeArticle("test-article"))
                 .thenReturn(Mono.empty());

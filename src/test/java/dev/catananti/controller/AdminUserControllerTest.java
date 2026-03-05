@@ -476,7 +476,6 @@ class AdminUserControllerTest {
             when(userService.getTotalUsers()).thenReturn(Mono.just(25L));
             when(userService.countUsersByRole("ADMIN")).thenReturn(Mono.just(2L));
             when(userService.countUsersByRole("DEV")).thenReturn(Mono.just(5L));
-            when(userService.countUsersByRole("EDITOR")).thenReturn(Mono.just(8L));
             when(userService.countUsersByRole("VIEWER")).thenReturn(Mono.just(10L));
 
             StepVerifier.create(controller.getUserStats())
@@ -487,7 +486,7 @@ class AdminUserControllerTest {
                         assertThat(stats.getTotal()).isEqualTo(25);
                         assertThat(stats.getAdmins()).isEqualTo(2);
                         assertThat(stats.getDevs()).isEqualTo(5);
-                        assertThat(stats.getEditors()).isEqualTo(8);
+                        assertThat(stats.getEditors()).isEqualTo(0);
                         assertThat(stats.getViewers()).isEqualTo(10);
                     })
                     .verifyComplete();
@@ -499,7 +498,6 @@ class AdminUserControllerTest {
             when(userService.getTotalUsers()).thenReturn(Mono.just(0L));
             when(userService.countUsersByRole("ADMIN")).thenReturn(Mono.just(0L));
             when(userService.countUsersByRole("DEV")).thenReturn(Mono.just(0L));
-            when(userService.countUsersByRole("EDITOR")).thenReturn(Mono.just(0L));
             when(userService.countUsersByRole("VIEWER")).thenReturn(Mono.just(0L));
 
             StepVerifier.create(controller.getUserStats())

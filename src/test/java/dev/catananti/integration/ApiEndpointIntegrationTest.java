@@ -225,6 +225,8 @@ class ApiEndpointIntegrationTest {
             when(deduplicationService.recordViewIfNew(eq("my-post"), any()))
                     .thenReturn(Mono.just(true));
             when(articleService.incrementViews("my-post")).thenReturn(Mono.empty());
+            when(analyticsService.trackArticleView(anyString(), any(ServerHttpRequest.class)))
+                    .thenReturn(Mono.empty());
 
             // When & Then
             client.post().uri("/api/v1/articles/my-post/view")
@@ -887,7 +889,6 @@ class ApiEndpointIntegrationTest {
             when(userService.getTotalUsers()).thenReturn(Mono.just(10L));
             when(userService.countUsersByRole("ADMIN")).thenReturn(Mono.just(2L));
             when(userService.countUsersByRole("DEV")).thenReturn(Mono.just(3L));
-            when(userService.countUsersByRole("EDITOR")).thenReturn(Mono.just(3L));
             when(userService.countUsersByRole("VIEWER")).thenReturn(Mono.just(2L));
 
             // When & Then
@@ -898,7 +899,7 @@ class ApiEndpointIntegrationTest {
                     .jsonPath("$.total").isEqualTo(10)
                     .jsonPath("$.admins").isEqualTo(2)
                     .jsonPath("$.devs").isEqualTo(3)
-                    .jsonPath("$.editors").isEqualTo(3)
+                    .jsonPath("$.editors").isEqualTo(0)
                     .jsonPath("$.viewers").isEqualTo(2);
         }
 
@@ -927,17 +928,17 @@ class ApiEndpointIntegrationTest {
         }
 
         @Test
-        @DisplayName("POST /admin/users — create user with EDITOR role (201)")
+        @DisplayName("POST /admin/users — create user with VIEWER role (201, was EDITOR)")
         void createUserEditor_201() {
-            // Given
+            // Given — EDITOR role was removed, using VIEWER instead
             var request = UserRequest.builder()
-                    .name("New Editor")
-                    .email("editor@test.com")
+                    .name("New Viewer")
+                    .email("viewer2@test.com")
                     .password("Str0ng!Pass#123")
-                    .role("EDITOR")
+                    .role("VIEWER")
                     .build();
             when(userService.createUser(any(UserRequest.class)))
-                    .thenReturn(Mono.just(buildUser("New Editor", "editor@test.com", "EDITOR")));
+                    .thenReturn(Mono.just(buildUser("New Viewer", "viewer2@test.com", "VIEWER")));
 
             // When & Then
             client.post().uri("/api/v1/admin/users")
@@ -946,7 +947,7 @@ class ApiEndpointIntegrationTest {
                     .exchange()
                     .expectStatus().isCreated()
                     .expectBody()
-                    .jsonPath("$.role").isEqualTo("EDITOR");
+                    .jsonPath("$.role").isEqualTo("VIEWER");
         }
 
         @Test

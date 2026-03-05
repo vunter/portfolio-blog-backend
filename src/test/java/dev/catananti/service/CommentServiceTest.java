@@ -389,7 +389,7 @@ class CommentServiceTest {
     @DisplayName("Should get approved comments paginated by article slug")
     void getApprovedCommentsByArticleSlugPaginated_ShouldReturn() {
         when(articleRepository.findBySlug("test-article")).thenReturn(Mono.just(testArticle));
-        when(commentRepository.findApprovedByArticleIdPaginated(articleId, 10, 0))
+        when(commentRepository.findApprovedByArticleIdSortedByLikes(articleId, 10, 0))
                 .thenReturn(Flux.just(testComment));
         when(commentRepository.countApprovedByArticleId(articleId)).thenReturn(Mono.just(1L));
         when(commentRepository.findApprovedRepliesByParentId(commentId)).thenReturn(Flux.empty());

@@ -121,7 +121,7 @@ class UserServiceTest {
                 .name("New User")
                 .email("new@example.com")
                 .password("password123")
-                .role("EDITOR")
+                .role("DEV")
                 .build();
 
         when(userRepository.existsByEmail("new@example.com")).thenReturn(Mono.just(false));
@@ -136,7 +136,7 @@ class UserServiceTest {
                 .assertNext(response -> {
                     assertThat(response.getName()).isEqualTo("New User");
                     assertThat(response.getEmail()).isEqualTo("new@example.com");
-                    assertThat(response.getRole()).isEqualTo("EDITOR");
+                    assertThat(response.getRole()).isEqualTo("DEV");
                 })
                 .verifyComplete();
     }
@@ -240,7 +240,7 @@ class UserServiceTest {
     }
 
     @Test
-    @DisplayName("Should create user with default EDITOR role when role is null")
+    @DisplayName("Should create user with default DEV role when role is null")
     void shouldCreateUserWithDefaultRole() {
         UserRequest request = UserRequest.builder()
                 .name("Default Role User")
@@ -255,7 +255,7 @@ class UserServiceTest {
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
         StepVerifier.create(userService.createUser(request))
-                .assertNext(resp -> assertThat(resp.getRole()).isEqualTo("EDITOR"))
+                .assertNext(resp -> assertThat(resp.getRole()).isEqualTo("DEV"))
                 .verifyComplete();
     }
 
