@@ -1,10 +1,10 @@
 # ============================================
 # Portfolio Blog API - Multi-stage Dockerfile
 # Java 25 + Spring Boot 4 + WebFlux
-# Optimized: ~500MB (down from 1.77GB)
+# Optimized: layered JARs + BuildKit cache
 # ============================================
 
-# Stage 1: Build
+# Stage 1: Build with Maven cache
 FROM eclipse-temurin:25-jdk-alpine AS builder
 WORKDIR /app
 
@@ -13,8 +13,10 @@ COPY .mvn .mvn
 COPY pom.xml .
 RUN chmod +x mvnw
 
+# Resolve dependencies first (cached between builds via BuildKit mount)
 ARG NEXUS_HOST=""
-RUN MAVEN_SETTINGS=""; \
+RUN --mount=type=cache,target=/root/.m2/repository \
+    MAVEN_SETTINGS=""; \
     if [ -n "$NEXUS_HOST" ]; then \
       sed -i "s|__NEXUS_HOST__|${NEXUS_HOST}|g" .mvn/nexus-settings.xml; \
       MAVEN_SETTINGS="-s .mvn/nexus-settings.xml"; \
@@ -23,13 +25,19 @@ RUN MAVEN_SETTINGS=""; \
 
 COPY src ./src
 
-RUN MAVEN_SETTINGS=""; \
+RUN --mount=type=cache,target=/root/.m2/repository \
+    MAVEN_SETTINGS=""; \
     if [ -n "$NEXUS_HOST" ]; then \
       MAVEN_SETTINGS="-s .mvn/nexus-settings.xml"; \
     fi && \
     ./mvnw clean package -Dmaven.test.skip=true -B $MAVEN_SETTINGS
 
-# Download Datadog agent in build stage (keeps curl/wget out of runtime)
+# Extract Spring Boot layered JAR for optimal Docker caching
+# Splits 300MB fat JAR into: dependencies (~250MB, cached) + application (~10-50MB, changes per deploy)
+RUN cp target/*.jar application.jar && \
+    java -Djarmode=tools -jar application.jar extract --layers --destination /app/extracted
+
+# Download Datadog agent in build stage (keeps wget out of runtime)
 RUN wget -q -O /tmp/dd-java-agent.jar https://dtdg.co/latest-java-tracer
 
 # Stage 2: Runtime (Alpine, minimal)
@@ -59,16 +67,21 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/usr \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
 
-# Non-root user
+# Non-root user + writable dirs (before COPY to avoid chown layer duplication)
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-COPY --from=builder /app/target/*.jar app.jar
-
-# Writable dirs for read-only rootfs
 RUN mkdir -p /app/uploads /app/logs && \
     chown -R appuser:appgroup /app /tmp
+
+# Spring Boot layered JAR: each COPY = separate Docker layer
+# Dependencies (~250MB) rarely change → cached between deploys
+COPY --from=builder --chown=appuser:appgroup /app/extracted/dependencies/ ./
+COPY --from=builder --chown=appuser:appgroup /app/extracted/spring-boot-loader/ ./
+COPY --from=builder --chown=appuser:appgroup /app/extracted/snapshot-dependencies/ ./
+# Application code (~10-50MB) — only this layer rebuilds per deploy
+COPY --from=builder --chown=appuser:appgroup /app/extracted/application/ ./
 
 USER appuser
 EXPOSE 8080
@@ -86,4 +99,4 @@ ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+UseZGC" \
     DD_TRACE_SAMPLE_RATE=1.0 \
     DD_PROFILING_ENABLED=false
 
-ENTRYPOINT ["sh", "-c", "if [ \"$DD_AGENT_ENABLED\" = \"true\" ]; then exec java $JAVA_OPTS -javaagent:/opt/datadog/dd-java-agent.jar -jar app.jar; else exec java $JAVA_OPTS -jar app.jar; fi"]
+ENTRYPOINT ["sh", "-c", "if [ \"$DD_AGENT_ENABLED\" = \"true\" ]; then exec java $JAVA_OPTS -javaagent:/opt/datadog/dd-java-agent.jar -jar application.jar; else exec java $JAVA_OPTS -jar application.jar; fi"]
