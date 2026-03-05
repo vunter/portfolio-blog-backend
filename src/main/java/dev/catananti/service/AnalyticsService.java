@@ -18,6 +18,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -42,6 +43,32 @@ public class AnalyticsService {
 
     @Value("${app.analytics.retention-days:90}")
     private int retentionDays;
+
+    @Value("${app.url:http://localhost:8080}")
+    private String appUrl;
+
+    /**
+     * Extract the host from a URL, returning null on parse failure.
+     */
+    private String extractHost(String url) {
+        if (url == null || url.isBlank()) return null;
+        try {
+            return URI.create(url).getHost();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Returns true if the referrer is from the same site (self-referral).
+     */
+    private boolean isSelfReferral(String referrer) {
+        if (referrer == null || referrer.isBlank()) return false;
+        String refHost = extractHost(referrer);
+        String appHost = extractHost(appUrl);
+        if (refHost == null || appHost == null) return false;
+        return refHost.equalsIgnoreCase(appHost);
+    }
 
     public Mono<Void> trackEvent(AnalyticsEventRequest request, ServerHttpRequest httpRequest) {
         // F-141: Validate eventType against allowed set
@@ -73,21 +100,29 @@ public class AnalyticsService {
                         }
                     }
 
-                    AnalyticsEvent event = AnalyticsEvent.builder()
-                            .id(idService.nextId())
-                            .articleId(request.getArticleId())
-                            .eventType(eventType)
-                            .userIp(userIp)
-                            .userAgent(userAgent)
-                            .referrer(request.getReferrer())
-                            .metadata(metadataJson)
-                            .createdAt(LocalDateTime.now())
-                            .build();
+                    long eventId = idService.nextId();
+                    Long articleId = request.getArticleId();
+                    String referrer = request.getReferrer();
+                    LocalDateTime now = LocalDateTime.now();
 
-                    return analyticsRepository.save(event)
-                            .doOnSuccess(e -> log.debug("Analytics event tracked: {} for article {}", 
-                                    e.getEventType(), e.getArticleId()))
-                            .then();
+                    var spec = databaseClient.sql("""
+                            INSERT INTO analytics_events (id, article_id, event_type, user_ip, user_agent, referrer, metadata, created_at)
+                            VALUES (:id, :articleId, :eventType, :userIp, :userAgent, :referrer, :metadata::jsonb, :createdAt)
+                            """)
+                            .bind("id", eventId)
+                            .bind("eventType", eventType)
+                            .bind("userIp", userIp != null ? userIp : "")
+                            .bind("createdAt", now);
+
+                    // Bind nullable params
+                    spec = articleId != null ? spec.bind("articleId", articleId) : spec.bindNull("articleId", Long.class);
+                    spec = userAgent != null ? spec.bind("userAgent", userAgent) : spec.bindNull("userAgent", String.class);
+                    spec = referrer != null ? spec.bind("referrer", referrer) : spec.bindNull("referrer", String.class);
+                    spec = metadataJson != null ? spec.bind("metadata", metadataJson) : spec.bindNull("metadata", String.class);
+
+                    return spec.then()
+                            .doOnSuccess(v -> log.debug("Analytics event tracked: {} for article {}",
+                                    eventType, articleId));
                 })
                 .switchIfEmpty(Mono.empty()); // Silently ignore invalid articleIds
     }
@@ -95,10 +130,13 @@ public class AnalyticsService {
     public Mono<Void> trackArticleView(String slug, ServerHttpRequest httpRequest) {
         return articleRepository.findBySlug(slug)
                 .flatMap(article -> {
+                    String rawReferrer = httpRequest.getHeaders().getFirst("Referer");
+                    // Only store external referrers — internal navigation is noise
+                    String referrer = (rawReferrer != null && !isSelfReferral(rawReferrer)) ? rawReferrer : null;
                     AnalyticsEventRequest request = AnalyticsEventRequest.builder()
                             .articleId(article.getId())
                             .eventType("VIEW")
-                            .referrer(httpRequest.getHeaders().getFirst("Referer"))
+                            .referrer(referrer)
                             .build();
                     return trackEvent(request, httpRequest);
                 });
@@ -117,17 +155,41 @@ public class AnalyticsService {
                 totalViewsMono,
                 totalLikesMono,
                 analyticsRepository.countByEventTypeSince("SHARE", since),
+                getUniqueVisitors(since),
                 getDailyViews(since),
                 getTopArticles(since, 10),
-                getTopReferrers(since, 10)
+                getTopReferrers(since, 10),
+                getTopSources(since, 10)
         ).map(tuple -> AnalyticsSummary.builder()
                 .totalViews(tuple.getT1())
                 .totalLikes(tuple.getT2())
                 .totalShares(tuple.getT3())
-                .dailyViews(tuple.getT4())
-                .topArticles(tuple.getT5())
-                .topReferrers(tuple.getT6())
+                .uniqueVisitors(tuple.getT4())
+                .dailyViews(tuple.getT5())
+                .topArticles(tuple.getT6())
+                .topReferrers(tuple.getT7())
+                .topSources(tuple.getT8())
                 .build());
+    }
+
+    private Mono<Long> getUniqueVisitors(LocalDateTime since) {
+        return databaseClient.sql(
+                "SELECT COUNT(DISTINCT user_ip) AS cnt FROM analytics_events WHERE event_type = 'VIEW' AND created_at >= :since")
+                .bind("since", since)
+                .map((row, meta) -> row.get("cnt", Long.class))
+                .one()
+                .defaultIfEmpty(0L);
+    }
+
+    private Mono<Long> getUniqueVisitorsByAuthor(LocalDateTime since, Long authorId) {
+        return databaseClient.sql(
+                "SELECT COUNT(DISTINCT ae.user_ip) AS cnt FROM analytics_events ae JOIN articles a ON ae.article_id = a.id " +
+                "WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since AND a.author_id = :authorId")
+                .bind("since", since)
+                .bind("authorId", authorId)
+                .map((row, meta) -> row.get("cnt", Long.class))
+                .one()
+                .defaultIfEmpty(0L);
     }
 
     // BUG-12: Replaced Object[] queries with DatabaseClient row mapping
@@ -215,7 +277,7 @@ public class AnalyticsService {
         return databaseClient.sql("""
                 SELECT referrer, COUNT(*) AS cnt
                 FROM analytics_events
-                WHERE referrer IS NOT NULL AND created_at >= :since
+                WHERE referrer IS NOT NULL AND referrer != '' AND created_at >= :since
                 GROUP BY referrer
                 ORDER BY cnt DESC
                 LIMIT :limit
@@ -224,6 +286,27 @@ public class AnalyticsService {
                 .bind("limit", limit)
                 .map((row, meta) -> AnalyticsSummary.TopReferrer.builder()
                         .referrer(row.get("referrer", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.TopSource>> getTopSources(LocalDateTime since, int limit) {
+        return databaseClient.sql("""
+                SELECT metadata->>'utm_source' AS source, metadata->>'utm_medium' AS medium, COUNT(*) AS cnt
+                FROM analytics_events
+                WHERE metadata IS NOT NULL AND metadata->>'utm_source' IS NOT NULL AND created_at >= :since
+                GROUP BY metadata->>'utm_source', metadata->>'utm_medium'
+                ORDER BY cnt DESC
+                LIMIT :limit
+                """)
+                .bind("since", since)
+                .bind("limit", limit)
+                .map((row, meta) -> AnalyticsSummary.TopSource.builder()
+                        .source(row.get("source", String.class))
+                        .medium(row.get("medium", String.class))
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
@@ -307,7 +390,7 @@ public class AnalyticsService {
     }
 
     /**
-     * Author-scoped analytics summary for DEV/EDITOR users.
+     * Author-scoped analytics summary for DEV users.
      * Only includes data from articles owned by the given author.
      */
     public Mono<AnalyticsSummary> getAnalyticsSummaryByAuthor(int days, Long authorId) {
@@ -322,16 +405,20 @@ public class AnalyticsService {
                 totalViewsMono,
                 totalLikesMono,
                 analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", since),
+                getUniqueVisitorsByAuthor(since, authorId),
                 getDailyViewsByAuthor(since, authorId),
                 getTopArticlesByAuthor(since, 10, authorId),
-                getTopReferrersByAuthor(since, 10, authorId)
+                getTopReferrersByAuthor(since, 10, authorId),
+                getTopSourcesByAuthor(since, 10, authorId)
         ).map(tuple -> AnalyticsSummary.builder()
                 .totalViews(tuple.getT1())
                 .totalLikes(tuple.getT2())
                 .totalShares(tuple.getT3())
-                .dailyViews(tuple.getT4())
-                .topArticles(tuple.getT5())
-                .topReferrers(tuple.getT6())
+                .uniqueVisitors(tuple.getT4())
+                .dailyViews(tuple.getT5())
+                .topArticles(tuple.getT6())
+                .topReferrers(tuple.getT7())
+                .topSources(tuple.getT8())
                 .build());
     }
 
@@ -423,7 +510,7 @@ public class AnalyticsService {
                 SELECT ae.referrer, COUNT(*) AS cnt
                 FROM analytics_events ae
                 JOIN articles a ON ae.article_id = a.id
-                WHERE ae.referrer IS NOT NULL AND ae.created_at >= :since AND a.author_id = :authorId
+                WHERE ae.referrer IS NOT NULL AND ae.referrer != '' AND ae.created_at >= :since AND a.author_id = :authorId
                 GROUP BY ae.referrer
                 ORDER BY cnt DESC
                 LIMIT :limit
@@ -433,6 +520,30 @@ public class AnalyticsService {
                 .bind("limit", limit)
                 .map((row, meta) -> AnalyticsSummary.TopReferrer.builder()
                         .referrer(row.get("referrer", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.TopSource>> getTopSourcesByAuthor(LocalDateTime since, int limit, Long authorId) {
+        return databaseClient.sql("""
+                SELECT ae.metadata->>'utm_source' AS source, ae.metadata->>'utm_medium' AS medium, COUNT(*) AS cnt
+                FROM analytics_events ae
+                JOIN articles a ON ae.article_id = a.id
+                WHERE ae.metadata IS NOT NULL AND ae.metadata->>'utm_source' IS NOT NULL
+                  AND ae.created_at >= :since AND a.author_id = :authorId
+                GROUP BY ae.metadata->>'utm_source', ae.metadata->>'utm_medium'
+                ORDER BY cnt DESC
+                LIMIT :limit
+                """)
+                .bind("since", since)
+                .bind("authorId", authorId)
+                .bind("limit", limit)
+                .map((row, meta) -> AnalyticsSummary.TopSource.builder()
+                        .source(row.get("source", String.class))
+                        .medium(row.get("medium", String.class))
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()

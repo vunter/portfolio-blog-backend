@@ -21,6 +21,7 @@ public class AnalyticsSummary {
     private List<DailyStat> dailyViews;
     private List<TopArticle> topArticles;
     private List<TopReferrer> topReferrers;
+    private List<TopSource> topSources;
 
     @Data
     @Builder
@@ -48,6 +49,16 @@ public class AnalyticsSummary {
     @AllArgsConstructor
     public static class TopReferrer {
         private String referrer;
+        private long count;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TopSource {
+        private String source;
+        private String medium;
         private long count;
     }
 }

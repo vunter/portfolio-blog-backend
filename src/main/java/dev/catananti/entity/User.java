@@ -50,7 +50,11 @@ public class User implements Persistable<Long>, NewRecordAware {
     private String avatarUrl;
 
     private String bio;
-    
+
+    @Column("preferred_locale")
+    @Builder.Default
+    private String preferredLocale = "en";
+
     @Builder.Default
     private String role = "VIEWER";
 

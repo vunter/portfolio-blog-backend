@@ -25,5 +25,9 @@ public record ProfileUpdateRequest(
 
     @Size(min = 12, max = 128, message = "New password must be between 12 and 128 characters")
     @Pattern(regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{12,}$", message = "Password must contain uppercase, lowercase, number and special character")
-    String newPassword
+    String newPassword,
+
+    @Size(max = 10, message = "Locale must be at most 10 characters")
+    @Pattern(regexp = "^(en|pt|es|it)?$", message = "Locale must be one of: en, pt, es, it")
+    String preferredLocale
 ) {}

@@ -78,7 +78,7 @@ public class ArticleAdminService {
                     countMono = articleRepository.countAll();
                 }
             } else {
-                // DEV/EDITOR see only their own articles
+                // DEV see only their own articles
                 if (status != null && !status.isEmpty()) {
                     articlesFlux = articleRepository.findByAuthorIdAndStatusOrderByCreatedAtDesc(user.getId(), status.toUpperCase(), size, offset);
                     countMono = articleRepository.countByAuthorIdAndStatus(user.getId(), status.toUpperCase());
@@ -568,7 +568,7 @@ public class ArticleAdminService {
 
     /**
      * Verify that the current user owns the article, or is an ADMIN.
-     * DEV/EDITOR can only modify their own articles.
+     * DEV can only modify their own articles.
      */
     private Mono<Void> verifyOwnership(Article article) {
         return getCurrentUser()

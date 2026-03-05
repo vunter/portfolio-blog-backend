@@ -114,6 +114,9 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("UPDATE articles SET likes_count = COALESCE(likes_count, 0) + 1 WHERE slug = :slug")
     Mono<Void> incrementLikesBySlug(String slug);
 
+    @Query("UPDATE articles SET likes_count = GREATEST(COALESCE(likes_count, 0) - 1, 0) WHERE slug = :slug")
+    Mono<Void> decrementLikesBySlug(String slug);
+
     // Aggregate queries for dashboard stats (avoid loading all articles into memory)
     @Query("SELECT COALESCE(SUM(views_count), 0) FROM articles")
     Mono<Long> sumViewsCount();

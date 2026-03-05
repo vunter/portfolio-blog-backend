@@ -77,7 +77,7 @@ public class UserService {
     @Transactional
     public Mono<UserResponse> createUser(UserRequest request) {
         // Validate role against enum
-        String role = UserRole.EDITOR.name();
+        String role = UserRole.DEV.name();
         if (request.getRole() != null) {
             try {
                 role = UserRole.valueOf(request.getRole().toUpperCase()).name();
@@ -189,6 +189,11 @@ public class UserService {
 
                 if (request.bio() != null) {
                     user.setBio(htmlSanitizerService.stripHtml(request.bio()));
+                    changed = true;
+                }
+
+                if (request.preferredLocale() != null && !request.preferredLocale().isBlank()) {
+                    user.setPreferredLocale(request.preferredLocale().trim());
                     changed = true;
                 }
 

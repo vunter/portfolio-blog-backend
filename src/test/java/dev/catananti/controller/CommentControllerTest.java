@@ -83,7 +83,7 @@ class CommentControllerTest {
             when(commentService.getApprovedCommentsByArticleSlugPaginated("spring-boot-guide", 0, 20))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getComments("spring-boot-guide", 0, 20))
+            StepVerifier.create(controller.getComments("spring-boot-guide", 0, 20, "liked"))
                     .assertNext(result -> {
                         assertThat(result.getContent()).hasSize(1);
                         assertThat(result.getContent().getFirst().getAuthorName()).isEqualTo("John Doe");

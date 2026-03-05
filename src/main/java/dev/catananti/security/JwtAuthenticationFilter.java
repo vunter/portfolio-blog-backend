@@ -167,7 +167,7 @@ public class JwtAuthenticationFilter implements WebFilter {
     }
 
     /** F-044: Allowed roles whitelist to prevent arbitrary role injection */
-    private static final Set<String> ALLOWED_ROLES = Set.of("ADMIN", "DEV", "EDITOR", "VIEWER");
+    private static final Set<String> ALLOWED_ROLES = Set.of("ADMIN", "DEV", "VIEWER");
 
     private Mono<Void> authenticateUser(ServerWebExchange exchange, WebFilterChain chain, String email, String role) {
         // F-044: Validate role against whitelist

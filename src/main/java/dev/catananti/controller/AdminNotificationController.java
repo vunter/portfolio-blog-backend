@@ -22,7 +22,7 @@ import java.time.Duration;
 @RestController
 @RequestMapping("/api/v1/admin/notifications")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("isAuthenticated()")
 @Slf4j
 public class AdminNotificationController {
 

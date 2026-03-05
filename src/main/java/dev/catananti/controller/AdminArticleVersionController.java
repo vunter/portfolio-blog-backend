@@ -22,7 +22,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/admin/articles/{articleId}/versions")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
 @Tag(name = "Admin - Article Versions", description = "Article version history management")
 @SecurityRequirement(name = "Bearer Authentication")
 @Slf4j

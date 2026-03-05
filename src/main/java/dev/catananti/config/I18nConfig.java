@@ -1,26 +1,20 @@
 package dev.catananti.config;
 
+import dev.catananti.repository.TranslationRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.MessageSource;
-import org.springframework.context.support.ReloadableResourceBundleMessageSource;
 import org.springframework.web.server.i18n.AcceptHeaderLocaleContextResolver;
 import org.springframework.web.server.i18n.LocaleContextResolver;
 
-import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Locale;
 
 @Configuration(proxyBeanMethods = false)
 public class I18nConfig {
 
     @Bean
-    public MessageSource messageSource() {
-        ReloadableResourceBundleMessageSource messageSource = new ReloadableResourceBundleMessageSource();
-        messageSource.setBasename("classpath:messages");
-        messageSource.setDefaultEncoding(StandardCharsets.UTF_8.name());
-        messageSource.setUseCodeAsDefaultMessage(true);
-        return messageSource;
+    public MessageSource messageSource(TranslationRepository translationRepository) {
+        return new DbMessageSource(translationRepository);
     }
 
     @Bean

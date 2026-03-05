@@ -13,6 +13,7 @@ import org.springframework.context.MessageSource;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.core.ReactiveValueOperations;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.r2dbc.core.DatabaseClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -29,6 +30,7 @@ class EmailServiceTest {
     @Mock private ResilienceConfig resilience;
     @Mock private MessageSource messageSource;
     @Mock private EmailTemplateService templateService;
+    @Mock private DatabaseClient databaseClient;
     @Mock private ReactiveRedisTemplate<String, String> redisTemplate;
     @Mock private ReactiveValueOperations<String, String> valueOps;
     @Mock private MimeMessage mimeMessage;
@@ -37,7 +39,7 @@ class EmailServiceTest {
 
     @BeforeEach
     void setUp() {
-        emailService = new EmailService(mailSender, resilience, messageSource, templateService, redisTemplate);
+        emailService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, redisTemplate);
 
         // Stub template rendering – return a minimal HTML for all templates
         lenient().when(templateService.render(anyString(), anyMap()))
@@ -389,7 +391,7 @@ class EmailServiceTest {
         @Test
         @DisplayName("should allow email when Redis template is null (rate limiting disabled)")
         void shouldAllowWithoutRedis() {
-            EmailService noRedisService = new EmailService(mailSender, resilience, messageSource, templateService, null);
+            EmailService noRedisService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, null);
             setField(noRedisService, "fromEmail", "noreply@test.com");
             setField(noRedisService, "fromName", "Test Blog");
             setField(noRedisService, "appUrl", "http://localhost:8080");

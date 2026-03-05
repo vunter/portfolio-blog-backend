@@ -20,13 +20,13 @@ import java.util.Map;
 /**
  * Dashboard stats scoped by role:
  * - ADMIN sees global stats (all articles, all users, subscribers, etc.)
- * - DEV/EDITOR sees only their own articles, comments on their articles, tags on their articles.
+ * - DEV sees only their own articles, comments on their articles, tags on their articles.
  *   Users/subscribers stats are omitted (set to 0).
  */
 @RestController
 @RequestMapping("/api/v1/admin/dashboard")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
 @Tag(name = "Admin - Dashboard", description = "Dashboard statistics and activity")
 @SecurityRequirement(name = "Bearer Authentication")
 @Slf4j
@@ -93,7 +93,7 @@ public class AdminDashboardController {
                 }));
     }
 
-    // ==================== SCOPED STATS (DEV/EDITOR) ====================
+    // ==================== SCOPED STATS (DEV) ====================
 
     private Mono<Map<String, Object>> getScopedStats(Long authorId) {
         return Mono.zip(
@@ -111,8 +111,8 @@ public class AdminDashboardController {
             stats.put("draftArticles", tuple.getT3());
             stats.put("totalComments", tuple.getT4());
             stats.put("pendingComments", tuple.getT5());
-            stats.put("totalUsers", 0L);               // DEV/EDITOR cannot see user management
-            stats.put("newsletterSubscribers", 0L);     // DEV/EDITOR cannot see newsletter
+            stats.put("totalUsers", 0L);               // DEV cannot see user management
+            stats.put("newsletterSubscribers", 0L);     // DEV cannot see newsletter
             stats.put("totalViews", tuple.getT6());
             stats.put("totalTags", tuple.getT7());
             stats.put("timestamp", LocalDateTime.now().toString());

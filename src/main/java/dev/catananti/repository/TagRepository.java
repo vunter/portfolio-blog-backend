@@ -29,7 +29,7 @@ public interface TagRepository extends ReactiveCrudRepository<Tag, Long> {
            "WHERE at.tag_id = :tagId AND a.status = 'PUBLISHED'")
     Mono<Long> countPublishedArticlesByTagId(Long tagId);
 
-    // Author-scoped tag queries for DEV/EDITOR dashboard
+    // Author-scoped tag queries for DEV dashboard
     @Query("SELECT DISTINCT t.* FROM tags t " +
            "JOIN article_tags at ON t.id = at.tag_id " +
            "JOIN articles a ON a.id = at.article_id " +

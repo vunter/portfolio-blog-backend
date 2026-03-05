@@ -2,6 +2,7 @@ package dev.catananti.controller;
 
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
+import dev.catananti.service.AnalyticsService;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.InteractionDeduplicationService;
 import dev.catananti.service.ReadingHistoryService;
@@ -39,6 +40,7 @@ public class ArticleController {
     // F-065: Using Optional<> with @RequiredArgsConstructor — Spring auto-wraps absent beans
     private final Optional<InteractionDeduplicationService> deduplicationService;
     private final ReadingHistoryService readingHistoryService;
+    private final AnalyticsService analyticsService;
 
     @GetMapping
     @Operation(summary = "Get published articles", description = "Get paginated list of published articles")
@@ -94,6 +96,13 @@ public class ArticleController {
                         .flatMap(isNew -> isNew ? articleService.incrementViews(slug) : Mono.<Void>empty()))
                 .orElseGet(() -> articleService.incrementViews(slug));
 
+        // Record analytics event for dashboard tracking
+        Mono<Void> analyticsMono = analyticsService.trackArticleView(slug, request)
+                .onErrorResume(e -> {
+                    log.warn("Failed to record analytics for slug='{}': {}", slug, e.getMessage());
+                    return Mono.empty();
+                });
+
         // Track reading history for authenticated users
         if (email != null) {
             Mono<Void> historyMono = readingHistoryService.recordReadingByEmailAndSlug(email, slug)
@@ -101,23 +110,47 @@ public class ArticleController {
                         log.warn("Failed to record reading history for slug='{}': {}", slug, e.getMessage());
                         return Mono.empty();
                     });
-            return viewMono.then(historyMono);
+            return viewMono.then(analyticsMono).then(historyMono);
         }
-        return viewMono;
+        return viewMono.then(analyticsMono);
     }
 
     @PostMapping("/{slug}/like")
-    @Operation(summary = "Like article", description = "Increment the like count for an article (deduplicated per IP)")
+    @Operation(summary = "Toggle article like", description = "Like or unlike an article (toggle, deduplicated per IP)")
     public Mono<Map<String, Object>> likeArticle(
             @PathVariable @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
             ServerHttpRequest request) {
-        Mono<Void> likeMono = deduplicationService
-                .map(svc -> svc.recordLikeIfNew(slug, request)
-                        .flatMap(isNew -> isNew ? articleService.likeArticle(slug) : Mono.<Void>empty()))
-                .orElseGet(() -> articleService.likeArticle(slug));
 
-        return likeMono.then(articleService.getLikeCount(slug))
-                .map(count -> Map.<String, Object>of("likeCount", count));
+        Mono<Boolean> toggleMono = deduplicationService
+                .map(svc -> svc.hasLiked(slug, request)
+                        .flatMap(alreadyLiked -> {
+                            if (alreadyLiked) {
+                                return svc.removeLike(slug, request)
+                                        .then(articleService.unlikeArticle(slug))
+                                        .thenReturn(false);
+                            } else {
+                                return svc.recordLikeIfNew(slug, request)
+                                        .then(articleService.likeArticle(slug))
+                                        .thenReturn(true);
+                            }
+                        }))
+                .orElseGet(() -> articleService.likeArticle(slug).thenReturn(true));
+
+        return toggleMono.flatMap(liked -> articleService.getLikeCount(slug)
+                .map(count -> Map.<String, Object>of("likeCount", count, "liked", liked)));
+    }
+
+    @GetMapping("/{slug}/like/status")
+    @Operation(summary = "Check like status", description = "Check if the current user has already liked an article")
+    public Mono<Map<String, Object>> getLikeStatus(
+            @PathVariable @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
+            ServerHttpRequest request) {
+        Mono<Boolean> hasLikedMono = deduplicationService
+                .map(svc -> svc.hasLiked(slug, request))
+                .orElseGet(() -> Mono.just(false));
+
+        return hasLikedMono.zipWith(articleService.getLikeCount(slug))
+                .map(tuple -> Map.<String, Object>of("liked", tuple.getT1(), "likeCount", tuple.getT2()));
     }
 
     @GetMapping("/tag/{tagSlug}")

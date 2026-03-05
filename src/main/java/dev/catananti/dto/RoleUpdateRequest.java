@@ -12,6 +12,6 @@ import lombok.NoArgsConstructor;
 public class RoleUpdateRequest {
 
     @NotBlank(message = "Role is required")
-    @Pattern(regexp = "ADMIN|DEV|EDITOR|VIEWER", message = "Role must be ADMIN, DEV, EDITOR, or VIEWER")
+    @Pattern(regexp = "ADMIN|DEV|VIEWER", message = "Role must be ADMIN, DEV, or VIEWER")
     private String role;
 }

@@ -12,6 +12,7 @@ import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.lang.Nullable;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -37,6 +38,7 @@ public class EmailService {
     private final ResilienceConfig resilience;
     private final MessageSource messageSource;
     private final EmailTemplateService templateService;
+    private final DatabaseClient db;
     @Nullable
     private final ReactiveRedisTemplate<String, String> redisTemplate;
 
@@ -45,12 +47,14 @@ public class EmailService {
             ResilienceConfig resilience,
             MessageSource messageSource,
             EmailTemplateService templateService,
+            DatabaseClient databaseClient,
             @Autowired(required = false)
             @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate) {
         this.mailSender = mailSender;
         this.resilience = resilience;
         this.messageSource = messageSource;
         this.templateService = templateService;
+        this.db = databaseClient;
         this.redisTemplate = redisTemplate;
         if (redisTemplate == null) {
             log.info("ReactiveRedisTemplate not available — email rate limiting disabled");
@@ -91,6 +95,19 @@ public class EmailService {
     /** Resolve a message key using the configured default locale. */
     private String msg(String key, Object... args) {
         return messageSource.getMessage(key, args, Locale.forLanguageTag(defaultLocaleTag));
+    }
+
+    /**
+     * Resolve user's preferred locale from the users table.
+     * Falls back to 'en' if not found or on error.
+     */
+    private Mono<String> resolveLocale(String email) {
+        return db.sql("SELECT preferred_locale FROM users WHERE email = :email")
+                .bind("email", email)
+                .map(row -> row.get("preferred_locale", String.class))
+                .one()
+                .defaultIfEmpty("en")
+                .onErrorReturn("en");
     }
 
     /**
@@ -315,27 +332,29 @@ public class EmailService {
      * Send password reset email with secure token.
      */
     public Mono<Void> sendPasswordResetEmail(String email, String name, String token) {
-        String subject = msg("email.password.reset.subject");
-        String resetUrl = siteUrl + "/auth/reset-password?token=" + token;
-        String displayName = name != null ? name : msg("email.default.user");
+        return resolveLocale(email).flatMap(locale -> {
+            String subject = msg("email.password.reset.subject");
+            String resetUrl = siteUrl + "/auth/reset-password?token=" + token;
+            String displayName = name != null ? name : msg("email.default.user");
 
-        String html = templateService.render("password-reset", baseVars(
-            "#3b82f6 0%, #1d4ed8 100%",
-            msg("email.password.reset.header"),
-            Map.of(
-                "greeting", msg("email.greeting", displayName),
-                "bodyText", msg("email.password.reset.body"),
-                "resetUrl", resetUrl,
-                "buttonText", msg("email.password.reset.button"),
-                "importantTitle", msg("email.password.reset.important"),
-                "expiresText", msg("email.password.reset.expires"),
-                "onceText", msg("email.password.reset.once"),
-                "ignoreText", msg("email.password.reset.ignore"),
-                "fallbackText", msg("email.password.reset.fallback")
-            )
-        ));
+            String html = templateService.render("password-reset", baseVars(
+                "#3b82f6 0%, #1d4ed8 100%",
+                msg("email.password.reset.header"),
+                Map.of(
+                    "greeting", msg("email.greeting", displayName),
+                    "bodyText", msg("email.password.reset.body"),
+                    "resetUrl", resetUrl,
+                    "buttonText", msg("email.password.reset.button"),
+                    "importantTitle", msg("email.password.reset.important"),
+                    "expiresText", msg("email.password.reset.expires"),
+                    "onceText", msg("email.password.reset.once"),
+                    "ignoreText", msg("email.password.reset.ignore"),
+                    "fallbackText", msg("email.password.reset.fallback")
+                )
+            ), locale);
 
-        return sendHtmlEmail(email, subject, html);
+            return sendHtmlEmail(email, subject, html);
+        });
     }
 
     /**
@@ -404,25 +423,27 @@ public class EmailService {
      * Send welcome email after user registration.
      */
     public Mono<Void> sendRegistrationWelcome(String to, String name) {
-        String subject = msg("email.registration.welcome.subject");
-        String displayName = name != null ? name : msg("email.default.user");
+        return resolveLocale(to).flatMap(locale -> {
+            String subject = msg("email.registration.welcome.subject");
+            String displayName = name != null ? name : msg("email.default.user");
 
-        String html = templateService.render("registration-welcome", baseVars(
-            "#6366f1 0%, #4f46e5 100%",
-            msg("email.registration.welcome.header"),
-            Map.of(
-                "greeting", msg("email.greeting", displayName),
-                "bodyText", msg("email.registration.welcome.body"),
-                "exploreText", msg("email.registration.welcome.explore"),
-                "item1", msg("email.registration.welcome.item1"),
-                "item2", msg("email.registration.welcome.item2"),
-                "item3", msg("email.registration.welcome.item3"),
-                "visitText", msg("email.registration.welcome.visit"),
-                "siteUrl", siteUrl
-            )
-        ));
+            String html = templateService.render("registration-welcome", baseVars(
+                "#6366f1 0%, #4f46e5 100%",
+                msg("email.registration.welcome.header"),
+                Map.of(
+                    "greeting", msg("email.greeting", displayName),
+                    "bodyText", msg("email.registration.welcome.body"),
+                    "exploreText", msg("email.registration.welcome.explore"),
+                    "item1", msg("email.registration.welcome.item1"),
+                    "item2", msg("email.registration.welcome.item2"),
+                    "item3", msg("email.registration.welcome.item3"),
+                    "visitText", msg("email.registration.welcome.visit"),
+                    "siteUrl", siteUrl
+                )
+            ), locale);
 
-        return sendHtmlEmail(to, subject, html);
+            return sendHtmlEmail(to, subject, html);
+        });
     }
 
     /**

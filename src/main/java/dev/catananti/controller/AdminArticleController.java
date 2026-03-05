@@ -30,7 +30,7 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/v1/admin/articles")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
 @Validated
 @Slf4j
 public class AdminArticleController {

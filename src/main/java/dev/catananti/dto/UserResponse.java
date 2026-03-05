@@ -23,6 +23,7 @@ public class UserResponse {
     private String role;
     private Boolean active;
     private Boolean hasPassword;
+    private String preferredLocale;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -37,6 +38,7 @@ public class UserResponse {
                 .role(user.getRole())
                 .active(user.getActive())
                 .hasPassword(user.getPasswordHash() != null && !user.getPasswordHash().isEmpty())
+                .preferredLocale(user.getPreferredLocale())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())
                 .build();

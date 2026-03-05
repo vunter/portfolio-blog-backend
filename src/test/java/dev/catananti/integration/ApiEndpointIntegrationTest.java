@@ -147,13 +147,16 @@ class ApiEndpointIntegrationTest {
         @Mock
         private ReadingHistoryService readingHistoryService;
 
+        @Mock
+        private AnalyticsService analyticsService;
+
         private ArticleController articleController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
-            articleController = new ArticleController(articleService, java.util.Optional.of(deduplicationService), readingHistoryService);
+            articleController = new ArticleController(articleService, java.util.Optional.of(deduplicationService), readingHistoryService, analyticsService);
             client = WebTestClient.bindToController(articleController)
                     .configureClient().build();
         }
@@ -791,7 +794,7 @@ class ApiEndpointIntegrationTest {
             when(commentService.getApprovedCommentsByArticleSlugPaginated("my-post", 0, 20))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(commentController.getComments("my-post", 0, 20))
+            StepVerifier.create(commentController.getComments("my-post", 0, 20, "liked"))
                     .assertNext(result -> assertThat(result.getContent().get(0).getAuthorName()).isEqualTo("Reader"))
                     .verifyComplete();
         }

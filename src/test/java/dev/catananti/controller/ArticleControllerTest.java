@@ -4,6 +4,7 @@ import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.service.ArticleService;
+import dev.catananti.service.AnalyticsService;
 import dev.catananti.service.InteractionDeduplicationService;
 import dev.catananti.service.ReadingHistoryService;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +42,9 @@ class ArticleControllerTest {
     private ReadingHistoryService readingHistoryService;
     
     @Mock
+    private AnalyticsService analyticsService;
+    
+    @Mock
     private ServerHttpRequest mockRequest;
 
     // F-065: Manual construction needed since deduplicationService is Optional<>
@@ -48,7 +52,7 @@ class ArticleControllerTest {
 
     @BeforeEach
     void setUp() {
-        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService);
+        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService, analyticsService);
     }
 
     @Test

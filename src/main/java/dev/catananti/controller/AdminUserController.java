@@ -208,15 +208,14 @@ public class AdminUserController {
                 userService.getTotalUsers(),
                 userService.countUsersByRole("ADMIN"),
                 userService.countUsersByRole("DEV"),
-                userService.countUsersByRole("EDITOR"),
                 userService.countUsersByRole("VIEWER")
         ).map(tuple -> ResponseEntity.ok(
                 UserStatsResponse.builder()
                         .total(tuple.getT1())
                         .admins(tuple.getT2())
                         .devs(tuple.getT3())
-                        .editors(tuple.getT4())
-                        .viewers(tuple.getT5())
+                        .editors(0L)
+                        .viewers(tuple.getT4())
                         .build()
         ));
     }

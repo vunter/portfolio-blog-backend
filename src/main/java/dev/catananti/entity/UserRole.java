@@ -8,7 +8,6 @@ package dev.catananti.entity;
 public enum UserRole {
     ADMIN,
     DEV,
-    EDITOR,
     VIEWER;
 
     /**

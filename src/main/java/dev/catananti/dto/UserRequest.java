@@ -30,7 +30,7 @@ public class UserRequest {
     )
     private String password;
 
-    @Pattern(regexp = "ADMIN|DEV|EDITOR|VIEWER", message = "Role must be ADMIN, DEV, EDITOR, or VIEWER")
+    @Pattern(regexp = "ADMIN|DEV|VIEWER", message = "Role must be ADMIN, DEV, or VIEWER")
     @Builder.Default
-    private String role = "EDITOR";
+    private String role = "DEV";
 }

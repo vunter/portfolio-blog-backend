@@ -20,13 +20,13 @@ import java.util.List;
 /**
  * Tag management scoped by role:
  * - ADMIN sees all tags
- * - DEV/EDITOR sees only tags linked to their articles
+ * - DEV sees only tags linked to their articles
  * All roles can create/edit/delete tags (needed for article editing).
  */
 @RestController
 @RequestMapping("/api/v1/admin/tags")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
 @Slf4j
 public class AdminTagController {
 
@@ -40,7 +40,7 @@ public class AdminTagController {
             if (UserRole.ADMIN.matches(user.getRole())) {
                 return tagService.getAllTags(locale).collectList();
             } else {
-                // DEV/EDITOR: only tags linked to their articles
+                // DEV: only tags linked to their articles
                 return tagService.getTagsByAuthorId(user.getId(), locale).collectList();
             }
         });
@@ -69,6 +69,7 @@ public class AdminTagController {
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasRole('ADMIN')")
     public Mono<Void> deleteTag(@PathVariable Long id) {
         log.info("Deleting tag: id={}", id);
         return tagService.deleteTag(id);

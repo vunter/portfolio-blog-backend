@@ -562,7 +562,6 @@ class EntityCoverageTest {
         void shouldMatchAllValues() {
             assertThat(UserRole.ADMIN.matches("ADMIN")).isTrue();
             assertThat(UserRole.DEV.matches("DEV")).isTrue();
-            assertThat(UserRole.EDITOR.matches("EDITOR")).isTrue();
             assertThat(UserRole.VIEWER.matches("VIEWER")).isTrue();
         }
 
@@ -573,9 +572,9 @@ class EntityCoverageTest {
         }
 
         @Test
-        @DisplayName("Should have exactly 4 values")
-        void shouldHaveFourValues() {
-            assertThat(UserRole.values()).hasSize(4);
+        @DisplayName("Should have exactly 3 values")
+        void shouldHaveThreeValues() {
+            assertThat(UserRole.values()).hasSize(3);
         }
     }
 

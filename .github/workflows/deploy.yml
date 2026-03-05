@@ -80,8 +80,12 @@ jobs:
             echo "Ensuring infrastructure stack is running..."
             doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
             echo "Waiting for infrastructure health..."
-            docker exec blog-postgres pg_isready -U postgres -d blog || sleep 5
-            docker exec blog-redis sh -c 'REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping' || sleep 5
+            sleep 5
+            docker exec blog-postgres pg_isready -d blog || sleep 10
+
+            echo "Applying database migrations..."
+            docker cp ../../src/main/resources/schema.sql blog-postgres:/tmp/schema.sql
+            docker exec blog-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/schema.sql' || echo "Schema migration had warnings (non-fatal)"
 
             echo "Deploying application stack..."
             doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate

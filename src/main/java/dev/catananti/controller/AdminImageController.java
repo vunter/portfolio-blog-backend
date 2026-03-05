@@ -25,7 +25,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/admin/images")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
 @Tag(name = "Admin - Images (Legacy)", description = "Legacy image upload — use /api/v1/admin/media/* for new code")
 @SecurityRequirement(name = "Bearer Authentication")
 @Slf4j

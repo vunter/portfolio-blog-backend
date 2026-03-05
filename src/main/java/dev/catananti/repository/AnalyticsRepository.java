@@ -21,7 +21,7 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
     @Query("SELECT COUNT(*) FROM analytics_events WHERE event_type = :eventType AND created_at >= :since")
     Mono<Long> countByEventTypeSince(String eventType, LocalDateTime since);
 
-    // Author-scoped analytics queries (for DEV/EDITOR dashboard)
+    // Author-scoped analytics queries (for DEV dashboard)
     @Query("SELECT COUNT(*) FROM analytics_events ae " +
            "JOIN articles a ON ae.article_id = a.id " +
            "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :since")

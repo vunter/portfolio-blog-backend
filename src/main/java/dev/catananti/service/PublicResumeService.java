@@ -115,14 +115,25 @@ public class PublicResumeService {
                     if (ownerId == null) {
                         return Mono.<ResumeProfileResponse>error(new ResourceNotFoundException("Resume template has no owner: " + alias));
                     }
-                    return resumeProfileService.getProfileByOwnerIdWithFallback(ownerId, validLang);
+                    return enrichWithAvatar(ownerId, validLang);
                 })
                 // Fallback: resolve by username if no template alias/slug matches
                 .switchIfEmpty(Mono.defer(() ->
                     userRepository.findByUsername(normalizedAlias)
-                        .flatMap(user -> resumeProfileService.getProfileByOwnerIdWithFallback(user.getId(), validLang))
+                        .flatMap(user -> enrichWithAvatar(user.getId(), validLang))
                 ))
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Resume not found for alias: " + alias)));
+    }
+
+    private Mono<ResumeProfileResponse> enrichWithAvatar(Long ownerId, String lang) {
+        return Mono.zip(
+                resumeProfileService.getProfileByOwnerIdWithFallback(ownerId, lang),
+                userRepository.findById(ownerId).defaultIfEmpty(User.builder().build())
+        ).map(tuple -> {
+            ResumeProfileResponse profile = tuple.getT1();
+            profile.setAvatarUrl(tuple.getT2().getAvatarUrl());
+            return profile;
+        });
     }
 
     /**

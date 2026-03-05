@@ -229,7 +229,7 @@ public class TagService {
     }
 
     /**
-     * Get tags linked to articles by a specific author (for DEV/EDITOR dashboard).
+     * Get tags linked to articles by a specific author (for DEV dashboard).
      */
     public Flux<TagResponse> getTagsByAuthorId(Long authorId, String locale) {
         return tagRepository.findByAuthorId(authorId)

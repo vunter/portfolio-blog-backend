@@ -4,6 +4,7 @@ import dev.catananti.dto.CommentRequest;
 import dev.catananti.dto.CommentResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.CommentService;
+import dev.catananti.service.InteractionDeduplicationService;
 import dev.catananti.service.RecaptchaService;
 import dev.catananti.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -19,10 +20,14 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+
+import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/v1/articles/{slug}/comments")
@@ -35,6 +40,7 @@ public class CommentController {
     private final CommentService commentService;
     private final RecaptchaService recaptchaService;
     private final UserService userService;
+    private final Optional<InteractionDeduplicationService> deduplicationService;
 
     @GetMapping
     @Operation(summary = "Get approved comments for article", description = "Returns paginated list of approved comments")
@@ -48,9 +54,10 @@ public class CommentController {
             @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format")
             @Parameter(description = "Article slug") String slug,
             @RequestParam(defaultValue = "0") @Min(0) @Parameter(description = "Page number") int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) @Parameter(description = "Page size (1-100)") int size) {
-        log.debug("Fetching comments for slug={}, page={}, size={}", slug, page, size);
-        return commentService.getApprovedCommentsByArticleSlugPaginated(slug, page, size);
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) @Parameter(description = "Page size (1-100)") int size,
+            @RequestParam(defaultValue = "liked") @Parameter(description = "Sort order: recent, liked, oldest") String sort) {
+        log.debug("Fetching comments for slug={}, page={}, size={}, sort={}", slug, page, size, sort);
+        return commentService.getApprovedCommentsByArticleSlugPaginated(slug, page, size, sort);
     }
 
     @GetMapping("/count")
@@ -92,5 +99,44 @@ public class CommentController {
                     return recaptchaService.verify(request.getRecaptchaToken(), "comment")
                             .then(commentService.createComment(slug, request));
                 });
+    }
+
+    @PostMapping("/{commentId}/like")
+    @Operation(summary = "Toggle comment like", description = "Like or unlike a comment (toggle, deduplicated per IP)")
+    public Mono<Map<String, Object>> toggleCommentLike(
+            @PathVariable @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
+            @PathVariable Long commentId,
+            ServerHttpRequest request) {
+        Mono<Boolean> toggleMono = deduplicationService
+                .map(svc -> svc.hasLikedComment(commentId, request)
+                        .flatMap(alreadyLiked -> {
+                            if (alreadyLiked) {
+                                return svc.removeCommentLike(commentId, request)
+                                        .then(commentService.unlikeComment(commentId))
+                                        .thenReturn(false);
+                            } else {
+                                return svc.recordCommentLikeIfNew(commentId, request)
+                                        .then(commentService.likeComment(commentId))
+                                        .thenReturn(true);
+                            }
+                        }))
+                .orElseGet(() -> commentService.likeComment(commentId).thenReturn(true));
+
+        return toggleMono.flatMap(liked -> commentService.getCommentLikeCount(commentId)
+                .map(count -> Map.<String, Object>of("liked", liked, "likesCount", count)));
+    }
+
+    @GetMapping("/{commentId}/like/status")
+    @Operation(summary = "Check comment like status")
+    public Mono<Map<String, Object>> getCommentLikeStatus(
+            @PathVariable @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
+            @PathVariable Long commentId,
+            ServerHttpRequest request) {
+        Mono<Boolean> hasLikedMono = deduplicationService
+                .map(svc -> svc.hasLikedComment(commentId, request))
+                .orElseGet(() -> Mono.just(false));
+
+        return hasLikedMono.zipWith(commentService.getCommentLikeCount(commentId))
+                .map(tuple -> Map.<String, Object>of("liked", tuple.getT1(), "likesCount", tuple.getT2()));
     }
 }

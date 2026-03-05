@@ -23,7 +23,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/admin/media")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("isAuthenticated()")
 @Tag(name = "Admin - Media", description = "Media asset upload and management (reusable across avatars, blogs, comments)")
 @SecurityRequirement(name = "Bearer Authentication")
 @Slf4j
@@ -61,6 +61,7 @@ public class MediaController {
      * List media assets with pagination.
      */
     @GetMapping
+    @PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
     @Operation(summary = "List media assets", description = "Browse uploaded media with pagination and optional purpose filter")
     public Mono<MediaListResponse> listMedia(
             @RequestParam(value = "page", defaultValue = "0") int page,
@@ -111,6 +112,7 @@ public class MediaController {
      */
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
     @Operation(summary = "Delete media asset", description = "Delete a media asset by its ID")
     public Mono<Void> deleteMedia(@PathVariable Long id) {
         log.info("Deleting media asset: id={}", id);

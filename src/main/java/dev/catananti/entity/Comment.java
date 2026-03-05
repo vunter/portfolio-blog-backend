@@ -59,6 +59,10 @@ public class Comment implements Persistable<Long>, NewRecordAware {
     @Column("moderation_note")
     private String moderationNote;
 
+    @Column("likes_count")
+    @Builder.Default
+    private Integer likesCount = 0;
+
     @Column("created_at")
     private LocalDateTime createdAt;
 

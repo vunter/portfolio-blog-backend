@@ -16,6 +16,12 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
     @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Comment> findApprovedByArticleIdPaginated(Long articleId, int limit, int offset);
 
+    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY likes_count DESC, created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Comment> findApprovedByArticleIdSortedByLikes(Long articleId, int limit, int offset);
+
+    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at ASC LIMIT :limit OFFSET :offset")
+    Flux<Comment> findApprovedByArticleIdSortedByOldest(Long articleId, int limit, int offset);
+
     @Query("SELECT * FROM comments WHERE parent_id = :parentId AND status = 'APPROVED' ORDER BY created_at ASC")
     Flux<Comment> findApprovedRepliesByParentId(Long parentId);
 
@@ -40,6 +46,12 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
     Mono<Void> deleteByArticleId(Long articleId);
 
     Mono<Void> deleteByParentId(Long parentId);
+
+    @Query("UPDATE comments SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = :id")
+    Mono<Void> incrementLikesById(Long id);
+
+    @Query("UPDATE comments SET likes_count = GREATEST(COALESCE(likes_count, 0) - 1, 0) WHERE id = :id")
+    Mono<Void> decrementLikesById(Long id);
 
     @Query("SELECT COUNT(*) FROM comments WHERE LOWER(author_email) = LOWER(:email) AND status = 'APPROVED'")
     Mono<Long> countApprovedByAuthorEmail(String email);

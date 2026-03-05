@@ -45,6 +45,9 @@ public final class IpAddressExtractor {
     /** Docker/K8s bridge networks — only these specific subnets are trusted. */
     private static final String[] TRUSTED_PREFIXES = {
             "172.17.", "172.18.", "172.19.", "172.20.",
+            "172.21.", "172.22.", "172.23.", "172.24.",
+            "172.25.", "172.26.", "172.27.", "172.28.",
+            "172.29.", "172.30.", "172.31.",
             "10.42.", "10.43."  // K3s pod/service ranges
     };
 

@@ -27,6 +27,7 @@ public class InteractionDeduplicationService {
 
     private static final String VIEW_PREFIX = "article_view:";
     private static final String LIKE_PREFIX = "article_like:";
+    private static final String COMMENT_LIKE_PREFIX = "comment_like:";
     
     // Views expire after 24 hours (same user can be counted once per day)
     private static final Duration VIEW_TTL = Duration.ofHours(24);
@@ -73,6 +74,74 @@ public class InteractionDeduplicationService {
                     log.warn("Failed to check like deduplication: {}", e.getMessage());
                     return Mono.just(true); // Allow on error to not block legitimate users
                 });
+    }
+
+    /**
+     * Removes the like record for this IP, allowing a re-like later.
+     * @return Mono<Boolean> - true if the key existed and was removed
+     */
+    public Mono<Boolean> removeLike(String slug, ServerHttpRequest request) {
+        String clientIp = IpAddressExtractor.extractClientIp(request);
+        if ("unknown".equals(clientIp)) {
+            return Mono.just(false);
+        }
+
+        String key = LIKE_PREFIX + slug + ":" + hashIp(clientIp);
+
+        return redisTemplate.delete(key)
+                .map(count -> count > 0)
+                .defaultIfEmpty(false)
+                .onErrorResume(e -> {
+                    log.warn("Failed to remove like: {}", e.getMessage());
+                    return Mono.just(false);
+                });
+    }
+
+    /**
+     * Checks if the given IP has already liked this article (key exists in Redis).
+     */
+    public Mono<Boolean> hasLiked(String slug, ServerHttpRequest request) {
+        String clientIp = IpAddressExtractor.extractClientIp(request);
+        if ("unknown".equals(clientIp)) {
+            return Mono.just(false);
+        }
+
+        String key = LIKE_PREFIX + slug + ":" + hashIp(clientIp);
+
+        return redisTemplate.hasKey(key)
+                .defaultIfEmpty(false)
+                .onErrorResume(e -> {
+                    log.warn("Failed to check like status: {}", e.getMessage());
+                    return Mono.just(false);
+                });
+    }
+
+    // ==================== COMMENT LIKES ====================
+
+    public Mono<Boolean> hasLikedComment(Long commentId, ServerHttpRequest request) {
+        String clientIp = IpAddressExtractor.extractClientIp(request);
+        if ("unknown".equals(clientIp)) return Mono.just(false);
+        String key = COMMENT_LIKE_PREFIX + commentId + ":" + hashIp(clientIp);
+        return redisTemplate.hasKey(key).defaultIfEmpty(false)
+                .onErrorResume(e -> Mono.just(false));
+    }
+
+    public Mono<Boolean> recordCommentLikeIfNew(Long commentId, ServerHttpRequest request) {
+        String clientIp = IpAddressExtractor.extractClientIp(request);
+        if ("unknown".equals(clientIp)) return Mono.just(false);
+        String key = COMMENT_LIKE_PREFIX + commentId + ":" + hashIp(clientIp);
+        return redisTemplate.opsForValue().setIfAbsent(key, "1", LIKE_TTL)
+                .defaultIfEmpty(false)
+                .onErrorResume(e -> Mono.just(true));
+    }
+
+    public Mono<Boolean> removeCommentLike(Long commentId, ServerHttpRequest request) {
+        String clientIp = IpAddressExtractor.extractClientIp(request);
+        if ("unknown".equals(clientIp)) return Mono.just(false);
+        String key = COMMENT_LIKE_PREFIX + commentId + ":" + hashIp(clientIp);
+        return redisTemplate.delete(key).map(count -> count > 0)
+                .defaultIfEmpty(false)
+                .onErrorResume(e -> Mono.just(false));
     }
 
     /**

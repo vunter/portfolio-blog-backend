@@ -27,6 +27,7 @@ public class CommentResponse {
     private String status;
     private String parentId;
     private String moderationNote;
+    private Integer likesCount;
     private List<CommentResponse> replies;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

@@ -65,25 +65,50 @@ public class CommentService {
     }
 
     public Mono<PageResponse<CommentResponse>> getApprovedCommentsByArticleSlugPaginated(String slug, int page, int size) {
+        return getApprovedCommentsByArticleSlugPaginated(slug, page, size, "liked");
+    }
+
+    public Mono<PageResponse<CommentResponse>> getApprovedCommentsByArticleSlugPaginated(String slug, int page, int size, String sort) {
         int offset = page * size;
         return articleRepository.findBySlug(slug)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
-                .flatMap(article -> commentRepository.findApprovedByArticleIdPaginated(article.getId(), size, offset)
-                        .flatMap(this::enrichWithReplies)
-                        .map(this::toPublicResponse)
-                        .collectList()
-                        .zipWith(commentRepository.countApprovedByArticleId(article.getId()))
-                        .map(tuple -> {
-                            var content = tuple.getT1();
-                            var total = tuple.getT2();
-                            return PageResponse.of(content, page, size, total);
-                        }));
+                .flatMap(article -> {
+                    Flux<Comment> commentsFlux = switch (sort) {
+                        case "liked" -> commentRepository.findApprovedByArticleIdSortedByLikes(article.getId(), size, offset);
+                        case "oldest" -> commentRepository.findApprovedByArticleIdSortedByOldest(article.getId(), size, offset);
+                        default -> commentRepository.findApprovedByArticleIdPaginated(article.getId(), size, offset);
+                    };
+                    return commentsFlux
+                            .flatMap(this::enrichWithReplies)
+                            .map(this::toPublicResponse)
+                            .collectList()
+                            .zipWith(commentRepository.countApprovedByArticleId(article.getId()))
+                            .map(tuple -> {
+                                var content = tuple.getT1();
+                                var total = tuple.getT2();
+                                return PageResponse.of(content, page, size, total);
+                            });
+                });
     }
 
     public Mono<Long> getCommentCountByArticleSlug(String slug) {
         return articleRepository.findBySlug(slug)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
                 .flatMap(article -> commentRepository.countApprovedByArticleId(article.getId()));
+    }
+
+    public Mono<Void> likeComment(Long commentId) {
+        return commentRepository.incrementLikesById(commentId);
+    }
+
+    public Mono<Void> unlikeComment(Long commentId) {
+        return commentRepository.decrementLikesById(commentId);
+    }
+
+    public Mono<Integer> getCommentLikeCount(Long commentId) {
+        return commentRepository.findById(commentId)
+                .map(c -> c.getLikesCount() != null ? c.getLikesCount() : 0)
+                .defaultIfEmpty(0);
     }
 
     @Transactional
@@ -267,7 +292,7 @@ public class CommentService {
 
     /**
      * Get comments by status, scoped by ownership.
-     * ADMIN sees all comments; DEV/EDITOR see only comments on their own articles.
+     * ADMIN sees all comments; DEV see only comments on their own articles.
      */
     public Mono<PageResponse<CommentResponse>> getAdminCommentsByStatus(String status, int page, int size) {
         int offset = page * size;
@@ -279,7 +304,7 @@ public class CommentService {
                 }
                 return getCommentsByStatus(status, page, size);
             } else {
-                // DEV/EDITOR: only comments on own articles
+                // DEV: only comments on own articles
                 Long userId = user.getId();
                 Flux<Comment> commentsFlux;
                 Mono<Long> countMono;
@@ -301,7 +326,7 @@ public class CommentService {
 
     /**
      * Get comments by article, scoped by ownership.
-     * ADMIN sees all; DEV/EDITOR only see comments on articles they authored.
+     * ADMIN sees all; DEV only see comments on articles they authored.
      */
     public Flux<CommentResponse> getAdminCommentsByArticleId(Long articleId) {
         return getCurrentUser().flatMapMany(user -> {
@@ -376,6 +401,7 @@ public class CommentService {
                 .content(comment.getContent())
                 .status(comment.getStatus())
                 .parentId(comment.getParentId() != null ? String.valueOf(comment.getParentId()) : null)
+                .likesCount(comment.getLikesCount() != null ? comment.getLikesCount() : 0)
                 .replies(comment.getReplies() != null ? 
                         comment.getReplies().stream().map(this::toPublicResponse).toList() : 
                         Collections.emptyList())
@@ -397,6 +423,7 @@ public class CommentService {
                 .status(comment.getStatus())
                 .moderationNote(comment.getModerationNote())
                 .parentId(comment.getParentId() != null ? String.valueOf(comment.getParentId()) : null)
+                .likesCount(comment.getLikesCount() != null ? comment.getLikesCount() : 0)
                 .replies(comment.getReplies() != null ? 
                         comment.getReplies().stream().map(this::toResponse).toList() : 
                         Collections.emptyList())
@@ -453,7 +480,7 @@ public class CommentService {
 
     /**
      * Verify that the current user owns the article that a comment belongs to.
-     * ADMIN can moderate any comment; DEV/EDITOR can only moderate comments on their own articles.
+     * ADMIN can moderate any comment; DEV can only moderate comments on their own articles.
      */
     private Mono<Void> verifyCommentOwnership(Long commentId) {
         return getCurrentUser().flatMap(user -> {

@@ -130,6 +130,12 @@ public class ArticleService {
                 });
     }
 
+    @Transactional
+    public Mono<Void> unlikeArticle(String slug) {
+        return articleRepository.decrementLikesBySlug(slug)
+                .doOnSuccess(_ -> log.info("Article unliked: {}", slug));
+    }
+
     /**
      * Get the current like count for an article by slug.
      */

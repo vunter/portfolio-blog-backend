@@ -33,6 +33,7 @@ services:
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://catananti.dev,https://www.catananti.dev}
       # Admin seed
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@catananti.dev}
+      - ADMIN_NAME=${ADMIN_NAME:-Admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       # reCAPTCHA
       - RECAPTCHA_ENABLED=${RECAPTCHA_ENABLED:-false}
@@ -71,6 +72,8 @@ services:
       # Sentry Error Tracking
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=production
+      # DeepL Translation API
+      - DEEPL_API_KEY=${DEEPL_API_KEY:-}
       # MFA
       - MFA_ENCRYPTION_KEY=${MFA_ENCRYPTION_KEY:-}
       # Cloudflare R2 Object Storage (avatars, media)

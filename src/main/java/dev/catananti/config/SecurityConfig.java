@@ -155,6 +155,8 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/articles/**").permitAll()
                         .pathMatchers("/api/v1/tags/**").permitAll()
                         .pathMatchers("/api/v1/search/**").permitAll()
+                        .pathMatchers("/api/v1/i18n/**").permitAll()
+                        .pathMatchers("/api/v1/languages").permitAll()
                         .pathMatchers("/api/v1/newsletter/**").permitAll()
                         .pathMatchers("/api/v1/status/**").permitAll()
                         // F-016: Uses PUBLIC_AUTH_PATHS constant shared with CSRF exemption
@@ -201,18 +203,23 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/admin/settings/**").hasRole("ADMIN")
                         .pathMatchers("/api/v1/admin/newsletter/**").hasRole("ADMIN")
                         .pathMatchers("/api/v1/admin/contact/**").hasRole("ADMIN")
-                        // Content creation - ADMIN, DEV, and EDITOR roles
-                        .pathMatchers("/api/v1/admin/articles/**").hasAnyRole("ADMIN", "DEV", "EDITOR")
-                        .pathMatchers("/api/v1/admin/tags/**").hasAnyRole("ADMIN", "DEV", "EDITOR")
-                        .pathMatchers("/api/v1/admin/comments/**").hasAnyRole("ADMIN", "DEV", "EDITOR")
-                        .pathMatchers("/api/v1/admin/images/**").hasAnyRole("ADMIN", "DEV", "EDITOR")
-                        .pathMatchers("/api/v1/admin/media/**").hasAnyRole("ADMIN", "DEV", "EDITOR")
+                        // Content creation - ADMIN and DEV roles
+                        .pathMatchers("/api/v1/admin/articles/**").hasAnyRole("ADMIN", "DEV")
+                        .pathMatchers("/api/v1/admin/tags/**").hasAnyRole("ADMIN", "DEV")
+                        .pathMatchers("/api/v1/admin/comments/**").hasAnyRole("ADMIN", "DEV")
+                        .pathMatchers("/api/v1/admin/images/**").hasAnyRole("ADMIN", "DEV")
+                        .pathMatchers("/api/v1/admin/media/upload").authenticated()
+                        .pathMatchers("/api/v1/admin/media/**").hasAnyRole("ADMIN", "DEV")
+                        // Notifications - all authenticated users
+                        .pathMatchers("/api/v1/admin/notifications/**").authenticated()
+                        // Reading history - all authenticated users
+                        .pathMatchers("/api/v1/admin/reading-history/**").authenticated()
                         // Resume profile - ADMIN and DEV
                         .pathMatchers("/api/v1/resume/profile/**").hasAnyRole("ADMIN", "DEV")
                         .pathMatchers("/api/v1/resume/templates/**").hasAnyRole("ADMIN", "DEV")
-                        // Dashboard and analytics - ADMIN, DEV, and EDITOR (read-only)
-                        .pathMatchers("/api/v1/admin/dashboard/**").hasAnyRole("ADMIN", "DEV", "EDITOR")
-                        .pathMatchers("/api/v1/admin/analytics/**").hasAnyRole("ADMIN", "DEV", "EDITOR")
+                        // Dashboard and analytics - ADMIN and DEV (read-only)
+                        .pathMatchers("/api/v1/admin/dashboard/**").hasAnyRole("ADMIN", "DEV")
+                        .pathMatchers("/api/v1/admin/analytics/**").hasAnyRole("ADMIN", "DEV")
                         // Auth endpoints (verify, logout) require authentication
                         .pathMatchers("/api/v1/admin/auth/**").authenticated()
                         // All other admin endpoints require authentication

@@ -28,7 +28,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/admin/analytics")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'DEV', 'EDITOR')")
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
 @Validated
 @Tag(name = "Admin - Analytics", description = "Analytics and statistics endpoints")
 @SecurityRequirement(name = "Bearer Authentication")
