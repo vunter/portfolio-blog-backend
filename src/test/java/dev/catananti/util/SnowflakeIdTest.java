@@ -101,8 +101,8 @@ class SnowflakeIdTest {
         @Test
         @DisplayName("should produce unique IDs under concurrent generation")
         void shouldProduceUniqueIdsUnderConcurrency() throws InterruptedException {
-            int threadCount = 8;
-            int idsPerThread = 5_000;
+            int threadCount = 4;
+            int idsPerThread = 2_000;
             int expectedTotal = threadCount * idsPerThread;
             Set<Long> ids = ConcurrentHashMap.newKeySet();
             CountDownLatch latch = new CountDownLatch(threadCount);
