@@ -14,8 +14,11 @@ import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.core.ReactiveValueOperations;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.r2dbc.core.DatabaseClient;
+import org.springframework.r2dbc.core.RowsFetchSpec;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+
+import java.util.function.Function;
 
 import java.time.Duration;
 import java.util.Locale;
@@ -31,6 +34,9 @@ class EmailServiceTest {
     @Mock private MessageSource messageSource;
     @Mock private EmailTemplateService templateService;
     @Mock private DatabaseClient databaseClient;
+    @Mock private DatabaseClient.GenericExecuteSpec executeSpec;
+    @SuppressWarnings("rawtypes")
+    @Mock private RowsFetchSpec rowsFetchSpec;
     @Mock private ReactiveRedisTemplate<String, String> redisTemplate;
     @Mock private ReactiveValueOperations<String, String> valueOps;
     @Mock private MimeMessage mimeMessage;
@@ -41,9 +47,18 @@ class EmailServiceTest {
     void setUp() {
         emailService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, redisTemplate);
 
-        // Stub template rendering – return a minimal HTML for all templates
+        // Stub template rendering – return a minimal HTML for all templates (2-arg and 3-arg overloads)
         lenient().when(templateService.render(anyString(), anyMap()))
                 .thenReturn("<html><body>rendered</body></html>");
+        lenient().when(templateService.render(anyString(), anyMap(), anyString()))
+                .thenReturn("<html><body>rendered</body></html>");
+
+        // Stub DatabaseClient chain for resolveLocale()
+        lenient().when(databaseClient.sql(anyString())).thenReturn(executeSpec);
+        lenient().when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
+        //noinspection unchecked
+        lenient().when(executeSpec.map(any(Function.class))).thenReturn(rowsFetchSpec);
+        lenient().when(rowsFetchSpec.one()).thenReturn(Mono.empty());
 
         // Set @Value fields via reflection
         setField(emailService, "fromEmail", "noreply@test.com");

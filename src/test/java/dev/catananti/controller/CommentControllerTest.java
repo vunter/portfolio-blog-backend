@@ -80,7 +80,7 @@ class CommentControllerTest {
                     .last(true)
                     .build();
 
-            when(commentService.getApprovedCommentsByArticleSlugPaginated("spring-boot-guide", 0, 20))
+            when(commentService.getApprovedCommentsByArticleSlugPaginated("spring-boot-guide", 0, 20, "liked"))
                     .thenReturn(Mono.just(page));
 
             StepVerifier.create(controller.getComments("spring-boot-guide", 0, 20, "liked"))

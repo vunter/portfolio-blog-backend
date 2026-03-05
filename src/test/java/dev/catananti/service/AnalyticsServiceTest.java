@@ -44,8 +44,18 @@ class AnalyticsServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         analyticsService = new AnalyticsService(analyticsRepository, articleRepository, objectMapper, idService, databaseClient);
+
+        // Lenient stubs for DatabaseClient chain used by trackEvent and analytics queries
+        lenient().when(databaseClient.sql(anyString())).thenReturn(executeSpec);
+        lenient().when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
+        lenient().when(executeSpec.bindNull(anyString(), any(Class.class))).thenReturn(executeSpec);
+        lenient().when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
+        lenient().when(executeSpec.then()).thenReturn(Mono.empty());
+        lenient().when(rowsFetchSpec.all()).thenReturn(Flux.empty());
+        lenient().when(rowsFetchSpec.one()).thenReturn(Mono.empty());
     }
 
     @Nested
@@ -67,19 +77,14 @@ class AnalyticsServiceTest {
                     .build();
 
             when(idService.nextId()).thenReturn(1001L);
-            when(analyticsRepository.save(any(AnalyticsEvent.class)))
-                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
             StepVerifier.create(analyticsService.trackEvent(request, httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository).save(argThat(event -> {
-                assertThat(event.getEventType()).isEqualTo("VIEW");
-                assertThat(event.getUserIp()).isEqualTo("203.0.113.0"); // SEC-08: anonymized
-                assertThat(event.getUserAgent()).isEqualTo("Mozilla/5.0");
-                assertThat(event.getReferrer()).isEqualTo("https://google.com");
-                return true;
-            }));
+            verify(executeSpec).bind("eventType", "VIEW");
+            verify(executeSpec).bind("userIp", "203.0.113.0"); // SEC-08: anonymized
+            verify(executeSpec).bind("userAgent", "Mozilla/5.0");
+            verify(executeSpec).bind("referrer", "https://google.com");
         }
 
         @Test
@@ -96,17 +101,12 @@ class AnalyticsServiceTest {
 
             when(articleRepository.existsById(42L)).thenReturn(Mono.just(true));
             when(idService.nextId()).thenReturn(1002L);
-            when(analyticsRepository.save(any(AnalyticsEvent.class)))
-                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
             StepVerifier.create(analyticsService.trackEvent(request, httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository).save(argThat(event -> {
-                assertThat(event.getEventType()).isEqualTo("LIKE");
-                assertThat(event.getArticleId()).isEqualTo(42L);
-                return true;
-            }));
+            verify(executeSpec).bind("eventType", "LIKE");
+            verify(executeSpec).bind("articleId", 42L);
         }
 
         @Test
@@ -124,7 +124,7 @@ class AnalyticsServiceTest {
             StepVerifier.create(analyticsService.trackEvent(request, httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository, never()).save(any());
+            verify(executeSpec, never()).then();
         }
 
         @Test
@@ -138,17 +138,11 @@ class AnalyticsServiceTest {
             MockServerHttpRequest httpRequest = MockServerHttpRequest.get("/").build();
 
             when(idService.nextId()).thenReturn(1003L);
-            when(analyticsRepository.save(any(AnalyticsEvent.class)))
-                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
             StepVerifier.create(analyticsService.trackEvent(request, httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository).save(argThat(event -> {
-                assertThat(event.getMetadata()).isNotNull();
-                assertThat(event.getMetadata()).contains("depth");
-                return true;
-            }));
+            verify(executeSpec).bind(eq("metadata"), argThat(val -> val != null && val.toString().contains("depth")));
         }
     }
 
@@ -173,17 +167,12 @@ class AnalyticsServiceTest {
             when(articleRepository.findBySlug("spring-boot-tips")).thenReturn(Mono.just(article));
             when(articleRepository.existsById(42L)).thenReturn(Mono.just(true));
             when(idService.nextId()).thenReturn(1004L);
-            when(analyticsRepository.save(any(AnalyticsEvent.class)))
-                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
             StepVerifier.create(analyticsService.trackArticleView("spring-boot-tips", httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository).save(argThat(event -> {
-                assertThat(event.getEventType()).isEqualTo("VIEW");
-                assertThat(event.getArticleId()).isEqualTo(42L);
-                return true;
-            }));
+            verify(executeSpec).bind("eventType", "VIEW");
+            verify(executeSpec).bind("articleId", 42L);
         }
 
         @Test
@@ -196,7 +185,7 @@ class AnalyticsServiceTest {
             StepVerifier.create(analyticsService.trackArticleView("nonexistent", httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository, never()).save(any());
+            verify(executeSpec, never()).then();
         }
     }
 
@@ -220,6 +209,7 @@ class AnalyticsServiceTest {
             when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
             when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
             when(rowsFetchSpec.all()).thenReturn(Flux.empty());
+            when(rowsFetchSpec.one()).thenReturn(Mono.empty());
 
             StepVerifier.create(analyticsService.getAnalyticsSummary(30))
                     .assertNext(summary -> {
@@ -281,6 +271,7 @@ class AnalyticsServiceTest {
             when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
             when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
             when(rowsFetchSpec.all()).thenReturn(Flux.empty());
+            when(rowsFetchSpec.one()).thenReturn(Mono.empty());
 
             StepVerifier.create(analyticsService.getAnalyticsSummary(30))
                     .assertNext(summary -> {
@@ -309,6 +300,7 @@ class AnalyticsServiceTest {
             when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
             when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
             when(rowsFetchSpec.all()).thenReturn(Flux.empty());
+            when(rowsFetchSpec.one()).thenReturn(Mono.empty());
 
             StepVerifier.create(analyticsService.getAnalyticsSummary(30))
                     .assertNext(summary -> {
@@ -338,6 +330,7 @@ class AnalyticsServiceTest {
             when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
             when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
             when(rowsFetchSpec.all()).thenReturn(Flux.empty());
+            when(rowsFetchSpec.one()).thenReturn(Mono.empty());
 
             StepVerifier.create(analyticsService.getAnalyticsSummary(7))
                     .assertNext(summary -> {
@@ -366,17 +359,12 @@ class AnalyticsServiceTest {
                     .build();
 
             when(idService.nextId()).thenReturn(2001L);
-            when(analyticsRepository.save(any(AnalyticsEvent.class)))
-                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
             StepVerifier.create(analyticsService.trackEvent(request, httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository).save(argThat(event -> {
-                assertThat(event.getEventType()).isEqualTo("CLICK");
-                assertThat(event.getMetadata()).isNull();
-                return true;
-            }));
+            verify(executeSpec).bind("eventType", "CLICK");
+            verify(executeSpec).bindNull("metadata", String.class);
         }
 
         @Test
@@ -390,17 +378,12 @@ class AnalyticsServiceTest {
             MockServerHttpRequest httpRequest = MockServerHttpRequest.get("/").build();
 
             when(idService.nextId()).thenReturn(2002L);
-            when(analyticsRepository.save(any(AnalyticsEvent.class)))
-                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
             StepVerifier.create(analyticsService.trackEvent(request, httpRequest))
                     .verifyComplete();
 
-            verify(analyticsRepository).save(argThat(event -> {
-                assertThat(event.getEventType()).isEqualTo("SHARE");
-                assertThat(event.getReferrer()).isNull();
-                return true;
-            }));
+            verify(executeSpec).bind("eventType", "SHARE");
+            verify(executeSpec).bindNull("referrer", String.class);
         }
     }
 }

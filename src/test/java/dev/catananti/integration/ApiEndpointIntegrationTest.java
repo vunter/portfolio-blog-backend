@@ -791,7 +791,7 @@ class ApiEndpointIntegrationTest {
         @DisplayName("GET /articles/{slug}/comments — list approved comments (200)")
         void listComments_200() {
             var page = pageOf(List.of(buildComment("my-post", "Reader")));
-            when(commentService.getApprovedCommentsByArticleSlugPaginated("my-post", 0, 20))
+            when(commentService.getApprovedCommentsByArticleSlugPaginated("my-post", 0, 20, "liked"))
                     .thenReturn(Mono.just(page));
 
             StepVerifier.create(commentController.getComments("my-post", 0, 20, "liked"))
