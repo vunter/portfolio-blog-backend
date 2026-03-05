@@ -1,58 +1,136 @@
-﻿name: Build & Deploy to Cloud
+name: Build & Deploy to Production
 
 on:
-  push:
+  # Auto-deploy after CI passes on main (no duplicate test run)
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
+  # Manual deploy with optional SHA override
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to deploy (leave empty for latest main)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/vunter/portfolio-blog-api
+  FE_IMAGE: ghcr.io/vunter/portfolio-blog-frontend
 
 jobs:
-  test:
+  # ──────────────────────────────────────────────
+  # Resolve the commit SHA to build & deploy
+  # ──────────────────────────────────────────────
+  prepare:
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      sha_short: ${{ steps.sha.outputs.sha_short }}
+    steps:
+      - name: Resolve deploy SHA
+        id: sha
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SHA="${{ github.event.inputs.sha || github.sha }}"
+          else
+            SHA="${{ github.event.workflow_run.head_sha }}"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "📦 Deploying SHA: $SHA"
+
+  # ──────────────────────────────────────────────
+  # Build API image → push to GHCR (parallel)
+  # ──────────────────────────────────────────────
+  build-api:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
         with:
-          java-version: '25'
-          distribution: 'temurin'
-          cache: 'maven'
+          ref: ${{ needs.prepare.outputs.sha }}
 
-      - name: Run tests
-        run: chmod +x mvnw && ./mvnw verify -B
+      - uses: docker/setup-buildx-action@v3
 
-  build-and-deploy:
-    needs: test
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:latest
+            ${{ env.API_IMAGE }}:${{ needs.prepare.outputs.sha }}
+          build-args: NEXUS_HOST=${{ secrets.NEXUS_HOST }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+  # ──────────────────────────────────────────────
+  # Build Frontend image → push to GHCR (parallel)
+  # ──────────────────────────────────────────────
+  build-frontend:
+    needs: prepare
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v4
-
       - name: Checkout frontend
         uses: actions/checkout@v4
         with:
           repository: vunter/portfolio-blog-frontend
-          path: frontend
+          ref: main
 
-      - name: Build API image
-        run: docker build --build-arg NEXUS_HOST="${{ secrets.NEXUS_HOST }}" -t portfolio-blog-api .
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Build Frontend image
-        run: docker build -t portfolio-blog-frontend frontend/
-
-      - name: Save images
-        run: |
-          docker save portfolio-blog-api | gzip > api.tar.gz
-          docker save portfolio-blog-frontend | gzip > frontend.tar.gz
-
-      - name: Copy images to Droplet
-        uses: appleboy/scp-action@v0.1.7
+      - uses: docker/login-action@v3
         with:
-          host: ${{ secrets.DROPLET_IP }}
-          username: vunter
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "api.tar.gz,frontend.tar.gz"
-          target: "/home/vunter/portfolio-blog/"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Copy source files to Droplet
+      - name: Build & push Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.FE_IMAGE }}:latest
+            ${{ env.FE_IMAGE }}:${{ needs.prepare.outputs.sha }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # ──────────────────────────────────────────────
+  # Deploy to production droplet
+  # ──────────────────────────────────────────────
+  deploy:
+    needs: [prepare, build-api, build-frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    environment:
+      name: production
+      url: https://catananti.dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Copy config files to Droplet
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_IP }}
@@ -63,23 +141,32 @@ jobs:
 
       - name: Deploy on Droplet
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_SHA: ${{ needs.prepare.outputs.sha }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: vunter
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA,GHCR_TOKEN
+          command_timeout: 10m
           script: |
             set -e
             source ~/.doppler_token
             cd ~/portfolio-blog
-            echo "Loading Docker images..."
-            docker load < api.tar.gz
-            docker load < frontend.tar.gz
-            rm -f api.tar.gz frontend.tar.gz
+
+            echo "=== Pulling images from GHCR ==="
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u github-actions --password-stdin
+            docker pull ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA}
+            docker pull ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA}
+            docker tag ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA} portfolio-blog-api:latest
+            docker tag ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA} portfolio-blog-frontend:latest
+
             cd deploy/cloud
 
-            echo "Ensuring infrastructure is running..."
+            echo "=== Ensuring infrastructure ==="
             if docker ps -q -f name=blog-postgres -f status=running | grep -q .; then
-              echo "Infrastructure already running, skipping..."
+              echo "Infrastructure already running"
             else
               echo "Starting infrastructure stack..."
               doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
@@ -88,12 +175,58 @@ jobs:
             fi
             docker exec blog-postgres pg_isready -d blog || sleep 10
 
-            echo "Applying database migrations..."
-            docker cp ../../src/main/resources/schema.sql blog-postgres:/tmp/schema.sql
-            docker exec blog-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/schema.sql' || echo "Schema migration had warnings (non-fatal)"
-
-            echo "Deploying application stack..."
-            doppler run -- docker compose -f docker-compose.cloud.yml down --remove-orphans 2>/dev/null || true
-            doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate
+            echo "=== Deploying (zero-downtime rolling recreate) ==="
+            doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate --remove-orphans
             docker image prune -f
-            echo "Deploy complete at $(date)"
+
+            echo "=== Health check ==="
+            for i in $(seq 1 30); do
+              if docker exec portfolio-blog-api wget -q --spider http://localhost:8080/actuator/health/readiness 2>/dev/null; then
+                echo "✅ API healthy after ${i} attempts"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "❌ API failed health check after 30 attempts"
+                docker logs portfolio-blog-api --tail 50
+                exit 1
+              fi
+              sleep 3
+            done
+
+            echo "=== Smoke tests ==="
+            curl -sf http://localhost:80/api/v1/languages > /dev/null || { echo "❌ Languages endpoint failed"; exit 1; }
+            curl -sf http://localhost:80/ > /dev/null || { echo "❌ Frontend failed"; exit 1; }
+            echo "✅ All smoke tests passed"
+
+            echo "${DEPLOY_SHA}" > ~/portfolio-blog/.last-deploy-sha
+            echo "✅ Deploy complete at $(date) — SHA: ${DEPLOY_SHA}"
+
+      - name: Notify deploy status
+        if: always()
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DEPLOY_STATUS: ${{ steps.deploy.outcome || job.status }}
+          DEPLOY_SHA: ${{ needs.prepare.outputs.sha_short }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "No Discord webhook configured, skipping"
+            exit 0
+          fi
+          if [ "$DEPLOY_STATUS" = "success" ]; then
+            COLOR=3066993; TITLE="✅ Deploy Succeeded"
+          else
+            COLOR=15158332; TITLE="❌ Deploy Failed"
+          fi
+          curl -sf -H "Content-Type: application/json" -d "{
+            \"embeds\": [{
+              \"title\": \"$TITLE\",
+              \"color\": $COLOR,
+              \"fields\": [
+                {\"name\": \"Commit\", \"value\": \"\`${DEPLOY_SHA}\`\", \"inline\": true},
+                {\"name\": \"Actor\", \"value\": \"${{ github.actor }}\", \"inline\": true},
+                {\"name\": \"Run\", \"value\": \"[#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\", \"inline\": true}
+              ],
+              \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+            }]
+          }" "$DISCORD_WEBHOOK" || echo "Discord notification failed (non-critical)"

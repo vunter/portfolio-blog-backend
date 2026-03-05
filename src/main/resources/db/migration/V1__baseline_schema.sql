@@ -1,0 +1,993 @@
+-- ============================================
+-- Portfolio Blog - Database Schema
+-- Uses BIGINT for IDs (Snowflake ID format)
+-- ============================================
+
+-- Users table (admin authentication)
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255),
+    name VARCHAR(255) NOT NULL,
+    username VARCHAR(100) UNIQUE,
+    avatar_url VARCHAR(500),
+    bio TEXT,
+    role VARCHAR(50) DEFAULT 'VIEWER',
+    active BOOLEAN DEFAULT TRUE,
+    cf_email_rule_id VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add cf_email_rule_id if missing (idempotent migration)
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='cf_email_rule_id') THEN
+        ALTER TABLE users ADD COLUMN cf_email_rule_id VARCHAR(100);
+    END IF;
+END $$;
+
+-- Articles table
+CREATE TABLE IF NOT EXISTS articles (
+    id BIGINT PRIMARY KEY,
+    slug VARCHAR(255) UNIQUE NOT NULL,
+    title VARCHAR(500) NOT NULL,
+    subtitle VARCHAR(500),
+    content TEXT NOT NULL,
+    excerpt TEXT,
+    cover_image_url VARCHAR(500),
+    author_id BIGINT REFERENCES users(id),
+    status VARCHAR(50) DEFAULT 'DRAFT',
+    published_at TIMESTAMP,
+    scheduled_at TIMESTAMP,
+    reading_time_minutes INTEGER,
+    views_count INTEGER DEFAULT 0,
+    likes_count INTEGER DEFAULT 0,
+    seo_title VARCHAR(255),
+    seo_description VARCHAR(500),
+    seo_keywords VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tags table
+CREATE TABLE IF NOT EXISTS tags (
+    id BIGINT PRIMARY KEY,
+    name VARCHAR(100) UNIQUE NOT NULL,
+    slug VARCHAR(100) UNIQUE NOT NULL,
+    description TEXT,
+    color VARCHAR(7),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Article Tags (Many-to-Many)
+CREATE TABLE IF NOT EXISTS article_tags (
+    article_id BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+    tag_id BIGINT REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (article_id, tag_id)
+);
+
+-- Comments table
+CREATE TABLE IF NOT EXISTS comments (
+    id BIGINT PRIMARY KEY,
+    article_id BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+    author_name VARCHAR(255) NOT NULL,
+    author_email VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'PENDING',
+    parent_id BIGINT REFERENCES comments(id) ON DELETE CASCADE,
+    moderation_note VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Analytics Events table
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id BIGINT PRIMARY KEY,
+    article_id BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+    event_type VARCHAR(50) NOT NULL,
+    user_ip VARCHAR(45),
+    user_agent TEXT,
+    referrer VARCHAR(500),
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_articles_slug ON articles(slug);
+CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
+CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_articles_scheduled_at ON articles(scheduled_at) WHERE scheduled_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_articles_author_id ON articles(author_id);
+CREATE INDEX IF NOT EXISTS idx_articles_views ON articles(views_count DESC) WHERE status = 'PUBLISHED';
+CREATE INDEX IF NOT EXISTS idx_articles_likes ON articles(likes_count DESC) WHERE status = 'PUBLISHED';
+CREATE INDEX IF NOT EXISTS idx_comments_article_id ON comments(article_id);
+CREATE INDEX IF NOT EXISTS idx_comments_author_email ON comments(author_email);
+CREATE INDEX IF NOT EXISTS idx_comments_status ON comments(status);
+CREATE INDEX IF NOT EXISTS idx_comments_parent_id ON comments(parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_analytics_article_id ON analytics_events(article_id);
+CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON analytics_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_analytics_composite ON analytics_events(article_id, event_type, created_at DESC);
+
+-- Full-text search index for articles (PostgreSQL)
+CREATE INDEX IF NOT EXISTS idx_articles_search ON articles USING GIN (
+    to_tsvector('english', coalesce(title, '') || ' ' || coalesce(excerpt, '') || ' ' || coalesce(content, ''))
+);
+
+-- Refresh Tokens table
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revoked BOOLEAN DEFAULT FALSE,
+    ip_address VARCHAR(45),
+    user_agent VARCHAR(500),
+    device_name VARCHAR(100),
+    last_used_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at) WHERE NOT revoked;
+
+-- Subscribers table (Newsletter)
+CREATE TABLE IF NOT EXISTS subscribers (
+    id BIGINT PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(255),
+    status VARCHAR(50) DEFAULT 'PENDING',
+    confirmation_token VARCHAR(255),
+    unsubscribe_token VARCHAR(255),
+    confirmed_at TIMESTAMP,
+    unsubscribed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email);
+CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);
+CREATE INDEX IF NOT EXISTS idx_subscribers_confirmation_token ON subscribers(confirmation_token) WHERE status = 'PENDING';
+CREATE INDEX IF NOT EXISTS idx_subscribers_unsubscribe_token ON subscribers(unsubscribe_token) WHERE unsubscribe_token IS NOT NULL;
+
+-- Article Versions table (for version history)
+CREATE TABLE IF NOT EXISTS article_versions (
+    id BIGINT PRIMARY KEY,
+    article_id BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    title VARCHAR(500) NOT NULL,
+    subtitle VARCHAR(500),
+    content TEXT NOT NULL,
+    excerpt TEXT,
+    cover_image_url VARCHAR(500),
+    change_summary VARCHAR(500),
+    changed_by BIGINT REFERENCES users(id),
+    changed_by_name VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(article_id, version_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_versions_article_id ON article_versions(article_id);
+CREATE INDEX IF NOT EXISTS idx_article_versions_version ON article_versions(article_id, version_number DESC);
+
+-- Audit Logs table (for tracking admin actions)
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGINT PRIMARY KEY,
+    action VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(100) NOT NULL,
+    entity_id VARCHAR(255),
+    performed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    performed_by_email VARCHAR(255),
+    details TEXT,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_performed_by ON audit_logs(performed_by);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+
+-- Password Reset Tokens table
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_password_reset_user_id ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at) WHERE NOT used;
+
+-- Email Change Tokens table (for verified email changes)
+CREATE TABLE IF NOT EXISTS email_change_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    new_email VARCHAR(255) NOT NULL,
+    old_email VARCHAR(255),
+    token VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_change_token ON email_change_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_email_change_user_id ON email_change_tokens(user_id);
+
+-- Resume Templates table (for HTML resume templates and PDF generation)
+CREATE TABLE IF NOT EXISTS resume_templates (
+    id BIGINT PRIMARY KEY,
+    slug VARCHAR(255) UNIQUE NOT NULL,
+    url_alias VARCHAR(255) UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    html_content TEXT NOT NULL,
+    css_content TEXT,
+    status VARCHAR(50) DEFAULT 'DRAFT',
+    owner_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    version INTEGER DEFAULT 1,
+    is_default BOOLEAN DEFAULT FALSE,
+    paper_size VARCHAR(20) DEFAULT 'A4',
+    orientation VARCHAR(20) DEFAULT 'PORTRAIT',
+    download_count INTEGER DEFAULT 0,
+    preview_url VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_templates_slug ON resume_templates(slug);
+CREATE INDEX IF NOT EXISTS idx_resume_templates_alias ON resume_templates(url_alias);
+CREATE INDEX IF NOT EXISTS idx_resume_templates_owner_id ON resume_templates(owner_id);
+CREATE INDEX IF NOT EXISTS idx_resume_templates_status ON resume_templates(status);
+CREATE INDEX IF NOT EXISTS idx_resume_templates_owner_status ON resume_templates(owner_id, status);
+CREATE INDEX IF NOT EXISTS idx_resume_templates_default ON resume_templates(owner_id) WHERE is_default = TRUE;
+CREATE INDEX IF NOT EXISTS idx_resume_templates_downloads ON resume_templates(download_count DESC) WHERE status = 'ACTIVE';
+CREATE INDEX IF NOT EXISTS idx_resume_templates_updated ON resume_templates(updated_at DESC);
+
+-- Resume Profile tables (for structured resume data)
+CREATE TABLE IF NOT EXISTS resume_profiles (
+    id BIGINT PRIMARY KEY,
+    owner_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    locale VARCHAR(10) DEFAULT 'en' NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    title VARCHAR(255),
+    email VARCHAR(255),
+    phone VARCHAR(50),
+    linkedin VARCHAR(255),
+    github VARCHAR(255),
+    website VARCHAR(255),
+    location VARCHAR(255),
+    professional_summary TEXT,
+    interests TEXT,
+    work_mode TEXT,
+    timezone TEXT,
+    employment_type TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resume_profiles_owner_locale ON resume_profiles(owner_id, locale);
+
+-- Add new columns to existing tables (idempotent)
+DO $$ BEGIN
+    ALTER TABLE resume_profiles ADD COLUMN IF NOT EXISTS work_mode TEXT;
+    ALTER TABLE resume_profiles ADD COLUMN IF NOT EXISTS timezone TEXT;
+    ALTER TABLE resume_profiles ADD COLUMN IF NOT EXISTS employment_type TEXT;
+END $$;
+
+CREATE TABLE IF NOT EXISTS resume_educations (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    institution VARCHAR(255),
+    location VARCHAR(255),
+    degree VARCHAR(255),
+    field_of_study VARCHAR(255),
+    start_date VARCHAR(50),
+    end_date VARCHAR(50),
+    description TEXT,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_educations_profile ON resume_educations(profile_id);
+
+CREATE TABLE IF NOT EXISTS resume_experiences (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    company VARCHAR(255),
+    position VARCHAR(255),
+    start_date VARCHAR(50),
+    end_date VARCHAR(50),
+    bullets TEXT,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_experiences_profile ON resume_experiences(profile_id);
+
+CREATE TABLE IF NOT EXISTS resume_skills (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    category VARCHAR(255),
+    content TEXT,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_skills_profile ON resume_skills(profile_id);
+
+CREATE TABLE IF NOT EXISTS resume_languages (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    name VARCHAR(100),
+    proficiency VARCHAR(100),
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_languages_profile ON resume_languages(profile_id);
+
+CREATE TABLE IF NOT EXISTS resume_certifications (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    name VARCHAR(255),
+    issuer VARCHAR(255),
+    issue_date VARCHAR(50),
+    credential_url VARCHAR(500),
+    description TEXT,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_certifications_profile ON resume_certifications(profile_id);
+
+CREATE TABLE IF NOT EXISTS resume_additional_info (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    label VARCHAR(255),
+    content TEXT,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_additional_info_profile ON resume_additional_info(profile_id);
+
+-- Home Page Customization (key-value settings for the public home page, separate from resume content)
+CREATE TABLE IF NOT EXISTS resume_home_customization (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    label VARCHAR(255),
+    content TEXT,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_home_customization_profile ON resume_home_customization(profile_id);
+
+-- Resume Testimonials (home page recommendations)
+CREATE TABLE IF NOT EXISTS resume_testimonials (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    author_name VARCHAR(255),
+    author_role VARCHAR(255),
+    author_company VARCHAR(255),
+    author_image_url VARCHAR(500),
+    text TEXT,
+    accent_color VARCHAR(50),
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_testimonials_profile ON resume_testimonials(profile_id);
+
+-- Resume Proficiencies (skill bars on home page)
+CREATE TABLE IF NOT EXISTS resume_proficiencies (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    category VARCHAR(255),
+    skill_name VARCHAR(255),
+    percentage INTEGER,
+    icon VARCHAR(255),
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_proficiencies_profile ON resume_proficiencies(profile_id);
+
+-- Resume Projects (portfolio projects on home page)
+CREATE TABLE IF NOT EXISTS resume_projects (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    title VARCHAR(255),
+    description TEXT,
+    image_url VARCHAR(500),
+    project_url VARCHAR(500),
+    repo_url VARCHAR(500),
+    tech_tags TEXT,
+    featured BOOLEAN DEFAULT FALSE,
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_projects_profile ON resume_projects(profile_id);
+
+-- Resume Learning Topics ("Always Learning" cards on home page)
+CREATE TABLE IF NOT EXISTS resume_learning_topics (
+    id BIGINT PRIMARY KEY,
+    profile_id BIGINT REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    title VARCHAR(255),
+    emoji VARCHAR(500),
+    description TEXT,
+    color_theme VARCHAR(100),
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_learning_topics_profile ON resume_learning_topics(profile_id);
+
+-- Contacts table (Contact form submissions)
+CREATE TABLE IF NOT EXISTS contacts (
+    id BIGINT PRIMARY KEY,
+    public_id VARCHAR(36) UNIQUE NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    subject VARCHAR(200) NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_public_id ON contacts(public_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_created_at ON contacts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contacts_unread ON contacts(is_read, created_at DESC) WHERE is_read = FALSE;
+
+-- Article i18n translations table (Translation Table Wide approach)
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_locale VARCHAR(10) DEFAULT 'en';
+
+-- Supported languages (centralised source of truth)
+CREATE TABLE IF NOT EXISTS languages (
+    code VARCHAR(10) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    native_name VARCHAR(100),
+    is_default BOOLEAN DEFAULT FALSE,
+    is_active BOOLEAN DEFAULT TRUE,
+    fallback_code VARCHAR(10),
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO languages (code, name, native_name, is_default, is_active, fallback_code, sort_order) VALUES
+  ('en',    'English',              'English',    TRUE,  TRUE, NULL,  0),
+  ('pt-br', 'Brazilian Portuguese', 'Português',  FALSE, TRUE, 'en',  1),
+  ('es',    'Spanish',              'Español',    FALSE, FALSE, 'en', 2),
+  ('it',    'Italian',              'Italiano',   FALSE, FALSE, 'en', 3)
+ON CONFLICT (code) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS article_i18n (
+    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    locale VARCHAR(10) NOT NULL,
+    title VARCHAR(500) NOT NULL,
+    subtitle VARCHAR(500),
+    content TEXT NOT NULL,
+    excerpt TEXT,
+    seo_title VARCHAR(255),
+    seo_description VARCHAR(500),
+    seo_keywords VARCHAR(500),
+    auto_translated BOOLEAN DEFAULT FALSE,
+    reviewed BOOLEAN DEFAULT FALSE,
+    translated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (article_id, locale)
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_i18n_locale ON article_i18n(locale);
+CREATE INDEX IF NOT EXISTS idx_article_i18n_article ON article_i18n(article_id);
+
+-- FTS indexes per locale on article_i18n
+CREATE INDEX IF NOT EXISTS idx_article_i18n_fts_en ON article_i18n USING GIN (
+    to_tsvector('english', coalesce(title, '') || ' ' || coalesce(excerpt, '') || ' ' || coalesce(content, ''))
+) WHERE locale = 'en';
+
+CREATE INDEX IF NOT EXISTS idx_article_i18n_fts_pt ON article_i18n USING GIN (
+    to_tsvector('portuguese', coalesce(title, '') || ' ' || coalesce(excerpt, '') || ' ' || coalesce(content, ''))
+) WHERE locale = 'pt-br';
+
+CREATE INDEX IF NOT EXISTS idx_article_i18n_fts_es ON article_i18n USING GIN (
+    to_tsvector('spanish', coalesce(title, '') || ' ' || coalesce(excerpt, '') || ' ' || coalesce(content, ''))
+) WHERE locale = 'es';
+
+-- ============================================
+-- JSONB Migration: Tags (name, description)
+-- ============================================
+
+-- For existing databases: alter columns to JSONB
+-- These are safe: if column is already JSONB, the cast is a no-op
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tags' AND column_name = 'name' AND data_type = 'character varying'
+    ) THEN
+        -- Drop the unique constraint on name before type change
+        ALTER TABLE tags DROP CONSTRAINT IF EXISTS tags_name_key;
+        ALTER TABLE tags ALTER COLUMN name TYPE JSONB USING jsonb_build_object('en', name);
+        ALTER TABLE tags ALTER COLUMN description TYPE JSONB USING
+            CASE WHEN description IS NOT NULL
+                 THEN jsonb_build_object('en', description)
+                 ELSE NULL
+            END;
+    END IF;
+END $$;
+
+-- Indexes for JSONB tag names
+CREATE INDEX IF NOT EXISTS idx_tags_name_en ON tags ((name->>'en'));
+CREATE INDEX IF NOT EXISTS idx_tags_name_pt ON tags ((name->>'pt-br'));
+
+-- ============================================
+-- JSONB Migration: Resume Templates (name, description)
+-- ============================================
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'resume_templates' AND column_name = 'name' AND data_type = 'character varying'
+    ) THEN
+        ALTER TABLE resume_templates ALTER COLUMN name TYPE JSONB USING jsonb_build_object('en', name);
+        ALTER TABLE resume_templates ALTER COLUMN description TYPE JSONB USING
+            CASE WHEN description IS NOT NULL
+                 THEN jsonb_build_object('en', description)
+                 ELSE NULL
+            END;
+    END IF;
+END $$;
+
+-- ============================================
+-- Migration: Remove GENERATED ALWAYS from contacts.id
+-- ============================================
+DO $$
+BEGIN
+    -- Check if contacts.id uses GENERATED ALWAYS AS IDENTITY and drop it
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'contacts' AND column_name = 'id' AND is_identity = 'YES'
+    ) THEN
+        ALTER TABLE contacts ALTER COLUMN id DROP IDENTITY IF EXISTS;
+    END IF;
+END $$;
+
+-- ============================================
+-- Site Settings table (FEAT-01)
+-- ============================================
+CREATE TABLE IF NOT EXISTS site_settings (
+    id BIGINT PRIMARY KEY,
+    setting_key VARCHAR(255) UNIQUE NOT NULL,
+    setting_value TEXT,
+    setting_type VARCHAR(50) DEFAULT 'STRING',
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_site_settings_key ON site_settings(setting_key);
+
+-- Bookmarks table (anonymous visitor bookmarks)
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id BIGINT PRIMARY KEY,
+    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    visitor_hash VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_bookmark_visitor UNIQUE (article_id, visitor_hash),
+    CONSTRAINT uq_bookmark_user UNIQUE (article_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bookmarks_visitor ON bookmarks(visitor_hash);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_article ON bookmarks(article_id);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_created_at ON bookmarks(created_at DESC);
+
+-- ============================================
+-- Migration: Add missing columns to users table
+-- ============================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100) UNIQUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
+
+-- Migration: Add updated_at to comments
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- DB-01: Restore functional uniqueness for JSONB tag names (per-locale)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_en_unique ON tags ((name->>'en'));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_pt_unique ON tags ((name->>'pt-br'));
+
+-- ============================================
+-- Role Upgrade Requests
+-- ============================================
+CREATE TABLE IF NOT EXISTS role_upgrade_requests (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    requested_role VARCHAR(50) NOT NULL,
+    reason TEXT,
+    status VARCHAR(50) DEFAULT 'PENDING',
+    reviewed_by BIGINT REFERENCES users(id),
+    reviewed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_role_upgrade_requests_user ON role_upgrade_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_role_upgrade_requests_status ON role_upgrade_requests(status);
+
+-- ============================================
+-- Media Assets (reusable photo/file storage)
+-- ============================================
+CREATE TABLE IF NOT EXISTS media_assets (
+    id                BIGINT PRIMARY KEY,
+    original_filename VARCHAR(500)  NOT NULL,
+    stored_filename   VARCHAR(500)  NOT NULL,
+    storage_key       VARCHAR(1000) NOT NULL,
+    url               VARCHAR(1000) NOT NULL,
+    content_type      VARCHAR(100)  NOT NULL,
+    file_size         BIGINT        NOT NULL,
+    purpose           VARCHAR(50)   NOT NULL DEFAULT 'GENERAL',
+    alt_text          VARCHAR(500),
+    uploader_id       BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    thumbnail_url     VARCHAR(1000),
+    created_at        TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_purpose     ON media_assets(purpose);
+CREATE INDEX IF NOT EXISTS idx_media_assets_uploader    ON media_assets(uploader_id);
+CREATE INDEX IF NOT EXISTS idx_media_assets_created     ON media_assets(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_assets_storage_key ON media_assets(storage_key);
+
+-- Add thumbnail_url column to existing media_assets table (idempotent)
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='media_assets' AND column_name='thumbnail_url') THEN
+        ALTER TABLE media_assets ADD COLUMN thumbnail_url VARCHAR(1000);
+    END IF;
+END $$;
+
+-- ============================================
+-- MFA / Two-Factor Authentication
+-- ============================================
+
+-- Add MFA columns to users table (idempotent)
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='mfa_enabled') THEN
+        ALTER TABLE users ADD COLUMN mfa_enabled BOOLEAN DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='mfa_preferred_method') THEN
+        ALTER TABLE users ADD COLUMN mfa_preferred_method VARCHAR(20) DEFAULT 'TOTP';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='email_verified') THEN
+        ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='failed_login_attempts') THEN
+        ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='account_locked_until') THEN
+        ALTER TABLE users ADD COLUMN account_locked_until TIMESTAMP;
+    END IF;
+END $$;
+
+-- User MFA configuration (TOTP secrets, backup codes)
+CREATE TABLE IF NOT EXISTS user_mfa_config (
+    id              BIGINT PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    method          VARCHAR(20) NOT NULL DEFAULT 'TOTP',
+    secret_encrypted VARCHAR(512),
+    verified        BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, method)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_mfa_config_user ON user_mfa_config(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_mfa_config_method ON user_mfa_config(user_id, method);
+
+CREATE TABLE IF NOT EXISTS mfa_backup_codes (
+    id              BIGINT PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash       VARCHAR(128) NOT NULL,
+    used            BOOLEAN DEFAULT FALSE,
+    used_at         TIMESTAMP,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_mfa_backup_codes_user ON mfa_backup_codes(user_id);
+CREATE INDEX IF NOT EXISTS idx_mfa_backup_codes_unused ON mfa_backup_codes(user_id) WHERE NOT used;
+
+CREATE TABLE IF NOT EXISTS user_social_accounts (
+    id              BIGINT PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider        VARCHAR(20) NOT NULL,
+    provider_id     VARCHAR(255) NOT NULL,
+    provider_email  VARCHAR(255),
+    display_name    VARCHAR(255),
+    avatar_url      VARCHAR(1000),
+    linked_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(provider, provider_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_social_accounts_user ON user_social_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_social_accounts_provider ON user_social_accounts(provider, provider_id);
+
+-- ============================================
+-- F-285: pg_trgm GIN indexes for LIKE queries
+-- ============================================
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_articles_title_trgm ON articles USING gin (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_articles_excerpt_trgm ON articles USING gin (excerpt gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_subscribers_email_trgm ON subscribers USING gin (email gin_trgm_ops);
+-- For resume_templates, LIKE search uses jsonb_each_text(name); index the default locale for partial coverage
+CREATE INDEX IF NOT EXISTS idx_resume_templates_name_en_trgm ON resume_templates USING gin ((name->>'en') gin_trgm_ops);
+
+-- ============================================
+-- Search Query Analytics
+-- ============================================
+CREATE TABLE IF NOT EXISTS search_queries (
+    id BIGSERIAL PRIMARY KEY,
+    query_text VARCHAR(500) NOT NULL,
+    results_count INTEGER NOT NULL DEFAULT 0,
+    user_id BIGINT,
+    user_ip VARCHAR(45),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_search_queries_created ON search_queries(created_at);
+CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text);
+
+-- ============================================
+-- Article Reviews (review workflow)
+-- ============================================
+CREATE TABLE IF NOT EXISTS article_reviews (
+    id BIGSERIAL PRIMARY KEY,
+    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    reviewer_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(30) NOT NULL,
+    feedback TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);
+
+-- ============================================
+-- Reading History
+-- ============================================
+CREATE TABLE IF NOT EXISTS reading_history (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    last_read_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    read_count INTEGER NOT NULL DEFAULT 1,
+    CONSTRAINT uq_reading_history_user_article UNIQUE (user_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id, last_read_at DESC);
+
+-- ============================================
+-- H8: Fix missing ON DELETE clauses for user deletion support
+-- ============================================
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'articles_author_id_fkey') THEN
+        ALTER TABLE articles DROP CONSTRAINT articles_author_id_fkey;
+        ALTER TABLE articles ADD CONSTRAINT articles_author_id_fkey FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'article_versions_changed_by_fkey') THEN
+        ALTER TABLE article_versions DROP CONSTRAINT article_versions_changed_by_fkey;
+        ALTER TABLE article_versions ADD CONSTRAINT article_versions_changed_by_fkey FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'role_upgrade_requests_reviewed_by_fkey') THEN
+        ALTER TABLE role_upgrade_requests DROP CONSTRAINT role_upgrade_requests_reviewed_by_fkey;
+        ALTER TABLE role_upgrade_requests ADD CONSTRAINT role_upgrade_requests_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+-- ============================================
+-- M9: CHECK constraints for enum columns
+-- ============================================
+DO $$ BEGIN
+    ALTER TABLE users ADD CONSTRAINT chk_users_role CHECK (role IN ('VIEWER','DEV','ADMIN'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE articles ADD CONSTRAINT chk_articles_status CHECK (status IN ('DRAFT','PUBLISHED','SCHEDULED','ARCHIVED','REVIEW'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE comments ADD CONSTRAINT chk_comments_status CHECK (status IN ('PENDING','APPROVED','REJECTED','SPAM'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- ============================================
+-- M10: Missing performance indexes
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_article_tags_tag_id ON article_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_comments_article_status ON comments(article_id, status);
+CREATE INDEX IF NOT EXISTS idx_comments_parent_status ON comments(parent_id, status);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user_created ON bookmarks(user_id, created_at DESC);
+
+-- ============================================
+-- M11: Email change tokens
+-- ============================================
+CREATE TABLE IF NOT EXISTS email_change_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    new_email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) UNIQUE NOT NULL,
+    revert_token VARCHAR(255) UNIQUE,
+    old_email VARCHAR(255),
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    expires_at TIMESTAMP NOT NULL,
+    confirmed_at TIMESTAMP,
+    reverted_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_email_change_tokens_token ON email_change_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_email_change_tokens_revert ON email_change_tokens(revert_token);
+CREATE INDEX IF NOT EXISTS idx_email_change_tokens_user ON email_change_tokens(user_id);
+
+-- ============================================
+-- M12: MFA backup codes
+-- ============================================
+CREATE TABLE IF NOT EXISTS mfa_backup_codes (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash VARCHAR(255) NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- M13: User social accounts (OAuth)
+-- ============================================
+CREATE TABLE IF NOT EXISTS user_social_accounts (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider VARCHAR(50) NOT NULL,
+    provider_id VARCHAR(255) NOT NULL,
+    provider_email VARCHAR(255),
+    display_name VARCHAR(255),
+    avatar_url VARCHAR(500),
+    access_token VARCHAR(1000),
+    refresh_token VARCHAR(1000),
+    token_expires_at TIMESTAMP,
+    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(provider, provider_id)
+);
+CREATE INDEX IF NOT EXISTS idx_social_accounts_user ON user_social_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_social_accounts_provider ON user_social_accounts(provider, provider_id);
+
+-- ============================================
+-- M14: Search queries
+-- ============================================
+CREATE TABLE IF NOT EXISTS search_queries (
+    id BIGINT PRIMARY KEY,
+    query_text VARCHAR(500) NOT NULL,
+    results_count INTEGER DEFAULT 0,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    session_id VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text);
+CREATE INDEX IF NOT EXISTS idx_search_queries_created ON search_queries(created_at DESC);
+
+-- ============================================
+-- M15: Article reviews
+-- ============================================
+CREATE TABLE IF NOT EXISTS article_reviews (
+    id BIGINT PRIMARY KEY,
+    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    reviewer_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+    feedback TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- M16: Reading history
+-- ============================================
+CREATE TABLE IF NOT EXISTS reading_history (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    article_id BIGINT NOT NULL,
+    read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    read_count INTEGER DEFAULT 1,
+    UNIQUE(user_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id, last_read_at DESC);
+
+-- ============================================
+-- M17: Supported languages (i18n)
+-- ============================================
+CREATE TABLE IF NOT EXISTS supported_languages (
+    code VARCHAR(10) PRIMARY KEY,
+    name VARCHAR(50) NOT NULL,
+    native_name VARCHAR(50) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+-- Seed default languages
+INSERT INTO supported_languages (code, name, native_name, enabled, sort_order) VALUES
+    ('en', 'English', 'English', TRUE, 1),
+    ('pt', 'Portuguese', 'Português', TRUE, 2),
+    ('es', 'Spanish', 'Español', TRUE, 3),
+    ('it', 'Italian', 'Italiano', TRUE, 4)
+ON CONFLICT (code) DO NOTHING;
+
+-- ============================================
+-- M18: UI translations (DB-driven i18n)
+-- ============================================
+CREATE TABLE IF NOT EXISTS ui_translations (
+    id BIGSERIAL PRIMARY KEY,
+    translation_key VARCHAR(255) NOT NULL,
+    locale VARCHAR(10) NOT NULL,
+    value TEXT NOT NULL,
+    namespace VARCHAR(50) DEFAULT 'frontend',
+    visibility VARCHAR(10) DEFAULT 'public',
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(translation_key, locale, namespace)
+);
+CREATE INDEX IF NOT EXISTS idx_translations_locale_ns ON ui_translations(locale, namespace);
+CREATE INDEX IF NOT EXISTS idx_translations_visibility ON ui_translations(locale, namespace, visibility);
+
+-- ============================================
+-- M19: Email template overrides
+-- ============================================
+CREATE TABLE IF NOT EXISTS email_template_overrides (
+    template_id VARCHAR(100) PRIMARY KEY,
+    html_content TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT NOW(),
+    updated_by VARCHAR(255)
+);
+
+-- ============================================
+-- M20: Email custom variables
+-- ============================================
+CREATE TABLE IF NOT EXISTS email_custom_variables (
+    id SERIAL PRIMARY KEY,
+    var_key VARCHAR(100) NOT NULL,
+    var_value TEXT NOT NULL,
+    description VARCHAR(500),
+    template_id VARCHAR(100) NOT NULL DEFAULT '__global__',
+    locale VARCHAR(10) NOT NULL DEFAULT '*',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(var_key, template_id, locale)
+);
+
+-- ============================================
+-- M21: Add preferred_locale to users (if missing)
+-- ============================================
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='preferred_locale') THEN
+        ALTER TABLE users ADD COLUMN preferred_locale VARCHAR(10);
+    END IF;
+END $$;
