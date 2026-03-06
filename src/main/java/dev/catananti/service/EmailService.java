@@ -564,11 +564,11 @@ public class EmailService {
     /**
      * Send auto-reply to contact form submitter.
      */
-    public Mono<Void> sendContactAutoReply(String to, String name, String subject) {
+    public Mono<Void> sendContactAutoReply(String to, String name, String subject, String message) {
         String emailSubject = msg("email.contact.autoreply.subject");
         String displayName = name != null ? name : msg("email.default.user");
         String safeSubject = escapeHtml(subject);
-        String preview = safeSubject.length() > 100 ? safeSubject.substring(0, 100) + "..." : safeSubject;
+        String safeMessage = escapeHtml(message != null ? message : "");
 
         String html = templateService.render("contact-auto-reply", baseVars(
             "#0ea5e9 0%, #0284c7 100%",
@@ -579,7 +579,8 @@ public class EmailService {
                 "summaryTitle", msg("email.contact.autoreply.summary"),
                 "subjectLabel", msg("email.contact.notification.subjectLabel"),
                 "messageSubject", safeSubject,
-                "messagePreview", preview,
+                "messageLabel", msg("email.contact.notification.messageLabel"),
+                "messageBody", safeMessage,
                 "responseText", msg("email.contact.autoreply.response"),
                 "visitText", msg("email.contact.autoreply.visit"),
                 "siteUrl", siteUrl,

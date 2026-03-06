@@ -5,7 +5,9 @@
  <div class="alert-box alert-info">
  <strong th:text="${summaryTitle}">Your message</strong>
  <p style="margin-bottom: 4px;"><strong th:text="${subjectLabel}">Subject:</strong> <span th:text="${messageSubject}">Your subject</span></p>
- <p style="margin-bottom: 0;" th:text="${messagePreview}">Your message preview...</p>
+ <hr style="border: none; border-top: 1px solid #cbd5e1; margin: 10px 0;" />
+ <p style="margin-bottom: 4px;"><strong th:text="${messageLabel}">Message:</strong></p>
+ <p style="margin-bottom: 0; white-space: pre-line;" th:text="${messageBody}">Your message content...</p>
  </div>
  <p th:text="${responseText}">We will review your message and respond as soon as possible.</p>
  <p th:text="${visitText}">In the meantime, feel free to visit the blog:</p>

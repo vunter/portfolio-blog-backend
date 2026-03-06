@@ -163,7 +163,8 @@ public class ContactService {
             autoReply = emailService.sendContactAutoReply(
                     contact.getEmail(),
                     contact.getName(),
-                    contact.getSubject()
+                    contact.getSubject(),
+                    contact.getMessage()
             ).doOnError(e -> log.error("Failed to send contact auto-reply to {}", contact.getEmail(), e))
              .onErrorResume(e -> Mono.empty());
         }
