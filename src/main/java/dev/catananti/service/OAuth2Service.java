@@ -51,6 +51,10 @@ public class OAuth2Service {
     private String githubClientId;
     @Value("${oauth2.github.client-secret:}")
     private String githubClientSecret;
+    @Value("${oauth2.linkedin.client-id:}")
+    private String linkedinClientId;
+    @Value("${oauth2.linkedin.client-secret:}")
+    private String linkedinClientSecret;
     @Value("${oauth2.redirect-base-url:}")
     private String redirectBaseUrl;
     @Value("${jwt.expiration-ms:900000}")
@@ -79,6 +83,10 @@ public class OAuth2Service {
         return githubClientId != null && !githubClientId.isBlank();
     }
 
+    public boolean isLinkedinEnabled() {
+        return linkedinClientId != null && !linkedinClientId.isBlank();
+    }
+
     public String getGoogleAuthUrl(String state) {
         return "https://accounts.google.com/o/oauth2/v2/auth"
                 + "?client_id=" + googleClientId
@@ -94,6 +102,15 @@ public class OAuth2Service {
                 + "?client_id=" + githubClientId
                 + "&redirect_uri=" + redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/github"
                 + "&scope=user:email"
+                + "&state=" + state;
+    }
+
+    public String getLinkedinAuthUrl(String state) {
+        return "https://www.linkedin.com/oauth/v2/authorization"
+                + "?response_type=code"
+                + "&client_id=" + linkedinClientId
+                + "&redirect_uri=" + redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/linkedin"
+                + "&scope=openid%20profile%20email"
                 + "&state=" + state;
     }
 
@@ -265,6 +282,66 @@ public class OAuth2Service {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("GitHub OAuth2 error: {}", e.getMessage());
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "GitHub authentication failed"));
+                });
+    }
+
+    @SuppressWarnings("unchecked")
+    public Mono<TokenResponse> handleLinkedinCallback(String code, String clientIp) {
+        log.info("Starting LinkedIn token exchange for IP={}", clientIp);
+        return webClient.post()
+                .uri("https://www.linkedin.com/oauth/v2/accessToken")
+                .body(BodyInserters.fromFormData("grant_type", "authorization_code")
+                        .with("code", code)
+                        .with("client_id", linkedinClientId)
+                        .with("client_secret", linkedinClientSecret)
+                        .with("redirect_uri", redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/linkedin"))
+                .retrieve()
+                .bodyToMono(String.class)
+                .doOnNext(body -> log.info("LinkedIn token response received, length={}", body.length()))
+                .map(body -> {
+                    try {
+                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        return (Map<String, Object>) mapper.readValue(body, Map.class);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to parse LinkedIn token response", e);
+                    }
+                })
+                .flatMap(tokenData -> {
+                    String accessToken = (String) tokenData.get("access_token");
+                    log.info("Got LinkedIn access token, fetching user info via OIDC userinfo");
+                    return webClient.get()
+                            .uri("https://api.linkedin.com/v2/userinfo")
+                            .header("Authorization", "Bearer " + accessToken)
+                            .retrieve()
+                            .bodyToMono(String.class);
+                })
+                .map(body -> {
+                    try {
+                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        return (Map<String, Object>) mapper.readValue(body, Map.class);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to parse LinkedIn userinfo response", e);
+                    }
+                })
+                .flatMap(userInfo -> {
+                    log.info("LinkedIn userInfo keys: {}", userInfo.keySet());
+                    String providerId = (String) userInfo.get("sub");
+                    String email = (String) userInfo.get("email");
+                    String name = (String) userInfo.get("name");
+                    String avatar = (String) userInfo.get("picture");
+                    Object emailVerifiedRaw = userInfo.get("email_verified");
+                    boolean emailVerified = Boolean.TRUE.equals(emailVerifiedRaw)
+                            || "true".equals(String.valueOf(emailVerifiedRaw));
+                    if (!emailVerified) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Email not verified by LinkedIn. Please verify your email and try again."));
+                    }
+                    return findOrCreateUser("linkedin", providerId, email, name, avatar, clientIp, true);
+                })
+                .onErrorResume(e -> {
+                    if (e instanceof ResponseStatusException) return Mono.error(e);
+                    log.error("LinkedIn OAuth2 error: {}", e.getMessage());
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "LinkedIn authentication failed"));
                 });
     }
 

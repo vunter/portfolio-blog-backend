@@ -36,7 +36,8 @@ public class OAuth2Controller {
     public Map<String, Boolean> getAvailableProviders() {
         return Map.of(
                 "google", oAuth2Service.isGoogleEnabled(),
-                "github", oAuth2Service.isGithubEnabled()
+                "github", oAuth2Service.isGithubEnabled(),
+                "linkedin", oAuth2Service.isLinkedinEnabled()
         );
     }
 
@@ -46,6 +47,7 @@ public class OAuth2Controller {
         String authUrl = switch (provider.toLowerCase()) {
             case "google" -> oAuth2Service.getGoogleAuthUrl(state);
             case "github" -> oAuth2Service.getGithubAuthUrl(state);
+            case "linkedin" -> oAuth2Service.getLinkedinAuthUrl(state);
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider: " + provider);
         };
         return oAuth2Service.storeState(state)
@@ -72,6 +74,7 @@ public class OAuth2Controller {
                     Mono<dev.catananti.dto.TokenResponse> callbackMono = switch (provider.toLowerCase()) {
                         case "google" -> oAuth2Service.handleGoogleCallback(code, clientIp);
                         case "github" -> oAuth2Service.handleGithubCallback(code, clientIp);
+                        case "linkedin" -> oAuth2Service.handleLinkedinCallback(code, clientIp);
                         default -> Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider"));
                     };
 
