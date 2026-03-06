@@ -45,7 +45,7 @@ class EmailServiceTest {
 
     @BeforeEach
     void setUp() {
-        emailService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, redisTemplate);
+        emailService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, redisTemplate, "smtp", "");
 
         // Stub template rendering – return a minimal HTML for all templates (2-arg and 3-arg overloads)
         lenient().when(templateService.render(anyString(), anyMap()))
@@ -406,7 +406,7 @@ class EmailServiceTest {
         @Test
         @DisplayName("should allow email when Redis template is null (rate limiting disabled)")
         void shouldAllowWithoutRedis() {
-            EmailService noRedisService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, null);
+            EmailService noRedisService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, null, "smtp", "");
             setField(noRedisService, "fromEmail", "noreply@test.com");
             setField(noRedisService, "fromName", "Test Blog");
             setField(noRedisService, "appUrl", "http://localhost:8080");

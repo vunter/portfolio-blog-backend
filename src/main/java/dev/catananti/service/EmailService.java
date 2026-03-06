@@ -4,6 +4,10 @@ import jakarta.mail.internet.MimeMessage;
 import lombok.extern.slf4j.Slf4j;
 import dev.catananti.config.ResilienceConfig;
 import dev.catananti.util.HtmlUtils;
+import com.resend.Resend;
+import com.resend.core.exception.ResendException;
+import com.resend.services.emails.model.CreateEmailOptions;
+import com.resend.services.emails.model.CreateEmailResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,6 +45,9 @@ public class EmailService {
     private final DatabaseClient db;
     @Nullable
     private final ReactiveRedisTemplate<String, String> redisTemplate;
+    @Nullable
+    private final Resend resendClient;
+    private final String emailProvider;
 
     public EmailService(
             JavaMailSender mailSender,
@@ -49,13 +56,23 @@ public class EmailService {
             EmailTemplateService templateService,
             DatabaseClient databaseClient,
             @Autowired(required = false)
-            @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate) {
+            @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate,
+            @Value("${app.email.provider:smtp}") String emailProvider,
+            @Value("${app.email.resend.api-key:}") String resendApiKey) {
         this.mailSender = mailSender;
         this.resilience = resilience;
         this.messageSource = messageSource;
         this.templateService = templateService;
         this.db = databaseClient;
         this.redisTemplate = redisTemplate;
+        this.emailProvider = emailProvider;
+        if ("resend".equalsIgnoreCase(emailProvider) && !resendApiKey.isBlank()) {
+            this.resendClient = new Resend(resendApiKey);
+            log.info("Email provider: Resend HTTP API");
+        } else {
+            this.resendClient = null;
+            log.info("Email provider: SMTP (JavaMailSender)");
+        }
         if (redisTemplate == null) {
             log.info("ReactiveRedisTemplate not available — email rate limiting disabled");
         }
@@ -146,23 +163,14 @@ public class EmailService {
 
     /**
      * Send a plain text email (with per-recipient rate limiting).
+     * Delegates to Resend HTTP API or SMTP depending on {@code app.email.provider}.
      */
     public Mono<Void> sendTextEmail(String to, String subject, String text) {
         return checkRateLimit(to).then(Mono.<Void>fromRunnable(() -> {
-            try {
-                MimeMessage message = mailSender.createMimeMessage();
-                MimeMessageHelper helper = new MimeMessageHelper(message, false, "UTF-8");
-                
-                helper.setFrom(fromEmail, fromName);
-                helper.setTo(to);
-                helper.setSubject(subject);
-                helper.setText(text, false);
-                
-                mailSender.send(message);
-                log.debug("Text email sent to: {}", to);
-            } catch (Exception e) {
-                log.warn("Failed to send text email to {}: {}", to, e.getMessage());
-                throw new RuntimeException("Failed to send email", e);
+            if (resendClient != null) {
+                sendViaResend(to, subject, null, text);
+            } else {
+                sendViaSmtp(to, subject, text, false);
             }
         }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
                 .timeout(resilience.getExternalTimeout()));
@@ -170,26 +178,55 @@ public class EmailService {
 
     /**
      * Send an HTML email (with per-recipient rate limiting).
+     * Delegates to Resend HTTP API or SMTP depending on {@code app.email.provider}.
      */
     public Mono<Void> sendHtmlEmail(String to, String subject, String htmlContent) {
         return checkRateLimit(to).then(Mono.<Void>fromRunnable(() -> {
-            try {
-                MimeMessage message = mailSender.createMimeMessage();
-                MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-                
-                helper.setFrom(fromEmail, fromName);
-                helper.setTo(to);
-                helper.setSubject(subject);
-                helper.setText(htmlContent, true);
-                
-                mailSender.send(message);
-                log.debug("HTML email sent to: {}", to);
-            } catch (Exception e) {
-                log.warn("Failed to send HTML email to {}: {}", to, e.getMessage());
-                throw new RuntimeException("Failed to send email", e);
+            if (resendClient != null) {
+                sendViaResend(to, subject, htmlContent, null);
+            } else {
+                sendViaSmtp(to, subject, htmlContent, true);
             }
         }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
                 .timeout(resilience.getExternalTimeout()));
+    }
+
+    /** Send email via Resend HTTP API. */
+    private void sendViaResend(String to, String subject, @Nullable String html, @Nullable String text) {
+        try {
+            var builder = CreateEmailOptions.builder()
+                    .from(fromName + " <" + fromEmail + ">")
+                    .to(to)
+                    .subject(subject);
+            if (html != null) {
+                builder.html(html);
+            }
+            if (text != null) {
+                builder.text(text);
+            }
+            CreateEmailResponse response = resendClient.emails().send(builder.build());
+            log.debug("Email sent via Resend to: {} (id: {})", to, response.getId());
+        } catch (ResendException e) {
+            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage());
+            throw new RuntimeException("Failed to send email via Resend", e);
+        }
+    }
+
+    /** Send email via SMTP (JavaMailSender). */
+    private void sendViaSmtp(String to, String subject, String content, boolean isHtml) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, isHtml, "UTF-8");
+            helper.setFrom(fromEmail, fromName);
+            helper.setTo(to);
+            helper.setSubject(subject);
+            helper.setText(content, isHtml);
+            mailSender.send(message);
+            log.debug("Email sent via SMTP to: {}", to);
+        } catch (Exception e) {
+            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage());
+            throw new RuntimeException("Failed to send email via SMTP", e);
+        }
     }
 
     /**
