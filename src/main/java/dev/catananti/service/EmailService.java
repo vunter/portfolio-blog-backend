@@ -627,18 +627,18 @@ public class EmailService {
         String html = templateService.render("contact-auto-reply", baseVars(
             "#0ea5e9 0%, #0284c7 100%",
             msg("email.contact.autoreply.header"),
-            Map.of(
-                "greeting", msg("email.greeting", displayName),
-                "bodyText", msg("email.contact.autoreply.body"),
-                "summaryTitle", msg("email.contact.autoreply.summary"),
-                "subjectLabel", msg("email.contact.notification.subjectLabel"),
-                "messageSubject", safeSubject,
-                "messageLabel", msg("email.contact.notification.messageLabel"),
-                "messageBody", safeMessage,
-                "responseText", msg("email.contact.autoreply.response"),
-                "visitText", msg("email.contact.autoreply.visit"),
-                "siteUrl", siteUrl,
-                "buttonText", msg("email.contact.autoreply.button")
+            Map.ofEntries(
+                Map.entry("greeting", msg("email.greeting", displayName)),
+                Map.entry("bodyText", msg("email.contact.autoreply.body")),
+                Map.entry("summaryTitle", msg("email.contact.autoreply.summary")),
+                Map.entry("subjectLabel", msg("email.contact.notification.subjectLabel")),
+                Map.entry("messageSubject", safeSubject),
+                Map.entry("messageLabel", msg("email.contact.notification.messageLabel")),
+                Map.entry("messageBody", safeMessage),
+                Map.entry("responseText", msg("email.contact.autoreply.response")),
+                Map.entry("visitText", msg("email.contact.autoreply.visit")),
+                Map.entry("siteUrl", siteUrl),
+                Map.entry("buttonText", msg("email.contact.autoreply.button"))
             )
         ));
 
