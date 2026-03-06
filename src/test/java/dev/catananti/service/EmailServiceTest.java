@@ -249,7 +249,7 @@ class EmailServiceTest {
             when(resilience.getExternalTimeout()).thenReturn(Duration.ofSeconds(30));
             stubAllMessages();
 
-            StepVerifier.create(emailService.sendNewsletterWelcome("user@test.com", "John"))
+            StepVerifier.create(emailService.sendNewsletterWelcome("user@test.com", "John", "unsub-token-123"))
                     .verifyComplete();
 
             verify(mailSender).send(any(MimeMessage.class));
@@ -263,7 +263,7 @@ class EmailServiceTest {
             when(resilience.getExternalTimeout()).thenReturn(Duration.ofSeconds(30));
             stubAllMessages();
 
-            StepVerifier.create(emailService.sendNewsletterWelcome("user@test.com", null))
+            StepVerifier.create(emailService.sendNewsletterWelcome("user@test.com", null, "unsub-token-456"))
                     .verifyComplete();
 
             verify(messageSource).getMessage(eq("email.default.subscriber"), any(), any(Locale.class));

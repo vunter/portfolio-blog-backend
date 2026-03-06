@@ -77,7 +77,7 @@ class ContactServiceTest {
                     .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
             when(emailService.sendContactNotification(anyString(), anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(Mono.empty());
-            when(emailService.sendContactAutoReply(anyString(), anyString(), anyString()))
+            when(emailService.sendContactAutoReply(anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(Mono.empty());
 
             StepVerifier.create(contactService.saveContact(request))

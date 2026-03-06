@@ -153,7 +153,7 @@ class NewsletterServiceTest {
                     .thenReturn(Mono.just(pending));
             when(subscriberRepository.save(any(Subscriber.class)))
                     .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-            when(emailService.sendNewsletterWelcome(anyString(), anyString()))
+            when(emailService.sendNewsletterWelcome(anyString(), anyString(), anyString()))
                     .thenReturn(Mono.empty());
 
             StepVerifier.create(newsletterService.confirmSubscription("valid-token-123"))
