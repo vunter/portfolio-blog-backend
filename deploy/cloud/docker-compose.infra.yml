@@ -1,7 +1,8 @@
 # ============================================
 # Infrastructure Stack - Always Running
 # PostgreSQL + Redis (independent of app deploys)
-# Managed separately: doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
+# ALL environment variables come from Doppler.
+# Deploy: doppler run -- docker compose -p blog-infra -f docker-compose.infra.yml up -d
 # ============================================
 
 services:
@@ -10,8 +11,8 @@ services:
     image: postgres:17-alpine
     container_name: blog-postgres
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-blog}
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - DB_PASSWORD=${DB_PASSWORD}
     volumes:

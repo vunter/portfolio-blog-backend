@@ -1,9 +1,8 @@
 # ============================================
 # Portfolio Blog - Application Stack (DigitalOcean)
-# Deploy target: Droplet (146.190.67.249)
-# Infrastructure (postgres, redis) runs separately
-# via docker-compose.infra.yml (always-on, survives app deploys)
-# Secrets: Doppler (doppler run --)
+# ALL environment variables come from Doppler.
+# Deploy: doppler run -- docker compose -f docker-compose.cloud.yml up -d
+# Infrastructure (postgres, redis) runs separately via docker-compose.infra.yml
 # ============================================
 
 services:
@@ -12,81 +11,88 @@ services:
     image: portfolio-blog-api
     container_name: portfolio-blog-api
     environment:
-      - SPRING_PROFILES_ACTIVE=cloud
-      - SPRING_CONFIG_IMPORT=
-      - SPRING_CLOUD_VAULT_ENABLED=false
+      # Spring
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE}
+      - SPRING_CONFIG_IMPORT=${SPRING_CONFIG_IMPORT}
+      - SPRING_CLOUD_VAULT_ENABLED=${SPRING_CLOUD_VAULT_ENABLED}
       # Database
-      - DATABASE_URL=r2dbc:postgresql://blog-postgres:5432/blog
-      - DATABASE_USERNAME=${DB_USERNAME:-blogadmin}
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_USERNAME=${DB_USERNAME}
       - DATABASE_PASSWORD=${DB_PASSWORD}
       # Redis
-      - SPRING_DATA_REDIS_HOST=blog-redis
-      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_DATA_REDIS_HOST=${SPRING_DATA_REDIS_HOST}
+      - SPRING_DATA_REDIS_PORT=${SPRING_DATA_REDIS_PORT}
       - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD}
-      - SPRING_CACHE_TYPE=redis
+      - SPRING_CACHE_TYPE=${SPRING_CACHE_TYPE}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       # JWT
       - JWT_SECRET=${JWT_SECRET}
-      - JWT_COOKIE_SECURE=true
-      - JWT_COOKIE_DOMAIN=${JWT_COOKIE_DOMAIN:-catananti.dev}
+      - JWT_COOKIE_SECURE=${JWT_COOKIE_SECURE}
+      - JWT_COOKIE_DOMAIN=${JWT_COOKIE_DOMAIN}
       # CORS
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://catananti.dev,https://www.catananti.dev}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
       # Admin seed
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@catananti.dev}
-      - ADMIN_NAME=${ADMIN_NAME:-Admin}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_NAME=${ADMIN_NAME}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       # reCAPTCHA
-      - RECAPTCHA_ENABLED=${RECAPTCHA_ENABLED:-false}
-      - RECAPTCHA_SITE_KEY=${RECAPTCHA_SITE_KEY:-}
-      - RECAPTCHA_SECRET_KEY=${RECAPTCHA_SECRET_KEY:-}
-      # Email (Resend SMTP)
-      - MAIL_HOST=${MAIL_HOST:-smtp.resend.com}
-      - MAIL_PORT=${MAIL_PORT:-465}
-      - MAIL_USERNAME=${MAIL_USERNAME:-}
-      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
-      - MAIL_FROM=${MAIL_FROM:-noreply@catananti.dev}
-      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Catananti Portfolio}
-      - CONTACT_NOTIFICATION_EMAIL=${CONTACT_NOTIFICATION_EMAIL:-admin@catananti.dev}
-      - EMAIL_SUPPORT=${EMAIL_SUPPORT:-admin@catananti.dev}
-      - MANAGEMENT_HEALTH_MAIL_ENABLED=false
+      - RECAPTCHA_ENABLED=${RECAPTCHA_ENABLED}
+      - RECAPTCHA_SITE_KEY=${RECAPTCHA_SITE_KEY}
+      - RECAPTCHA_SECRET_KEY=${RECAPTCHA_SECRET_KEY}
+      # Email (SMTP fallback)
+      - MAIL_HOST=${MAIL_HOST}
+      - MAIL_PORT=${MAIL_PORT}
+      - MAIL_USERNAME=${MAIL_USERNAME}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
+      - MAIL_FROM=${MAIL_FROM}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME}
+      - CONTACT_NOTIFICATION_EMAIL=${CONTACT_NOTIFICATION_EMAIL}
+      - EMAIL_SUPPORT=${EMAIL_SUPPORT}
+      - MANAGEMENT_HEALTH_MAIL_ENABLED=${MANAGEMENT_HEALTH_MAIL_ENABLED}
       # Email provider (resend HTTP API vs SMTP)
-      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-resend}
-      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER}
+      - RESEND_API_KEY=${RESEND_API_KEY}
       # App
-      - APP_URL=${APP_URL:-https://catananti.dev}
-      - APP_SITE_URL=${APP_SITE_URL:-https://catananti.dev}
+      - APP_URL=${APP_URL}
+      - APP_SITE_URL=${APP_SITE_URL}
       # Cloudflare Email Routing
-      - CF_API_TOKEN=${CF_API_TOKEN:-}
-      - CF_ZONE_ID=${CF_ZONE_ID:-}
-      - CF_EMAIL_DOMAIN=${CF_EMAIL_DOMAIN:-catananti.dev}
-      - CF_EMAIL_ROUTING_ENABLED=${CF_EMAIL_ROUTING_ENABLED:-false}
-      # Datadog APM (agent sidecar)
-      - DD_AGENT_ENABLED=${DD_AGENT_ENABLED:-true}
-      - DD_AGENT_HOST=datadog-agent
-      - DD_TRACE_AGENT_URL=http://datadog-agent:8126
-      - DD_SERVICE=portfolio-blog-api
-      - DD_ENV=production
-      - DD_VERSION=2.0.0
-      - DD_LOGS_INJECTION=true
-      - DD_TRACE_SAMPLE_RATE=1.0
-      - DD_PROFILING_ENABLED=false
-      - DD_METRICS_ENABLED=${DD_METRICS_ENABLED:-true}
-      - DD_API_KEY=${DD_API_KEY:-}
-      # Sentry Error Tracking
-      - SENTRY_DSN=${SENTRY_DSN:-}
-      - SENTRY_ENVIRONMENT=production
-      # DeepL Translation API
-      - DEEPL_API_KEY=${DEEPL_API_KEY:-}
+      - CF_API_TOKEN=${CF_API_TOKEN}
+      - CF_ZONE_ID=${CF_ZONE_ID}
+      - CF_EMAIL_DOMAIN=${CF_EMAIL_DOMAIN}
+      - CF_EMAIL_ROUTING_ENABLED=${CF_EMAIL_ROUTING_ENABLED}
+      # Datadog APM
+      - DD_AGENT_ENABLED=${DD_AGENT_ENABLED}
+      - DD_AGENT_HOST=${DD_AGENT_HOST}
+      - DD_TRACE_AGENT_URL=${DD_TRACE_AGENT_URL}
+      - DD_SERVICE=${DD_SERVICE}
+      - DD_ENV=${DD_ENV}
+      - DD_VERSION=${DD_VERSION}
+      - DD_LOGS_INJECTION=${DD_LOGS_INJECTION}
+      - DD_TRACE_SAMPLE_RATE=${DD_TRACE_SAMPLE_RATE}
+      - DD_PROFILING_ENABLED=${DD_PROFILING_ENABLED}
+      - DD_METRICS_ENABLED=${DD_METRICS_ENABLED}
+      - DD_API_KEY=${DD_API_KEY}
+      # Sentry
+      - SENTRY_DSN=${SENTRY_DSN}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT}
+      # DeepL Translation
+      - DEEPL_API_KEY=${DEEPL_API_KEY}
       # MFA
-      - MFA_ENCRYPTION_KEY=${MFA_ENCRYPTION_KEY:-}
-      # Cloudflare R2 Object Storage (avatars, media)
-      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
-      - S3_ENDPOINT=${R2_ENDPOINT}
-      - S3_REGION=auto
-      - S3_BUCKET=${R2_BUCKET}
-      - S3_ACCESS_KEY=${R2_ACCESS_KEY_ID}
-      - S3_SECRET_KEY=${R2_SECRET_ACCESS_KEY}
-      - S3_PUBLIC_URL=${R2_PUBLIC_URL}
+      - MFA_ENCRYPTION_KEY=${MFA_ENCRYPTION_KEY}
+      # OAuth2 Social Login
+      - OAUTH2_GITHUB_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
+      - OAUTH2_GITHUB_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
+      - OAUTH2_GOOGLE_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
+      - OAUTH2_GOOGLE_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET}
+      - OAUTH2_REDIRECT_BASE_URL=${OAUTH2_REDIRECT_BASE_URL}
+      # Cloudflare R2 Object Storage
+      - STORAGE_TYPE=${STORAGE_TYPE}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_REGION=${S3_REGION}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_PUBLIC_URL=${S3_PUBLIC_URL}
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/readiness"]
       interval: 30s
@@ -221,16 +227,16 @@ services:
     pid: host
     environment:
       - DD_API_KEY=${DD_API_KEY}
-      - DD_SITE=${DD_SITE:-us5.datadoghq.com}
-      - DD_APM_ENABLED=true
-      - DD_APM_NON_LOCAL_TRAFFIC=true
-      - DD_LOGS_ENABLED=true
-      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_SITE=${DD_SITE}
+      - DD_APM_ENABLED=${DD_APM_ENABLED}
+      - DD_APM_NON_LOCAL_TRAFFIC=${DD_APM_NON_LOCAL_TRAFFIC}
+      - DD_LOGS_ENABLED=${DD_LOGS_ENABLED}
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=${DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL}
       - DD_CONTAINER_EXCLUDE="name:datadog-agent"
-      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
-      - DD_PROCESS_AGENT_ENABLED=false
-      - DD_TAGS=env:production,service:portfolio-blog,team:catananti
-      - DD_HOSTNAME=${DD_HOSTNAME:-catananti-droplet}
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=${DD_DOGSTATSD_NON_LOCAL_TRAFFIC}
+      - DD_PROCESS_AGENT_ENABLED=${DD_PROCESS_AGENT_ENABLED}
+      - DD_TAGS=${DD_TAGS}
+      - DD_HOSTNAME=${DD_HOSTNAME}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
