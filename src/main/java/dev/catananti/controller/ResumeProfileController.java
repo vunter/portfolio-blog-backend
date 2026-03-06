@@ -256,6 +256,19 @@ public class ResumeProfileController {
         )));
     }
 
+    /**
+     * Delete all LinkedIn-imported resume data for the authenticated user.
+     * Permanently removes entries where source='linkedin' across all locales.
+     */
+    @DeleteMapping("/linkedin-data")
+    public Mono<ResponseEntity<java.util.Map<String, Object>>> deleteLinkedInData(
+            Authentication authentication) {
+        return extractUserId(authentication)
+                .flatMap(profileService::deleteLinkedInData)
+                .map(count -> ResponseEntity.ok(java.util.Map.of(
+                        "deleted", count, "status", "ok")));
+    }
+
     // ==================== Helper ====================
 
     /**

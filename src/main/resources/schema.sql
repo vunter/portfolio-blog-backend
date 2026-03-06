@@ -292,6 +292,7 @@ CREATE TABLE IF NOT EXISTS resume_educations (
     end_date VARCHAR(50),
     description TEXT,
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -307,6 +308,7 @@ CREATE TABLE IF NOT EXISTS resume_experiences (
     end_date VARCHAR(50),
     bullets TEXT,
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -319,6 +321,7 @@ CREATE TABLE IF NOT EXISTS resume_skills (
     category VARCHAR(255),
     content TEXT,
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -331,6 +334,7 @@ CREATE TABLE IF NOT EXISTS resume_languages (
     name VARCHAR(100),
     proficiency VARCHAR(100),
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -346,6 +350,7 @@ CREATE TABLE IF NOT EXISTS resume_certifications (
     credential_url VARCHAR(500),
     description TEXT,
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -358,6 +363,7 @@ CREATE TABLE IF NOT EXISTS resume_additional_info (
     label VARCHAR(255),
     content TEXT,
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -371,6 +377,7 @@ CREATE TABLE IF NOT EXISTS resume_home_customization (
     label VARCHAR(255),
     content TEXT,
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -388,6 +395,7 @@ CREATE TABLE IF NOT EXISTS resume_testimonials (
     text TEXT,
     accent_color VARCHAR(50),
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -403,6 +411,7 @@ CREATE TABLE IF NOT EXISTS resume_proficiencies (
     percentage INTEGER,
     icon VARCHAR(255),
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -421,6 +430,7 @@ CREATE TABLE IF NOT EXISTS resume_projects (
     tech_tags TEXT,
     featured BOOLEAN DEFAULT FALSE,
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -436,6 +446,7 @@ CREATE TABLE IF NOT EXISTS resume_learning_topics (
     description TEXT,
     color_theme VARCHAR(100),
     sort_order INTEGER DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

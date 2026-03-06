@@ -46,6 +46,9 @@ public class ResumeHomeCustomization implements Persistable<Long>, NewRecordAwar
     @Builder.Default
     private Integer sortOrder = 0;
 
+    @Builder.Default
+    private String source = "manual";
+
     @Column("created_at")
     private LocalDateTime createdAt;
 

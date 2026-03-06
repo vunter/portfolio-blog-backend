@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
@@ -49,6 +50,7 @@ public class ResumeProfileService {
     private final ResumeLearningTopicRepository learningTopicRepository;
     private final HtmlSanitizerService htmlSanitizer;
     private final IdService idService;
+    private final org.springframework.r2dbc.core.DatabaseClient databaseClient;
 
     // Inline SVG icons for PDF contact info (no external font dependency)
     private static final String ICON_EMAIL = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\" viewBox=\"0 0 512 512\" style=\"vertical-align:-1px\"><path fill=\"#666\" d=\"M48 64C21.5 64 0 85.5 0 112c0 15.1 7.1 29.3 19.2 38.4L236.8 313.6c11.4 8.5 27 8.5 38.4 0L492.8 150.4c12.1-9.1 19.2-23.3 19.2-38.4c0-26.5-21.5-48-48-48H48zM0 176V384c0 35.3 28.7 64 64 64H448c35.3 0 64-28.7 64-64V176L294.4 339.2c-22.8 17.1-54 17.1-76.8 0L0 176z\"/></svg>";
@@ -473,6 +475,28 @@ public class ResumeProfileService {
                 projectRepository.deleteByProfileId(profileId),
                 learningTopicRepository.deleteByProfileId(profileId)
         );
+    }
+
+    /**
+     * Hard-delete all resume child entries imported from LinkedIn (source='linkedin')
+     * across all locales for the given user. Returns total rows deleted.
+     * Satisfies GDPR Art. 17 right to erasure for LinkedIn-imported data.
+     */
+    @Transactional
+    public Mono<Long> deleteLinkedInData(Long ownerId) {
+        String[] tables = {
+            "resume_educations", "resume_experiences", "resume_skills", "resume_languages",
+            "resume_certifications", "resume_additional_info", "resume_home_customization",
+            "resume_testimonials", "resume_proficiencies", "resume_projects", "resume_learning_topics"
+        };
+        return profileRepository.findByOwnerId(ownerId)
+                .flatMap(profile -> Flux.fromArray(tables)
+                        .flatMap(table -> databaseClient.sql(
+                                "DELETE FROM " + table + " WHERE profile_id = :pid AND source = 'linkedin'")
+                                .bind("pid", profile.getId())
+                                .fetch()
+                                .rowsUpdated()))
+                .reduce(0L, Long::sum);
     }
 
     private Mono<Void> saveChildEntities(Long profileId, ResumeProfileRequest request) {
