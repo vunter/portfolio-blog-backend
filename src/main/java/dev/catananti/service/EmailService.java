@@ -256,9 +256,10 @@ public class EmailService {
     /**
      * Send welcome email after newsletter confirmation.
      */
-    public Mono<Void> sendNewsletterWelcome(String to, String name) {
+    public Mono<Void> sendNewsletterWelcome(String to, String name, String unsubscribeToken) {
         String subject = msg("email.newsletter.welcome.subject");
         String displayName = name != null ? name : msg("email.default.subscriber");
+        String unsubscribeUrl = siteUrl + "/newsletter/unsubscribe?token=" + unsubscribeToken;
 
         String html = templateService.render("newsletter-welcome", baseVars(
             "#10b981 0%, #059669 100%",
@@ -272,10 +273,12 @@ public class EmailService {
                 "item3", msg("email.newsletter.welcome.item3"),
                 "visitText", msg("email.newsletter.welcome.visit"),
                 "siteUrl", siteUrl
-            )
+            ),
+            "<p><a href=\"" + unsubscribeUrl + "\" style=\"color: #6b7280;\">"
+                + msg("email.article.notification.unsubscribe") + "</a></p>"
         ));
 
-        return sendHtmlEmail(to, subject, html);
+        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeUrl);
     }
 
     /**
@@ -303,7 +306,58 @@ public class EmailService {
                 + msg("email.article.notification.unsubscribe") + "</a></p>"
         ));
 
-        return sendHtmlEmail(to, subject, html);
+        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeUrl);
+    }
+
+    /**
+     * Send HTML email with List-Unsubscribe headers (RFC 8058) for newsletter emails.
+     */
+    public Mono<Void> sendHtmlEmailWithUnsubscribe(String to, String subject, String htmlContent, String unsubscribeUrl) {
+        return checkRateLimit(to).then(Mono.<Void>fromRunnable(() -> {
+            if (resendClient != null) {
+                sendViaResendWithHeaders(to, subject, htmlContent, unsubscribeUrl);
+            } else {
+                sendViaSmtpWithHeaders(to, subject, htmlContent, unsubscribeUrl);
+            }
+        }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
+                .timeout(resilience.getExternalTimeout()));
+    }
+
+    /** Send email via Resend HTTP API with List-Unsubscribe headers. */
+    private void sendViaResendWithHeaders(String to, String subject, String html, String unsubscribeUrl) {
+        try {
+            var builder = CreateEmailOptions.builder()
+                    .from(fromName + " <" + fromEmail + ">")
+                    .to(to)
+                    .subject(subject)
+                    .html(html)
+                    .addHeader("List-Unsubscribe", "<" + unsubscribeUrl + ">")
+                    .addHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+            CreateEmailResponse response = resendClient.emails().send(builder.build());
+            log.debug("Email sent via Resend to: {} (id: {})", to, response.getId());
+        } catch (ResendException e) {
+            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage());
+            throw new RuntimeException("Failed to send email via Resend", e);
+        }
+    }
+
+    /** Send email via SMTP with List-Unsubscribe headers. */
+    private void sendViaSmtpWithHeaders(String to, String subject, String content, String unsubscribeUrl) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(fromEmail, fromName);
+            helper.setTo(to);
+            helper.setSubject(subject);
+            helper.setText(content, true);
+            message.addHeader("List-Unsubscribe", "<" + unsubscribeUrl + ">");
+            message.addHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+            mailSender.send(message);
+            log.debug("Email sent via SMTP to: {}", to);
+        } catch (Exception e) {
+            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage());
+            throw new RuntimeException("Failed to send email via SMTP", e);
+        }
     }
 
     /**

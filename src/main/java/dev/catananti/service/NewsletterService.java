@@ -140,7 +140,7 @@ public class NewsletterService {
                     return subscriberRepository.save(subscriber)
                             .flatMap(s -> {
                                 // Send welcome email after confirmation
-                                return emailService.sendNewsletterWelcome(s.getEmail(), s.getName())
+                                return emailService.sendNewsletterWelcome(s.getEmail(), s.getName(), s.getUnsubscribeToken())
                                         .onErrorResume(e -> {
                                             log.warn("Failed to send welcome email to {}: {}", s.getEmail(), e.getMessage());
                                             return Mono.empty();
