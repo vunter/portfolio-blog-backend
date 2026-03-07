@@ -2,6 +2,7 @@ package dev.catananti.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -12,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * BUG-02 FIX: Service to blacklist JWT access tokens on logout.
  * Uses Redis with TTL matching the token's remaining lifetime so entries
  * auto-expire when the token would have expired anyway.
- * Falls back to local in-memory blacklist when Redis is unavailable.
+ * Falls back to local in-memory blacklist when Redis is unavailable or not configured.
  */
 @Service
 @Slf4j
@@ -20,13 +21,17 @@ public class TokenBlacklistService {
 
     private static final String BLACKLIST_PREFIX = "jwt:blacklist:";
 
+    @Nullable
     private final ReactiveRedisTemplate<String, String> redisTemplate;
 
     // F-242: In-memory fallback when Redis is down (key=jti, value=expiry timestamp in millis)
     private final ConcurrentHashMap<String, Long> localBlacklist = new ConcurrentHashMap<>();
 
-    public TokenBlacklistService(ReactiveRedisTemplate<String, String> redisTemplate) {
+    public TokenBlacklistService(@Nullable ReactiveRedisTemplate<String, String> redisTemplate) {
         this.redisTemplate = redisTemplate;
+        if (redisTemplate == null) {
+            log.info("Redis not available — token blacklist will use in-memory storage only");
+        }
     }
 
     /**
@@ -42,6 +47,10 @@ public class TokenBlacklistService {
         // Always add to local fallback
         localBlacklist.put(jti, System.currentTimeMillis() + remainingMs);
         cleanupExpiredEntries();
+
+        if (redisTemplate == null) {
+            return Mono.just(true);
+        }
 
         String key = BLACKLIST_PREFIX + jti;
         Duration ttl = Duration.ofMillis(remainingMs);
@@ -64,16 +73,21 @@ public class TokenBlacklistService {
         if (jti == null || jti.isBlank()) {
             return Mono.just(false);
         }
+
+        // When Redis is not configured, use local blacklist only
+        if (redisTemplate == null) {
+            Long expiry = localBlacklist.get(jti);
+            return Mono.just(expiry != null && expiry > System.currentTimeMillis());
+        }
+
         String key = BLACKLIST_PREFIX + jti;
         return redisTemplate.hasKey(key)
                 .onErrorResume(e -> {
                     log.debug("Redis unavailable for blacklist check, using local fallback for jti={}: {}", jti, e.getMessage());
-                    // Check local blacklist as fallback
                     Long expiry = localBlacklist.get(jti);
                     if (expiry != null && expiry > System.currentTimeMillis()) {
                         return Mono.just(true);
                     }
-                    // Fail-open — token was never explicitly blacklisted, allow it
                     return Mono.just(false);
                 });
     }
