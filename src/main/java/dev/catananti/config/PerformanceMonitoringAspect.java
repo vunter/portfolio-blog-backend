@@ -131,10 +131,10 @@ public class PerformanceMonitoringAspect {
         // Expected business exceptions → WARN; unexpected infrastructure errors → ERROR
         if (isExpectedException(error)) {
             log.warn("Operation failed: {}.{} after {}ms: {}",
-                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage());
+                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage(), error);
         } else {
             log.error("Operation failed: {}.{} after {}ms: {}",
-                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage());
+                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage(), error);
         }
     }
 

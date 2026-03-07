@@ -130,7 +130,7 @@ public class CloudflareEmailRoutingService {
                     }
                 })
                 .onErrorResume(ex -> {
-                    log.error("CF email routing API error deleting rule {}: {}", ruleId, ex.getMessage());
+                    log.error("CF email routing API error deleting rule {}: {}", ruleId, ex.getMessage(), ex);
                     return Mono.empty(); // Non-blocking — don't fail demotion if CF API is down
                 })
                 .then();

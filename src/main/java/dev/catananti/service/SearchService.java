@@ -75,7 +75,7 @@ public class SearchService {
         // F-291: Sanitize LIKE special characters to prevent wildcard injection
         String sanitizedQuery = DigestUtils.escapeLikePattern(query);
         int offset = request.getPage() * request.getSize();
-        log.info("Searching articles: query='{}', page={}, size={}, tags={}", query, request.getPage(), request.getSize(), request.getTags());
+        log.debug("Searching articles: query='{}', page={}, size={}, tags={}", query, request.getPage(), request.getSize(), request.getTags());
 
         boolean hasDateFilter = request.getDateFrom() != null || request.getDateTo() != null;
 

@@ -107,7 +107,7 @@ public class RateLimitingFilter implements WebFilter {
                             .onErrorResume(e -> {
                                 // Redis unavailable — use in-memory fallback
                                 log.warn("Rate limiting Redis unavailable ({}), using in-memory fallback: {}",
-                                        e.getClass().getSimpleName(), e.getMessage());
+                                        e.getClass().getSimpleName(), e.getMessage(), e);
                                 return handleInMemoryRateLimit(exchange, chain, rateLimitKey, maxRequests, clientIp, path);
                             });
                 });

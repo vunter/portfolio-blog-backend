@@ -78,7 +78,7 @@ public class S3StorageProvider implements StorageProvider {
         return Mono.fromFuture(() -> s3Client.headBucket(request))
                 .map(_ -> true)
                 .onErrorResume(e -> {
-                    log.warn("S3 health check failed: {}", e.getMessage());
+                    log.warn("S3 health check failed: {}", e.getMessage(), e);
                     return Mono.just(false);
                 })
                 .subscribeOn(Schedulers.boundedElastic());

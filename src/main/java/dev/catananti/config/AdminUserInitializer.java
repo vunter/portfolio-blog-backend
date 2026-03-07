@@ -73,7 +73,7 @@ public class AdminUserInitializer {
                 })
                 .subscribe(
                         result -> {},
-                        error -> log.error("Failed to initialize admin user: {}", error.getMessage())
+                        error -> log.error("Failed to initialize admin user: {}", error.getMessage(), error)
                 );
     }
 
