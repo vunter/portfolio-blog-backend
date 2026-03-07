@@ -29,12 +29,12 @@ public class LinkedInImportController {
     private final OAuth2Service oAuth2Service;
 
     @GetMapping("/status")
-    public Map<String, Object> getStatus() {
+    public Mono<Map<String, Object>> getStatus() {
         boolean enabled = portabilityService.isPortabilityEnabled();
         String note = enabled
                 ? "LinkedIn DMA portability import is available."
                 : "LinkedIn DMA portability import is not configured or disabled.";
-        return Map.of("enabled", enabled, "note", note);
+        return Mono.just(Map.of("enabled", enabled, "note", note));
     }
 
     @GetMapping("/authorize")
