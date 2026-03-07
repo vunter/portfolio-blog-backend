@@ -1,5 +1,6 @@
 package dev.catananti.dto;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -21,6 +22,9 @@ public record RegisterRequest(
         message = "Password must contain uppercase, lowercase, number and special character"
     )
     String password,
+
+    @AssertTrue(message = "You must accept the Terms of Use and Privacy Policy")
+    Boolean termsAccepted,
 
     String recaptchaToken
 ) {}

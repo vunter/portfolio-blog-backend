@@ -84,6 +84,17 @@ public class User implements Persistable<Long>, NewRecordAware {
     @Builder.Default
     private Integer failedLoginAttempts = 0;
 
+    @Column("terms_accepted")
+    @Builder.Default
+    private Boolean termsAccepted = false;
+
+    @Column("terms_accepted_at")
+    private LocalDateTime termsAcceptedAt;
+
+    @Column("terms_version")
+    @Builder.Default
+    private String termsVersion = "1.0";
+
     @Column("created_at")
     private LocalDateTime createdAt;
     

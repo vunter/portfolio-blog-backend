@@ -345,6 +345,9 @@ public class AuthService {
                             .passwordHash(null) // set below reactively
                             .role("VIEWER")
                             .active(true)
+                            .termsAccepted(true)
+                            .termsAcceptedAt(LocalDateTime.now())
+                            .termsVersion("1.0")
                             .createdAt(LocalDateTime.now())
                             .updatedAt(LocalDateTime.now())
                             .build();

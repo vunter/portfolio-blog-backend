@@ -26,6 +26,15 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- Add terms acceptance columns if missing (LGPD Art. 8, GDPR Art. 7)
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='terms_accepted') THEN
+        ALTER TABLE users ADD COLUMN terms_accepted BOOLEAN DEFAULT FALSE NOT NULL;
+        ALTER TABLE users ADD COLUMN terms_accepted_at TIMESTAMP;
+        ALTER TABLE users ADD COLUMN terms_version VARCHAR(20) DEFAULT '1.0';
+    END IF;
+END $$;
+
 -- Articles table
 CREATE TABLE IF NOT EXISTS articles (
     id BIGINT PRIMARY KEY,

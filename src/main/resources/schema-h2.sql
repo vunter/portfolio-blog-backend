@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS users (
     mfa_preferred_method VARCHAR(20) DEFAULT 'TOTP',
     account_locked_until TIMESTAMP,
     failed_login_attempts INTEGER DEFAULT 0,
+    terms_accepted BOOLEAN DEFAULT FALSE NOT NULL,
+    terms_accepted_at TIMESTAMP,
+    terms_version VARCHAR(20) DEFAULT '1.0',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
