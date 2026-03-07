@@ -341,7 +341,7 @@ class AuthServiceTest {
     @Test
     @DisplayName("Should register new user successfully")
     void register_ShouldCreateUserAndReturnToken() {
-        RegisterRequest request = new RegisterRequest("New User", "new@example.com", "Password123!@", null);
+        RegisterRequest request = new RegisterRequest("New User", "new@example.com", "Password123!@", true, null);
         User savedUser = User.builder()
                 .id(555L).name("New User").email("new@example.com")
                 .passwordHash("hashed").role("VIEWER").active(true)
@@ -370,7 +370,7 @@ class AuthServiceTest {
     @Test
     @DisplayName("Should return success and send email when email already exists (no enumeration)")
     void register_ShouldThrow_WhenEmailAlreadyRegistered() {
-        RegisterRequest request = new RegisterRequest("User", "existing@example.com", "Password123!@", null);
+        RegisterRequest request = new RegisterRequest("User", "existing@example.com", "Password123!@", true, null);
         when(userRepository.existsByEmail("existing@example.com")).thenReturn(Mono.just(true));
         when(emailService.sendTextEmail(eq("existing@example.com"), anyString(), anyString()))
                 .thenReturn(Mono.empty());
