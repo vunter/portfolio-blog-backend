@@ -82,6 +82,7 @@ public class UserService {
             try {
                 role = UserRole.valueOf(request.getRole().toUpperCase()).name();
             } catch (IllegalArgumentException e) {
+                log.warn("Invalid role provided: {}", request.getRole());
                 return Mono.error(new IllegalArgumentException("error.invalid_role"));
             }
         }
@@ -151,6 +152,7 @@ public class UserService {
             try {
                 user.setRole(UserRole.valueOf(request.getRole().toUpperCase()).name());
             } catch (IllegalArgumentException e) {
+                log.warn("Invalid role provided: {}", request.getRole());
                 return Mono.error(new IllegalArgumentException("error.invalid_role"));
             }
         }

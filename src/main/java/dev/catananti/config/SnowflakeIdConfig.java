@@ -59,7 +59,7 @@ public class SnowflakeIdConfig {
                 }
             }
         } catch (Exception e) {
-            log.warn("Failed to auto-generate node ID from network interface: {}", e.getMessage());
+            log.warn("Failed to auto-generate node ID from network interface: {}", e.getMessage(), e);
         }
 
         // Fallback: use hash of hostname
@@ -69,7 +69,7 @@ public class SnowflakeIdConfig {
             log.debug("Auto-generated Snowflake node ID from hostname '{}': {}", hostname, nodeId);
             return nodeId;
         } catch (Exception e) {
-            log.warn("Failed to get hostname, using default node ID 0");
+            log.warn("Failed to get hostname, using default node ID 0: {}", e.getMessage(), e);
             return 0;
         }
     }

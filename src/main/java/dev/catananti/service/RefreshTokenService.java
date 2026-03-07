@@ -148,7 +148,7 @@ public class RefreshTokenService {
                     .doOnSuccess(result -> log.info("Expired refresh tokens cleaned up"))
                     .block();
         } catch (Exception e) {
-            log.error("Failed to cleanup expired refresh tokens: {}", e.getMessage());
+            log.error("Failed to cleanup expired refresh tokens", e);
         }
     }
 

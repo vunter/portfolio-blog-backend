@@ -44,7 +44,7 @@ public class CspNonceFilter implements WebFilter {
                 exchange.getResponse().getHeaders().set("Content-Security-Policy", csp);
             } catch (UnsupportedOperationException e) {
                 // Headers already read-only, skip
-                log.debug("CSP header not set — headers already read-only: {}", e.getMessage());
+                log.trace("CSP header not set — headers already read-only: {}", e.getMessage(), e);
             }
             return Mono.empty();
         });

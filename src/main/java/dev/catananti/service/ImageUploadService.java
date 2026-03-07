@@ -132,7 +132,7 @@ public class ImageUploadService {
                                 // Strip EXIF metadata from JPEG files to prevent GPS/device info leakage
                                 stripExifMetadata(path, ext);
 
-                                log.info("Image uploaded: {}", path);
+                                log.debug("Image uploaded: {}", path);
                                 return datePath + "/" + newFilename;
                             }).subscribeOn(Schedulers.boundedElastic()));
                 });
@@ -176,7 +176,7 @@ public class ImageUploadService {
         return Mono.fromCallable(() -> {
                     boolean deleted = Files.deleteIfExists(filePath);
                     if (deleted) {
-                        log.info("Image deleted: {}", filePath);
+                        log.debug("Image deleted: {}", filePath);
                     } else {
                         log.warn("Image file not found for deletion: {}", filePath);
                     }
@@ -209,7 +209,7 @@ public class ImageUploadService {
             }
             log.debug("EXIF metadata stripped from: {}", filePath);
         } catch (IOException e) {
-            log.warn("Failed to strip EXIF metadata from {}: {}", filePath, e.getMessage());
+            log.warn("Failed to strip EXIF metadata from {}: {}", filePath, e.getMessage(), e);
         }
     }
 

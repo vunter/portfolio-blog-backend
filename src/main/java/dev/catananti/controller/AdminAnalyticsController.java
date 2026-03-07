@@ -140,6 +140,7 @@ public class AdminAnalyticsController {
             int days = Integer.parseInt(cleaned);
             return Math.max(1, Math.min(365, days));
         } catch (NumberFormatException e) {
+            log.debug("Invalid period format '{}', defaulting to 30 days", period);
             return 30;
         }
     }

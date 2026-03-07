@@ -215,7 +215,7 @@ public class PublicResumeService {
                             .doOnSuccess(html -> log.info("Resume generated from profile data for alias: {} (owner: {}, lang: {})", 
                                     normalizedAlias, ownerId, lang))
                             .onErrorResume(e -> {
-                                log.debug("Profile generation failed for alias {}: {}", normalizedAlias, e.getMessage());
+                                log.warn("Profile generation failed for alias={}", normalizedAlias, e);
                                 return Mono.empty();
                             });
                 })

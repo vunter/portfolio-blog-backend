@@ -66,7 +66,7 @@ public class HttpCacheFilter implements WebFilter {
             try {
                 addCacheHeaders(exchange, path);
             } catch (Exception e) {
-                log.trace("Could not add cache headers: {}", e.getMessage());
+                log.trace("Could not add cache headers: {}", e.getMessage(), e);
             }
             return Mono.empty();
         });
@@ -113,7 +113,7 @@ public class HttpCacheFilter implements WebFilter {
             headers.setPragma("no-cache");
             headers.setExpires(0);
         } catch (UnsupportedOperationException e) {
-            log.trace("Could not set no-cache headers - response already committed");
+            log.trace("Could not set no-cache headers - response already committed: {}", e.getMessage(), e);
         }
     }
 
@@ -154,7 +154,7 @@ public class HttpCacheFilter implements WebFilter {
 
             return DigestUtils.sha256Hex(content, 16);
         } catch (Exception e) {
-            log.warn("Could not generate ETag: {}", e.getMessage());
+            log.warn("Could not generate ETag: {}", e.getMessage(), e);
             return null;
         }
     }

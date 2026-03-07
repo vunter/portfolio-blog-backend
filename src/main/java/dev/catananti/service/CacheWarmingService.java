@@ -61,7 +61,7 @@ public class CacheWarmingService {
                 result -> log.debug("{} completed", taskName),
                 error -> {
                     backgroundErrors.incrementAndGet();
-                    log.error("{} failed: {}", taskName, error.getMessage());
+                    log.error("{} failed: {}", taskName, error.getMessage(), error);
                 }
         );
     }
@@ -71,7 +71,7 @@ public class CacheWarmingService {
                 v -> log.debug("{} completed", taskName),
                 error -> {
                     backgroundErrors.incrementAndGet();
-                    log.error("{} failed: {}", taskName, error.getMessage());
+                    log.error("{} failed: {}", taskName, error.getMessage(), error);
                 }
         );
     }
@@ -125,7 +125,7 @@ public class CacheWarmingService {
         .doOnError(e -> log.warn("Cache warming failed: {}", e.getMessage()))
         .subscribe(
                 null,
-                error -> log.error("Cache warming subscription error: {}", error.getMessage())
+                error -> log.error("Cache warming subscription error: {}", error.getMessage(), error)
         );
     }
 
@@ -192,7 +192,7 @@ public class CacheWarmingService {
                     .block();
         } catch (Exception e) {
             backgroundErrors.incrementAndGet();
-            log.error("refreshPopularContent failed: {}", e.getMessage());
+            log.error("refreshPopularContent failed: {}", e.getMessage(), e);
         }
     }
 

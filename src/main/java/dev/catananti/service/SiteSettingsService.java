@@ -164,8 +164,8 @@ public class SiteSettingsService {
     private String inferType(String value) {
         if (value == null) return "STRING";
         if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) return "BOOLEAN";
-        try { Integer.parseInt(value); return "INTEGER"; } catch (NumberFormatException ignored) {}
-        try { Long.parseLong(value); return "LONG"; } catch (NumberFormatException ignored) {}
+        try { Integer.parseInt(value); return "INTEGER"; } catch (NumberFormatException e) {}
+        try { Long.parseLong(value); return "LONG"; } catch (NumberFormatException e) {}
         return "STRING";
     }
 }

@@ -215,6 +215,7 @@ public class OAuth2Service {
                         var mapper = new tools.jackson.databind.ObjectMapper();
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
+                        log.error("Failed to parse GitHub token response", e);
                         throw new RuntimeException("Failed to parse GitHub token response", e);
                     }
                 })
@@ -231,6 +232,7 @@ public class OAuth2Service {
                                     var mapper = new tools.jackson.databind.ObjectMapper();
                                     return (Map<String, Object>) mapper.readValue(body, Map.class);
                                 } catch (Exception e) {
+                                    log.error("Failed to parse GitHub user response", e);
                                     throw new RuntimeException("Failed to parse GitHub user response", e);
                                 }
                             });
@@ -246,6 +248,7 @@ public class OAuth2Service {
                                     return (List<Map<String, Object>>) mapper.readValue(body,
                                             mapper.getTypeFactory().constructCollectionType(List.class, Map.class));
                                 } catch (Exception e) {
+                                    log.error("Failed to parse GitHub emails response", e);
                                     throw new RuntimeException("Failed to parse GitHub emails response", e);
                                 }
                             });
@@ -280,7 +283,7 @@ public class OAuth2Service {
                 })
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
-                    log.error("GitHub OAuth2 error: {}", e.getMessage());
+                    log.error("GitHub OAuth2 error", e);
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "GitHub authentication failed"));
                 });
     }
@@ -303,6 +306,7 @@ public class OAuth2Service {
                         var mapper = new tools.jackson.databind.ObjectMapper();
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
+                        log.error("Failed to parse LinkedIn token response", e);
                         throw new RuntimeException("Failed to parse LinkedIn token response", e);
                     }
                 })
@@ -320,6 +324,7 @@ public class OAuth2Service {
                         var mapper = new tools.jackson.databind.ObjectMapper();
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
+                        log.error("Failed to parse LinkedIn userinfo response", e);
                         throw new RuntimeException("Failed to parse LinkedIn userinfo response", e);
                     }
                 })
@@ -340,7 +345,7 @@ public class OAuth2Service {
                 })
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
-                    log.error("LinkedIn OAuth2 error: {}", e.getMessage());
+                    log.error("LinkedIn OAuth2 error", e);
                     return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "LinkedIn authentication failed"));
                 });
     }

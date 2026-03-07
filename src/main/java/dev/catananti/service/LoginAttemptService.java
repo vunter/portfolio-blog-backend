@@ -82,7 +82,7 @@ public class LoginAttemptService {
         return redisTemplate.hasKey(LOCKOUT_PREFIX + key)
                 .timeout(resilience.getRedisTimeout())
                 .onErrorResume(e -> {
-                    log.warn("Redis unavailable for isBlocked check, falling back to Caffeine: {}", e.getMessage());
+                    log.warn("Redis unavailable for isBlocked check, falling back to Caffeine: {}", e.getMessage(), e);
                     return Mono.fromCallable(() -> isBlockedLocally(key));
                 });
     }
@@ -96,7 +96,7 @@ public class LoginAttemptService {
                 .defaultIfEmpty(0L)
                 .timeout(resilience.getRedisTimeout())
                 .onErrorResume(e -> {
-                    log.warn("Redis unavailable for lockout time, falling back to Caffeine: {}", e.getMessage());
+                    log.warn("Redis unavailable for lockout time, falling back to Caffeine: {}", e.getMessage(), e);
                     return Mono.fromCallable(() -> getRemainingLockoutTimeLocally(key));
                 });
     }
@@ -144,7 +144,7 @@ public class LoginAttemptService {
                     return Mono.just(attempts.intValue());
                 })
                 .onErrorResume(e -> {
-                    log.warn("Redis unavailable for recording attempt, falling back to Caffeine: {}", e.getMessage());
+                    log.warn("Redis unavailable for recording attempt, falling back to Caffeine: {}", e.getMessage(), e);
                     return Mono.fromCallable(() -> recordFailedAttemptLocally(key, clientIp));
                 });
     }
@@ -175,7 +175,7 @@ public class LoginAttemptService {
                 .then(redisTemplate.delete(LOCKOUT_PREFIX + key))
                 .then()
                 .onErrorResume(e -> {
-                    log.warn("Failed to clear login attempts in Redis (local caches cleared): {}", e.getMessage());
+                    log.warn("Failed to clear login attempts in Redis (local caches cleared): {}", e.getMessage(), e);
                     return Mono.empty();
                 });
     }
@@ -243,7 +243,7 @@ public class LoginAttemptService {
                                         clientIp
                                 ))
                                 .onErrorResume(e -> {
-                                    log.warn("Failed to send lockout notification: {}", e.getMessage());
+                                    log.warn("Failed to send lockout notification: {}", e.getMessage(), e);
                                     return Mono.empty();
                                 });
                     }

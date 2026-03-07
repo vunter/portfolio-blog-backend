@@ -106,11 +106,11 @@ public class PasswordResetService {
                                                     plainToken // Send plain token in email
                                             ))
                                             .doOnSuccess(v -> log.debug("Password reset email sent to: {}", email))
-                                            .doOnError(e -> log.error("Failed to process password reset for {}: {}", email, e.getMessage()));
+                                            .doOnError(e -> log.error("Failed to process password reset for {}: {}", email, e.getMessage(), e));
                                 });
                     })
                     .onErrorResume(e -> {
-                        log.warn("Password reset error for {}: {}", email, e.getMessage());
+                        log.warn("Password reset error for {}: {}", email, e.getMessage(), e);
                         return Mono.empty();
                     })
                     .then();
@@ -183,7 +183,7 @@ public class PasswordResetService {
                                     // Email notification sent outside core transaction — failure doesn't roll back password change
                                     .then(Mono.defer(() -> emailService.sendPasswordChangedNotification(user.getEmail(), user.getName())
                                             .onErrorResume(e -> {
-                                                log.warn("Failed to send password changed notification to {}: {}", user.getEmail(), e.getMessage());
+                                                log.warn("Failed to send password changed notification to {}: {}", user.getEmail(), e.getMessage(), e);
                                                 return Mono.empty();
                                             })));
                         }));

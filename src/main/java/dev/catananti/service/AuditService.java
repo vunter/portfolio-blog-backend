@@ -53,7 +53,7 @@ public class AuditService {
         return auditLogRepository.save(auditLog)
                 .doOnSuccess(saved -> log.info("Audit: {} - {} {} by {} ({})", 
                         action, entityType, entityId, performedByEmail, details))
-                .doOnError(e -> log.error("Failed to save audit log: {}", e.getMessage()))
+                .doOnError(e -> log.error("Failed to save audit log: {}", e.getMessage(), e))
                 .onErrorResume(e -> Mono.empty()) // Don't fail the main operation
                 .then();
     }

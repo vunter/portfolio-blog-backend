@@ -47,7 +47,7 @@ public class CacheService {
         }
         return operation.get()
                 .onErrorResume(e -> {
-                    log.debug("Redis operation failed (falling back gracefully): {}", e.getMessage());
+                    log.warn("Redis cache operation failed, falling back gracefully", e);
                     return Mono.just(fallback);
                 });
     }
@@ -79,7 +79,7 @@ public class CacheService {
                         // Deserialize from JSON if needed
                         return objectMapper.convertValue(value, type);
                     } catch (Exception e) {
-                        log.warn("Failed to deserialize cached value for key {}: {}", key, e.getMessage());
+                        log.warn("Failed to deserialize cached value for key {}: {}", key, e.getMessage(), e);
                         return null;
                     }
                 })

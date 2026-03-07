@@ -311,7 +311,7 @@ public class MfaService {
                 }
                 return false;
             } catch (Exception e) {
-                log.error("TOTP verification failed: {}", e.getMessage());
+                log.error("TOTP verification failed", e);
                 return false;
             }
         }).subscribeOn(Schedulers.boundedElastic());

@@ -155,7 +155,7 @@ public class MediaService {
                     }
                     return deleteOriginal.then(deleteThumb)
                             .then(mediaAssetRepository.delete(asset))
-                            .doOnSuccess(_ -> log.info("Media asset deleted: id={}, key={}", id, asset.getStorageKey()));
+                            .doOnSuccess(_ -> log.debug("Media asset deleted: id={}, key={}", id, asset.getStorageKey()));
                 });
     }
 
@@ -305,7 +305,7 @@ public class MediaService {
             return Mono.empty();
         }
         return storageProvider.delete(relativePath)
-                .doOnSuccess(_ -> log.info("Untracked file deleted: {}", relativePath));
+                .doOnSuccess(_ -> log.debug("Untracked file deleted: {}", relativePath));
     }
 
     private MediaAsset markExisting(MediaAsset asset) {
@@ -324,7 +324,7 @@ public class MediaService {
                     .doOnError(e -> log.error("Failed to store image variant {}: {}", key, e.getMessage(), e))
                     .subscribe(
                             url -> {},
-                            error -> log.error("Image variant storage error for {}: {}", key, error.getMessage())
+                            error -> log.error("Image variant storage error for {}: {}", key, error.getMessage(), error)
                     );
         }
     }

@@ -86,7 +86,7 @@ public class EmailChangeService {
                                     newEmail, userName, plainToken)
                                     .doOnSuccess(v -> log.info("Email change verification sent to: {} for userId: {}", newEmail, userId))
                                     .onErrorResume(e -> {
-                                        log.warn("Email send failed for email change (userId: {}), token saved for retry: {}", userId, e.getMessage());
+                                        log.warn("Email send failed for email change (userId: {}), token saved for retry: {}", userId, e.getMessage(), e);
                                         return Mono.empty();
                                     }));
                 });
@@ -140,7 +140,7 @@ public class EmailChangeService {
                                                 .then(auditService.logEmailChange(user.getId(), oldEmail, token.getNewEmail()))
                                                 .then(emailService.sendEmailChangedNotification(oldEmail, user.getName(), token.getNewEmail(), revertUrl)
                                                         .onErrorResume(e -> {
-                                                            log.warn("Failed to send email changed notification: {}", e.getMessage());
+                                                            log.warn("Failed to send email changed notification for userId={}: {}", user.getId(), e.getMessage(), e);
                                                             return Mono.empty();
                                                         }))
                                                 .thenReturn(token.getNewEmail());
@@ -181,7 +181,7 @@ public class EmailChangeService {
                                     .then(auditService.logEmailRevert(user.getId(), revertedFromEmail, restoredEmail))
                                     .then(emailService.sendEmailRevertedNotification(revertedFromEmail, user.getName(), restoredEmail)
                                             .onErrorResume(e -> {
-                                                log.warn("Failed to send email reverted notification: {}", e.getMessage());
+                                                log.warn("Failed to send email reverted notification for userId={}: {}", user.getId(), e.getMessage(), e);
                                                 return Mono.empty();
                                             }))
                                     .thenReturn(restoredEmail);

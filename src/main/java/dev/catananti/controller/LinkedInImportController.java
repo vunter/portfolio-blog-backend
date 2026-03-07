@@ -107,7 +107,7 @@ public class LinkedInImportController {
                         ResumeProfileRequest result = mapper.readValue(json, ResumeProfileRequest.class);
                         return Mono.just(ResponseEntity.ok(result));
                     } catch (Exception e) {
-                        log.error("Failed to deserialize import result for key={}: {}", key, e.getMessage());
+                        log.error("Failed to deserialize import result for key={}: {}", key, e.getMessage(), e);
                         return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                                 .<ResumeProfileRequest>build());
                     }

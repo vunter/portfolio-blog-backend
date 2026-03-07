@@ -103,7 +103,7 @@ public class PdfGenerationService {
         // Eagerly trigger initialization on boundedElastic scheduler (non-blocking)
         browserMono.subscribe(
                 b -> log.info("Playwright pre-initialized successfully"),
-                e -> log.warn("Failed to pre-initialize Playwright: {}. Will retry on first use.", e.getMessage())
+                e -> log.warn("Failed to pre-initialize Playwright: {}. Will retry on first use.", e.getMessage(), e)
         );
     }
 
@@ -114,14 +114,14 @@ public class PdfGenerationService {
             try {
                 browser.close();
             } catch (Exception e) {
-                log.warn("Error closing browser: {}", e.getMessage());
+                log.warn("Error closing browser: {}", e.getMessage(), e);
             }
         }
         if (playwright != null) {
             try {
                 playwright.close();
             } catch (Exception e) {
-                log.warn("Error closing playwright: {}", e.getMessage());
+                log.warn("Error closing playwright: {}", e.getMessage(), e);
             }
         }
         log.info("Playwright shutdown complete");
@@ -281,14 +281,14 @@ public class PdfGenerationService {
                 try {
                     context.close();
                 } catch (Exception e) {
-                    log.warn("Error closing browser context: {}", e.getMessage());
+                    log.warn("Error closing browser context", e);
                 }
             }
             if (tempFile != null) {
                 try {
                     Files.deleteIfExists(tempFile);
                 } catch (Exception e) {
-                    log.warn("Failed to delete temp file: {}", e.getMessage());
+                    log.debug("Failed to delete temp file", e);
                 }
             }
         }
@@ -355,7 +355,7 @@ public class PdfGenerationService {
             }
             return text;
         } catch (Exception e) {
-            log.warn("Failed to extract text preview: {}", e.getMessage());
+            log.warn("Failed to extract text preview: {}", e.getMessage(), e);
             return "";
         }
     }

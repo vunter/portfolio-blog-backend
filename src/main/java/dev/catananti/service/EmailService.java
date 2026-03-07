@@ -207,7 +207,7 @@ public class EmailService {
             CreateEmailResponse response = resendClient.emails().send(builder.build());
             log.debug("Email sent via Resend to: {} (id: {})", to, response.getId());
         } catch (ResendException e) {
-            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage());
+            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage(), e);
             throw new RuntimeException("Failed to send email via Resend", e);
         }
     }
@@ -224,7 +224,7 @@ public class EmailService {
             mailSender.send(message);
             log.debug("Email sent via SMTP to: {}", to);
         } catch (Exception e) {
-            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage());
+            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage(), e);
             throw new RuntimeException("Failed to send email via SMTP", e);
         }
     }
@@ -336,7 +336,7 @@ public class EmailService {
             CreateEmailResponse response = resendClient.emails().send(builder.build());
             log.debug("Email sent via Resend to: {} (id: {})", to, response.getId());
         } catch (ResendException e) {
-            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage());
+            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage(), e);
             throw new RuntimeException("Failed to send email via Resend", e);
         }
     }
@@ -355,7 +355,7 @@ public class EmailService {
             mailSender.send(message);
             log.debug("Email sent via SMTP to: {}", to);
         } catch (Exception e) {
-            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage());
+            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage(), e);
             throw new RuntimeException("Failed to send email via SMTP", e);
         }
     }
@@ -415,7 +415,7 @@ public class EmailService {
 
         return sendHtmlEmail(email, subject, html)
                 .doOnSuccess(v -> log.debug("Account lockout notification sent to: {}", email))
-                .doOnError(e -> log.warn("Failed to send lockout notification to {}: {}", email, e.getMessage()))
+                .doOnError(e -> log.error("Failed to send account lockout notification to {}: {}", email, e.getMessage(), e))
                 .onErrorResume(e -> Mono.empty());
     }
 

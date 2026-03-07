@@ -72,7 +72,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResourceNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public Mono<ErrorResponse> handleResourceNotFound(ResourceNotFoundException ex, ServerWebExchange exchange) {
-        log.warn("Resource not found: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=404 path={} Resource not found: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.NOT_FOUND,
                 msg(locale, "error.not_found"), msg(locale, ex.getMessage()), exchange));
@@ -81,7 +82,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccountLockedException.class)
     @ResponseStatus(HttpStatus.TOO_MANY_REQUESTS)
     public Mono<ErrorResponse> handleAccountLocked(AccountLockedException ex, ServerWebExchange exchange) {
-        log.warn("Account locked: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=429 path={} Account locked: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.TOO_MANY_REQUESTS,
                 msg(locale, "error.unauthorized"),
@@ -91,7 +93,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BadCredentialsException.class)
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
     public Mono<ErrorResponse> handleBadCredentials(BadCredentialsException ex, ServerWebExchange exchange) {
-        log.warn("Authentication failed: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=401 path={} Authentication failed: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         // SEC: Never expose attempt count details to the client
         return Mono.just(buildErrorResponse(HttpStatus.UNAUTHORIZED,
@@ -109,7 +112,8 @@ public class GlobalExceptionHandler {
                 ));
 
         Locale locale = resolveLocale(exchange);
-        log.warn("Validation failed: {}", errors);
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=400 path={} Validation failed: {}", path, errors, ex);
         return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
                 msg(locale, "error.validation_failed"), msg(locale, "error.invalid_request_data"),
                 exchange, errors));
@@ -119,7 +123,8 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Mono<ErrorResponse> handleRecaptchaException(
             dev.catananti.service.RecaptchaService.RecaptchaException ex, ServerWebExchange exchange) {
-        log.warn("reCAPTCHA verification failed: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=400 path={} reCAPTCHA verification failed: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
                 msg(locale, "error.recaptcha_failed"), msg(locale, "error.recaptcha_retry"), exchange));
@@ -128,7 +133,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateResourceException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public Mono<ErrorResponse> handleDuplicateResource(DuplicateResourceException ex, ServerWebExchange exchange) {
-        log.warn("Duplicate resource: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=409 path={} Duplicate resource: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.CONFLICT,
                 msg(locale, "error.conflict"), msg(locale, ex.getMessage()), exchange));
@@ -137,7 +143,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(SecurityException.class)
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
     public Mono<ErrorResponse> handleSecurityException(SecurityException ex, ServerWebExchange exchange) {
-        log.warn("Security exception: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=401 path={} Security exception: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.UNAUTHORIZED,
                 msg(locale, "error.unauthorized"), msg(locale, "error.unauthorized"), exchange));
@@ -146,7 +153,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Mono<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex, ServerWebExchange exchange) {
-        log.warn("Invalid argument: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=400 path={} Invalid argument: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         // Try to resolve as i18n key first; fall back to sanitized message
         String translated = msg(locale, ex.getMessage());
@@ -169,7 +177,8 @@ public class GlobalExceptionHandler {
         });
 
         Locale locale = resolveLocale(exchange);
-        log.warn("Constraint violations: {}", errors);
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=400 path={} Constraint violations: {}", path, errors, ex);
         return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
                 msg(locale, "error.validation_failed"), msg(locale, "error.invalid_request_params"),
                 exchange, errors));
@@ -178,11 +187,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public Mono<ResponseEntity<ErrorResponse>> handleResponseStatusException(
             ResponseStatusException ex, ServerWebExchange exchange) {
+        String path = exchange.getRequest().getPath().value();
+        int statusValue = ex.getStatusCode().value();
         // 406 NOT_ACCEPTABLE is common for SSE content negotiation — don't spam logs
-        if (ex.getStatusCode().value() == 406) {
-            log.debug("Response status exception: {} - {}", ex.getStatusCode(), ex.getReason());
+        if (statusValue == 406) {
+            log.trace("status=406 path={} SSE content negotiation rejected: {}", path, ex.getReason());
+        } else if (statusValue >= 500) {
+            log.error("status={} path={} Response status exception: {}", statusValue, path, ex.getReason(), ex);
         } else {
-            log.warn("Response status exception: {} - {}", ex.getStatusCode(), ex.getReason());
+            log.warn("status={} path={} Response status exception: {}", statusValue, path, ex.getReason(), ex);
         }
         Locale locale = resolveLocale(exchange);
         HttpStatusCode statusCode = ex.getStatusCode();
@@ -198,7 +211,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(PdfGenerationException.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Mono<ErrorResponse> handlePdfGenerationException(PdfGenerationException ex, ServerWebExchange exchange) {
-        log.error("PDF generation failed: {}", ex.getMessage(), ex);
+        String path = exchange.getRequest().getPath().value();
+        log.error("status=500 path={} PDF generation failed: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
                 msg(locale, "error.internal_server_error"), msg(locale, "error.pdf_generation_failed"), exchange));
@@ -207,7 +221,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public Mono<ErrorResponse> handleAccessDeniedException(AccessDeniedException ex, ServerWebExchange exchange) {
-        log.warn("Access denied: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=403 path={} Access denied: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.FORBIDDEN,
                 msg(locale, "error.forbidden"), "Access denied", exchange));
@@ -216,7 +231,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ServerWebInputException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Mono<ErrorResponse> handleServerWebInputException(ServerWebInputException ex, ServerWebExchange exchange) {
-        log.warn("Bad request input: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=400 path={} Bad request input: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
                 msg(locale, "error.bad_request"),
@@ -226,7 +242,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateKeyException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public Mono<ErrorResponse> handleDuplicateKeyException(DuplicateKeyException ex, ServerWebExchange exchange) {
-        log.warn("Database constraint violation: {}", ex.getMessage());
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=409 path={} Database constraint violation: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.CONFLICT,
                 msg(locale, "error.duplicate_resource"), ex.getMessage(), exchange));
@@ -235,13 +252,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(RuntimeException.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Mono<ErrorResponse> handleRuntimeException(RuntimeException ex, ServerWebExchange exchange) {
+        String path = exchange.getRequest().getPath().value();
         // Client disconnects (SSE stream closed) are expected, not server errors
         if (ex.getMessage() != null && ex.getMessage().contains("Connection has been closed")) {
-            log.debug("Client disconnected: {}", ex.getMessage());
+            log.trace("status=500 path={} Client disconnected: {}", path, ex.getMessage());
             return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
                     "Client disconnected", ex.getMessage(), exchange));
         }
-        log.error("Runtime exception: {}", ex.getMessage(), ex);
+        log.error("status=500 path={} Runtime exception: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
                 msg(locale, "error.internal_server_error"), msg(locale, "error.unexpected_error"), exchange));
@@ -250,7 +268,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Mono<ErrorResponse> handleGenericException(Exception ex, ServerWebExchange exchange) {
-        log.error("Unexpected error: ", ex);
+        String path = exchange.getRequest().getPath().value();
+        log.error("status=500 path={} Unexpected error: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
                 msg(locale, "error.internal_server_error"), msg(locale, "error.unexpected_error"), exchange));

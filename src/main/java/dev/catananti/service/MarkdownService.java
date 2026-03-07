@@ -74,7 +74,7 @@ public class MarkdownService {
             Node document = parser.parse(markdown);
             return renderer.render(document);
         } catch (Exception e) {
-            log.error("Error rendering markdown: {}", e.getMessage());
+            log.error("Error rendering markdown: {}", e.getMessage(), e);
             return escapeHtml(markdown);
         }
     }
@@ -102,7 +102,7 @@ public class MarkdownService {
             }
             return plainText;
         } catch (Exception e) {
-            log.warn("Failed to extract plain text from markdown: {}", e.getMessage());
+            log.warn("Failed to extract plain text from markdown: {}", e.getMessage(), e);
             String stripped = HTML_TAGS.matcher(markdown).replaceAll("");
             stripped = WHITESPACE.matcher(stripped).replaceAll(" ").trim();
             if (stripped.length() > maxLength) {

@@ -101,7 +101,7 @@ public class RecaptchaService {
                 })
                 .onErrorResume(RecaptchaException.class, Mono::error)
                 .onErrorResume(ex -> {
-                    log.error("reCAPTCHA verification error for action '{}': {}", action, ex.getMessage());
+                    log.error("reCAPTCHA verification error for action '{}': {}", action, ex.getMessage(), ex);
                     // Fail-closed: reject the request if reCAPTCHA verification cannot be completed
                     return Mono.error(new RecaptchaException("reCAPTCHA verification unavailable. Please try again later."));
                 })

@@ -70,7 +70,7 @@ public class RequestLoggingConfig {
                                     requestId, method, path, clientIp, duration.toMillis());
                         } else {
                             log.error("[{}] {} {} from {} - ERROR {} in {}ms",
-                                    requestId, method, path, clientIp, error.getMessage(), duration.toMillis());
+                                    requestId, method, path, clientIp, error.getMessage(), duration.toMillis(), error);
                         }
                     });
         };

@@ -75,7 +75,7 @@ public class ImageProcessingService {
         } catch (ResponseStatusException e) {
             throw e;
         } catch (IOException e) {
-            log.warn("Failed to check image dimensions: {}", e.getMessage());
+            log.warn("Failed to check image dimensions: {}", e.getMessage(), e);
         }
 
         try {
@@ -117,7 +117,7 @@ public class ImageProcessingService {
             log.debug("Generated {} variants for image ({}x{})", variants.size(), origWidth, origHeight);
 
         } catch (IOException e) {
-            log.error("Image processing failed: {}", e.getMessage());
+            log.error("Image processing failed", e);
             variants.put("", new ImageVariant("", imageBytes, 0, 0));
         }
 

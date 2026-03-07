@@ -84,6 +84,7 @@ public class LinkedInPortabilityService {
                         var mapper = new tools.jackson.databind.ObjectMapper();
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
+                        log.error("Failed to parse LinkedIn token response", e);
                         throw new RuntimeException("Failed to parse LinkedIn token response", e);
                     }
                 });
@@ -109,7 +110,7 @@ public class LinkedInPortabilityService {
                         tuple.getT1(), tuple.getT2(), tuple.getT3(),
                         tuple.getT4(), tuple.getT5(), tuple.getT6(), tuple.getT7()))
                 .doOnSuccess(r -> log.info("LinkedIn portability import completed for '{}'", r.getFullName()))
-                .doOnError(e -> log.error("LinkedIn portability import failed: {}", e.getMessage()));
+                .doOnError(e -> log.error("LinkedIn portability import failed: {}", e.getMessage(), e));
     }
 
     public Mono<String> storeImportResult(String json) {
@@ -187,6 +188,7 @@ public class LinkedInPortabilityService {
 
                 return new SnapshotPage(elements, next);
             } catch (Exception e) {
+                log.error("Failed to parse LinkedIn snapshot response for {}", domain, e);
                 throw new RuntimeException("Failed to parse LinkedIn snapshot response for " + domain, e);
             }
         });

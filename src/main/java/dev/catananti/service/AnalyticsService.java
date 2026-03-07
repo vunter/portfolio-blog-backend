@@ -96,7 +96,7 @@ public class AnalyticsService {
                         try {
                             metadataJson = objectMapper.writeValueAsString(request.getMetadata());
                         } catch (JsonProcessingException e) {
-                            log.warn("Failed to serialize metadata: {}", e.getMessage());
+                            log.warn("Failed to serialize metadata: {}", e.getMessage(), e);
                         }
                     }
 
@@ -563,7 +563,7 @@ public class AnalyticsService {
                     .doOnSuccess(result -> log.info("Analytics events older than {} days cleaned up", retentionDays))
                     .block();
         } catch (Exception e) {
-            log.error("Failed to cleanup old analytics events: {}", e.getMessage());
+            log.error("Failed to cleanup old analytics events: {}", e.getMessage(), e);
         }
     }
 }

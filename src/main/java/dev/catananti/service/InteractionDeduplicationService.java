@@ -50,8 +50,8 @@ public class InteractionDeduplicationService {
                 .setIfAbsent(key, "1", VIEW_TTL)
                 .defaultIfEmpty(false)
                 .onErrorResume(e -> {
-                    log.warn("Failed to check view deduplication: {}", e.getMessage());
-                    return Mono.just(true); // Allow on error to not block legitimate users
+                    log.debug("Redis view deduplication check failed, allowing view: {}", e.getMessage());
+                    return Mono.just(true);
                 });
     }
 
@@ -71,8 +71,8 @@ public class InteractionDeduplicationService {
                 .setIfAbsent(key, "1", LIKE_TTL)
                 .defaultIfEmpty(false)
                 .onErrorResume(e -> {
-                    log.warn("Failed to check like deduplication: {}", e.getMessage());
-                    return Mono.just(true); // Allow on error to not block legitimate users
+                    log.debug("Redis like deduplication check failed, allowing like: {}", e.getMessage());
+                    return Mono.just(true);
                 });
     }
 
@@ -92,7 +92,7 @@ public class InteractionDeduplicationService {
                 .map(count -> count > 0)
                 .defaultIfEmpty(false)
                 .onErrorResume(e -> {
-                    log.warn("Failed to remove like: {}", e.getMessage());
+                    log.debug("Redis remove like failed, defaulting to not removed: {}", e.getMessage());
                     return Mono.just(false);
                 });
     }
@@ -111,7 +111,7 @@ public class InteractionDeduplicationService {
         return redisTemplate.hasKey(key)
                 .defaultIfEmpty(false)
                 .onErrorResume(e -> {
-                    log.warn("Failed to check like status: {}", e.getMessage());
+                    log.debug("Redis like status check failed, defaulting to not liked: {}", e.getMessage());
                     return Mono.just(false);
                 });
     }
@@ -123,7 +123,10 @@ public class InteractionDeduplicationService {
         if ("unknown".equals(clientIp)) return Mono.just(false);
         String key = COMMENT_LIKE_PREFIX + commentId + ":" + hashIp(clientIp);
         return redisTemplate.hasKey(key).defaultIfEmpty(false)
-                .onErrorResume(e -> Mono.just(false));
+                .onErrorResume(e -> {
+                    log.debug("Redis comment like status check failed, defaulting to not liked: {}", e.getMessage());
+                    return Mono.just(false);
+                });
     }
 
     public Mono<Boolean> recordCommentLikeIfNew(Long commentId, ServerHttpRequest request) {
@@ -132,7 +135,10 @@ public class InteractionDeduplicationService {
         String key = COMMENT_LIKE_PREFIX + commentId + ":" + hashIp(clientIp);
         return redisTemplate.opsForValue().setIfAbsent(key, "1", LIKE_TTL)
                 .defaultIfEmpty(false)
-                .onErrorResume(e -> Mono.just(true));
+                .onErrorResume(e -> {
+                    log.debug("Redis comment like deduplication check failed, allowing like: {}", e.getMessage());
+                    return Mono.just(true);
+                });
     }
 
     public Mono<Boolean> removeCommentLike(Long commentId, ServerHttpRequest request) {
@@ -141,7 +147,10 @@ public class InteractionDeduplicationService {
         String key = COMMENT_LIKE_PREFIX + commentId + ":" + hashIp(clientIp);
         return redisTemplate.delete(key).map(count -> count > 0)
                 .defaultIfEmpty(false)
-                .onErrorResume(e -> Mono.just(false));
+                .onErrorResume(e -> {
+                    log.debug("Redis remove comment like failed, defaulting to not removed: {}", e.getMessage());
+                    return Mono.just(false);
+                });
     }
 
     /**
