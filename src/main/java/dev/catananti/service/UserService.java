@@ -210,12 +210,21 @@ public class UserService {
                 boolean needsPasswordValidation = emailChanging || usernameChanging || passwordChanging;
 
                 if (needsPasswordValidation) {
-                    if (request.currentPassword() == null || request.currentPassword().isBlank()) {
-                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.current_password_required"));
+                    boolean hasExistingPassword = user.getPasswordHash() != null && !user.getPasswordHash().isBlank();
+
+                    // OAuth users without a password can set username/password without currentPassword
+                    Mono<Boolean> passwordCheck;
+                    if (hasExistingPassword) {
+                        if (request.currentPassword() == null || request.currentPassword().isBlank()) {
+                            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.current_password_required"));
+                        }
+                        passwordCheck = Mono.fromCallable(() -> passwordEncoder.matches(request.currentPassword(), user.getPasswordHash()))
+                                .subscribeOn(Schedulers.boundedElastic());
+                    } else {
+                        passwordCheck = Mono.just(true);
                     }
 
-                    return Mono.fromCallable(() -> passwordEncoder.matches(request.currentPassword(), user.getPasswordHash()))
-                            .subscribeOn(Schedulers.boundedElastic())
+                    return passwordCheck
                             .flatMap(matches -> {
                                 if (!matches) {
                                     return Mono.<UserResponse>error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.current_password_incorrect"));
