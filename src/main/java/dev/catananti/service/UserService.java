@@ -199,6 +199,13 @@ public class UserService {
                     changed = true;
                 }
 
+                if (Boolean.TRUE.equals(request.termsAccepted()) && !Boolean.TRUE.equals(user.getTermsAccepted())) {
+                    user.setTermsAccepted(true);
+                    user.setTermsAcceptedAt(LocalDateTime.now());
+                    user.setTermsVersion("1.0");
+                    changed = true;
+                }
+
                 // Detect sensitive changes requiring password confirmation
                 boolean emailChanging = request.email() != null && !request.email().isBlank()
                         && !request.email().equalsIgnoreCase(user.getEmail());

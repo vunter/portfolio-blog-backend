@@ -29,5 +29,7 @@ public record ProfileUpdateRequest(
 
     @Size(max = 10, message = "Locale must be at most 10 characters")
     @Pattern(regexp = "^(en|pt|es|it)?$", message = "Locale must be one of: en, pt, es, it")
-    String preferredLocale
+    String preferredLocale,
+
+    Boolean termsAccepted
 ) {}
