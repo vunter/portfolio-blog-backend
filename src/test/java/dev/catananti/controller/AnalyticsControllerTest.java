@@ -9,6 +9,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -41,6 +42,9 @@ class AnalyticsControllerTest {
                     .build();
 
             ServerHttpRequest httpRequest = mock(ServerHttpRequest.class);
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Analytics-Consent", "granted");
+            when(httpRequest.getHeaders()).thenReturn(headers);
 
             when(analyticsService.trackEvent(request, httpRequest))
                     .thenReturn(Mono.empty());
@@ -60,6 +64,9 @@ class AnalyticsControllerTest {
         @DisplayName("Should track article view")
         void shouldTrackArticleView() {
             ServerHttpRequest httpRequest = mock(ServerHttpRequest.class);
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Analytics-Consent", "granted");
+            when(httpRequest.getHeaders()).thenReturn(headers);
 
             when(analyticsService.trackArticleView("spring-boot-guide", httpRequest))
                     .thenReturn(Mono.empty());
