@@ -91,13 +91,12 @@ public class SecurityConfig {
                                 if ("GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
                                 }
-                                // Exempt public endpoints that are protected by rate limiting
+                                // Exempt public endpoints that are protected by rate limiting or consent headers
                                 if (path.startsWith("/api/v1/articles/") || path.startsWith("/api/v1/newsletter/")
-                                    || path.startsWith("/api/v1/contact") || path.startsWith("/api/v1/search/")) {
+                                    || path.startsWith("/api/v1/contact") || path.startsWith("/api/v1/search/")
+                                    || path.startsWith("/api/v1/analytics/")) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
                                 }
-                                // F-015: CSRF exempt auth paths partially overlap with authorize matchers
-                                // (e.g., /api/v1/analytics/**, /api/v1/bookmarks/** are permitAll but not CSRF-exempt for POST)
                                 // F-016: Extracted to shared constant PUBLIC_AUTH_PATHS
                                 if (PUBLIC_AUTH_PATHS.contains(path)) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
