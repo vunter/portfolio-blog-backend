@@ -1288,13 +1288,14 @@ class ApiEndpointIntegrationTest {
         class AdminNewsletter {
 
             @Mock private NewsletterService newsletterService;
+            @Mock private NewsletterTrackingService newsletterTrackingService;
 
             private AdminNewsletterController adminNewsletterController;
             private WebTestClient client;
 
             @BeforeEach
             void setUp() {
-                adminNewsletterController = new AdminNewsletterController(newsletterService);
+                adminNewsletterController = new AdminNewsletterController(newsletterService, newsletterTrackingService);
                 client = WebTestClient.bindToController(adminNewsletterController)
                         .configureClient().build();
             }

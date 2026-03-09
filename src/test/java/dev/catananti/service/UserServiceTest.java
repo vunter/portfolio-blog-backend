@@ -361,7 +361,7 @@ class UserServiceTest {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest("New Name", null, null, null, null, null, null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest("New Name", null, null, null, null, null, null, null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .assertNext(r -> assertThat(r.getName()).isEqualTo("New Name"))
@@ -373,7 +373,7 @@ class UserServiceTest {
     void shouldRejectPasswordChangeWithoutCurrentPassword() {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, null, "newPassword123!", null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, null, "newPassword123!", null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .expectErrorMatches(e -> e instanceof org.springframework.web.server.ResponseStatusException
@@ -387,7 +387,7 @@ class UserServiceTest {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
         when(passwordEncoder.matches("wrongpass", "hashedPassword")).thenReturn(false);
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, "wrongpass", "newPassword123!", null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, "wrongpass", "newPassword123!", null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .expectErrorMatches(e -> e instanceof org.springframework.web.server.ResponseStatusException
@@ -403,7 +403,7 @@ class UserServiceTest {
         when(passwordEncoder.encode("newPassword123!")).thenReturn("newHashedPassword");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, "correctpass", "newPassword123!", null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, "correctpass", "newPassword123!", null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .assertNext(r -> assertThat(r).isNotNull())
@@ -415,7 +415,7 @@ class UserServiceTest {
     void shouldRejectBadAvatarUrl() {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, "ftp://bad.url/avatar.png", null, null, null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, "ftp://bad.url/avatar.png", null, null, null, null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .expectErrorMatches(e -> e instanceof org.springframework.web.server.ResponseStatusException
@@ -430,7 +430,7 @@ class UserServiceTest {
         when(passwordEncoder.matches("correctpass", "hashedPassword")).thenReturn(true);
         when(userRepository.existsByEmail("taken@example.com")).thenReturn(Mono.just(true));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "taken@example.com", null, null, null, "correctpass", null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "taken@example.com", null, null, null, "correctpass", null, null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .expectErrorMatches(e -> e instanceof org.springframework.web.server.ResponseStatusException
@@ -443,7 +443,7 @@ class UserServiceTest {
     void shouldReturnExistingUserWhenNoChanges() {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, null, null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, null, null, null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .assertNext(r -> assertThat(r.getEmail()).isEqualTo("test@example.com"))
@@ -612,7 +612,7 @@ class UserServiceTest {
         when(userRepository.existsByUsername("newusername")).thenReturn(Mono.just(false));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, "newusername", null, "My bio", "correctpass", null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, "newusername", null, "My bio", "correctpass", null, null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .assertNext(r -> assertThat(r).isNotNull())
@@ -628,7 +628,7 @@ class UserServiceTest {
         when(emailChangeService.initiateEmailChange(testUserId, "newemail@example.com", "Test User")).thenReturn(Mono.empty());
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "newemail@example.com", null, null, null, "correctpass", null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, "newemail@example.com", null, null, null, "correctpass", null, null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .assertNext(r -> assertThat(r.getEmail()).isEqualTo("test@example.com"))
@@ -640,7 +640,7 @@ class UserServiceTest {
     void shouldFailProfileUpdateWhenUserNotFound() {
         when(userRepository.findByEmail("ghost@example.com")).thenReturn(Mono.empty());
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest("Name", null, null, null, null, null, null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest("Name", null, null, null, null, null, null, null, null);
 
         StepVerifier.create(userService.updateProfile("ghost@example.com", request))
                 .expectError(org.springframework.web.server.ResponseStatusException.class)
@@ -653,7 +653,7 @@ class UserServiceTest {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, "https://example.com/avatar.png", null, null, null, null);
+        ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, "https://example.com/avatar.png", null, null, null, null, null);
 
         StepVerifier.create(userService.updateProfile("test@example.com", request))
                 .assertNext(r -> assertThat(r).isNotNull())
