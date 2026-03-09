@@ -57,3 +57,6 @@ src/main/resources/dev/
 *.bak_removed
 *.backup_*
 HELP.md
+
+# IDE/Tool
+.claude/

@@ -438,6 +438,9 @@ public class OAuth2Service {
                 .role("VIEWER")
                 .emailVerified(true)
                 .avatarUrl(avatar)
+                .termsAccepted(true)
+                .termsAcceptedAt(now)
+                .termsVersion("1.0")
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
