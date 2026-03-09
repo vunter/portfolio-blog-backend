@@ -1,7 +1,7 @@
 name: Build & Deploy to Production
 
 on:
-  # Auto-deploy after CI passes on main (no duplicate test run)
+  # Auto-deploy after CI passes on main
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -18,6 +18,8 @@ env:
   REGISTRY: ghcr.io
   API_IMAGE: ghcr.io/vunter/portfolio-blog-api
   FE_IMAGE: ghcr.io/vunter/portfolio-blog-frontend
+  NEXUS_URL: https://vunter.tplinkdns.com/nexus
+  CONFIG_REPO: builds
 
 jobs:
   # ──────────────────────────────────────────────
@@ -42,10 +44,10 @@ jobs:
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "sha_short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
-          echo "📦 Deploying SHA: $SHA"
+          echo "Deploying SHA: $SHA"
 
   # ──────────────────────────────────────────────
-  # Build API image → push to GHCR (parallel)
+  # Build API image → push to GHCR
   # ──────────────────────────────────────────────
   build-api:
     needs: prepare
@@ -79,7 +81,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=api
 
   # ──────────────────────────────────────────────
-  # Build Frontend image → push to GHCR (parallel)
+  # Build Frontend image → push to GHCR
   # ──────────────────────────────────────────────
   build-frontend:
     needs: prepare
@@ -114,10 +116,69 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
   # ──────────────────────────────────────────────
-  # Deploy to production droplet
+  # Bundle config files → upload to Nexus
+  # ──────────────────────────────────────────────
+  bundle-config:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Create config bundle
+        run: |
+          SHA="${{ needs.prepare.outputs.sha }}"
+          BUNDLE="portfolio-blog-config-${SHA}.tar.gz"
+
+          # Bundle only deployment config — no source code
+          FILES=(
+            deploy/cloud/docker-compose.cloud.yml
+            deploy/cloud/docker-compose.infra.yml
+            deploy/cloud/nginx-cloud.conf
+            deploy/cloud/rollback.sh
+            deploy/cloud/init-db.sh
+            nginx/
+            prometheus.yml
+          )
+
+          # Include optional directories if present
+          [ -d "deploy/cloud/scripts" ] && FILES+=(deploy/cloud/scripts/)
+          [ -d "prometheus" ] && FILES+=(prometheus/)
+
+          tar czf "$BUNDLE" "${FILES[@]}"
+          echo "Config bundle: $BUNDLE ($(du -h $BUNDLE | cut -f1))"
+          echo "BUNDLE=$BUNDLE" >> "$GITHUB_ENV"
+
+      - name: Upload config bundle to Nexus
+        run: |
+          SHA="${{ needs.prepare.outputs.sha }}"
+          UPLOAD_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/config/${BUNDLE}"
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" \
+            --upload-file "$BUNDLE" \
+            "$UPLOAD_URL")
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Uploaded config bundle to Nexus (HTTP $HTTP_CODE)"
+          else
+            echo "Failed to upload config bundle (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+          # Also upload as 'latest' for easy access
+          LATEST_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/config/portfolio-blog-config-latest.tar.gz"
+          curl -s -o /dev/null \
+            -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" \
+            --upload-file "$BUNDLE" \
+            "$LATEST_URL"
+
+  # ──────────────────────────────────────────────
+  # Deploy to production (no source code on server)
   # ──────────────────────────────────────────────
   deploy:
-    needs: [prepare, build-api, build-frontend]
+    needs: [prepare, build-api, build-frontend, bundle-config]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -126,34 +187,47 @@ jobs:
       name: production
       url: https://catananti.dev
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.sha }}
-
-      - name: Copy config files to Droplet
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DROPLET_IP }}
-          username: vunter
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "deploy/cloud/,nginx/,prometheus.yml,prometheus/,src/main/resources/"
-          target: "/home/vunter/portfolio-blog/"
-
       - name: Deploy on Droplet
         uses: appleboy/ssh-action@v1.0.3
         env:
           DEPLOY_SHA: ${{ needs.prepare.outputs.sha }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_URL: ${{ env.NEXUS_URL }}
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: vunter
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: DEPLOY_SHA,GHCR_TOKEN
+          envs: DEPLOY_SHA,GHCR_TOKEN,NEXUS_USER,NEXUS_PASSWORD,NEXUS_URL
           command_timeout: 10m
           script: |
             set -e
             source ~/.doppler_token
-            cd ~/portfolio-blog
+
+            DEPLOY_DIR="$HOME/portfolio-blog"
+            BUNDLE_NAME="portfolio-blog-config-${DEPLOY_SHA}.tar.gz"
+            BUNDLE_URL="${NEXUS_URL}/repository/builds/portfolio-blog/config/${BUNDLE_NAME}"
+
+            echo "=== Downloading config bundle from Nexus ==="
+            mkdir -p "$DEPLOY_DIR"
+            cd "$DEPLOY_DIR"
+
+            HTTP_CODE=$(curl -s -o "$BUNDLE_NAME" -w "%{http_code}" \
+              -u "${NEXUS_USER}:${NEXUS_PASSWORD}" \
+              "$BUNDLE_URL")
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              echo "Downloaded config bundle (HTTP $HTTP_CODE)"
+            else
+              echo "Failed to download config from Nexus (HTTP $HTTP_CODE), aborting"
+              rm -f "$BUNDLE_NAME"
+              exit 1
+            fi
+
+            echo "=== Extracting config bundle ==="
+            tar xzf "$BUNDLE_NAME" --overwrite
+            rm -f "$BUNDLE_NAME"
 
             echo "=== Pulling images from GHCR ==="
             echo "$GHCR_TOKEN" | docker login ghcr.io -u github-actions --password-stdin
@@ -182,11 +256,11 @@ jobs:
             echo "=== Health check ==="
             for i in $(seq 1 30); do
               if docker exec portfolio-blog-api wget -q --spider http://localhost:8080/actuator/health/readiness 2>/dev/null; then
-                echo "✅ API healthy after ${i} attempts"
+                echo "API healthy after ${i} attempts"
                 break
               fi
               if [ $i -eq 30 ]; then
-                echo "❌ API failed health check after 30 attempts"
+                echo "API failed health check after 30 attempts"
                 docker logs portfolio-blog-api --tail 50
                 exit 1
               fi
@@ -194,12 +268,12 @@ jobs:
             done
 
             echo "=== Smoke tests ==="
-            curl -sf http://localhost:80/api/v1/languages > /dev/null || { echo "❌ Languages endpoint failed"; exit 1; }
-            curl -sf http://localhost:80/ > /dev/null || { echo "❌ Frontend failed"; exit 1; }
-            echo "✅ All smoke tests passed"
+            curl -sf http://localhost:80/api/v1/languages > /dev/null || { echo "Languages endpoint failed"; exit 1; }
+            curl -sf http://localhost:80/ > /dev/null || { echo "Frontend failed"; exit 1; }
+            echo "All smoke tests passed"
 
             echo "${DEPLOY_SHA}" > ~/portfolio-blog/.last-deploy-sha
-            echo "✅ Deploy complete at $(date) — SHA: ${DEPLOY_SHA}"
+            echo "Deploy complete at $(date) — SHA: ${DEPLOY_SHA}"
 
       - name: Notify deploy status
         if: always()
@@ -214,9 +288,9 @@ jobs:
             exit 0
           fi
           if [ "$DEPLOY_STATUS" = "success" ]; then
-            COLOR=3066993; TITLE="✅ Deploy Succeeded"
+            COLOR=3066993; TITLE="Deploy Succeeded"
           else
-            COLOR=15158332; TITLE="❌ Deploy Failed"
+            COLOR=15158332; TITLE="Deploy Failed"
           fi
           curl -sf -H "Content-Type: application/json" -d "{
             \"embeds\": [{

@@ -97,6 +97,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_PUBLIC_URL=${S3_PUBLIC_URL}
+      # GeoIP MaxMind
+      - GEOIP_DATABASE_PATH=/data/geolite2/GeoLite2-Country.mmdb
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/readiness"]
       interval: 30s
@@ -106,6 +108,7 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - app_logs:/app/logs
+      - /home/vunter/geolite2:/data/geolite2:ro
     networks:
       - blog-network
       - blog-infra
