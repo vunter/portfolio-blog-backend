@@ -23,4 +23,7 @@ public class SubscribeRequest {
     private String name;
 
     private String recaptchaToken;
+
+    @Builder.Default
+    private Boolean analyticsConsent = false;
 }

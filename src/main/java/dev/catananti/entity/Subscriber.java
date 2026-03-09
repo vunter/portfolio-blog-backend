@@ -56,6 +56,10 @@ public class Subscriber implements Persistable<Long>, NewRecordAware {
     @Column("created_at")
     private LocalDateTime createdAt;
 
+    @Column("analytics_consent")
+    @Builder.Default
+    private Boolean analyticsConsent = false;
+
     public boolean isConfirmed() {
         return "CONFIRMED".equals(status);
     }

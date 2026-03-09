@@ -49,7 +49,8 @@ public class NewsletterService {
                         existing.setStatus(SubscriberStatus.PENDING.name());
                         existing.setConfirmationToken(UUID.randomUUID().toString());
                         existing.setUnsubscribedAt(null);
-                        existing.setCreatedAt(LocalDateTime.now()); // Reset creation time for expiration
+                        existing.setCreatedAt(LocalDateTime.now());
+                        existing.setAnalyticsConsent(Boolean.TRUE.equals(request.getAnalyticsConsent()));
                         return subscriberRepository.save(existing)
                                 .map(s -> createConfirmationResponse(s));
                     } else if (SubscriberStatus.CONFIRMED.matches(existing.getStatus())) {
@@ -100,6 +101,7 @@ public class NewsletterService {
                 .confirmationToken(UUID.randomUUID().toString())
                 .unsubscribeToken(UUID.randomUUID().toString())
                 .createdAt(LocalDateTime.now())
+                .analyticsConsent(Boolean.TRUE.equals(request.getAnalyticsConsent()))
                 .build();
 
         return subscriberRepository.save(subscriber)

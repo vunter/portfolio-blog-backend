@@ -291,6 +291,11 @@ public class EmailService {
         String unsubscribeUrl = siteUrl + "/newsletter/unsubscribe?token=" + unsubscribeToken;
         String displayName = subscriberName != null ? subscriberName : msg("email.default.subscriber");
 
+        // Newsletter tracking URLs (consent checked server-side via analytics_consent column)
+        String trackingPixelUrl = siteUrl + "/api/v1/newsletter/track/open/" + unsubscribeToken;
+        String trackedArticleUrl = siteUrl + "/api/v1/newsletter/track/click/" + unsubscribeToken
+                + "?url=" + java.net.URLEncoder.encode(articleUrl, java.nio.charset.StandardCharsets.UTF_8);
+
         String html = templateService.render("new-article-notification", baseVars(
             "#3b82f6 0%, #1d4ed8 100%",
             msg("email.article.notification.header"),
@@ -299,8 +304,9 @@ public class EmailService {
                 "introText", msg("email.article.notification.intro"),
                 "articleTitle", articleTitle,
                 "articleExcerpt", articleExcerpt != null ? articleExcerpt : "",
-                "articleUrl", articleUrl,
-                "buttonText", msg("email.article.notification.button")
+                "articleUrl", trackedArticleUrl,
+                "buttonText", msg("email.article.notification.button"),
+                "trackingPixelUrl", trackingPixelUrl
             ),
             "<p><a href=\"" + unsubscribeUrl + "\" style=\"color: #6b7280;\">"
                 + msg("email.article.notification.unsubscribe") + "</a></p>"
