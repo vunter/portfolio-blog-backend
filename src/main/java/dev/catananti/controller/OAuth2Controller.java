@@ -7,6 +7,7 @@ import dev.catananti.service.OAuth2Service;
 import dev.catananti.util.IpAddressExtractor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +20,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 
@@ -31,6 +33,12 @@ public class OAuth2Controller {
     private final OAuth2Service oAuth2Service;
     private final UserRepository userRepository;
     private final UserSocialAccountRepository socialAccountRepository;
+
+    @Value("${jwt.cookie.secure:true}")
+    private boolean cookieSecure;
+
+    @Value("${jwt.cookie.domain:}")
+    private String cookieDomain;
 
     @GetMapping("/providers")
     public Map<String, Boolean> getAvailableProviders() {
@@ -79,12 +87,18 @@ public class OAuth2Controller {
                     };
 
                     return callbackMono.map(tokenResponse -> {
-                        httpResponse.addCookie(ResponseCookie.from("access_token", tokenResponse.getAccessToken())
-                                .httpOnly(true).secure(true).path("/api").sameSite("Lax")
-                                .maxAge(tokenResponse.getExpiresIn()).build());
-                        httpResponse.addCookie(ResponseCookie.from("refresh_token", tokenResponse.getRefreshToken())
-                                .httpOnly(true).secure(true).path("/api/v1/admin/auth")
-                                .sameSite("Lax").maxAge(7 * 24 * 3600).build());
+                        ResponseCookie.ResponseCookieBuilder accessBuilder = ResponseCookie.from("access_token", tokenResponse.getAccessToken())
+                                .httpOnly(true).secure(cookieSecure).path("/api")
+                                .sameSite("Lax").maxAge(tokenResponse.getExpiresIn());
+                        ResponseCookie.ResponseCookieBuilder refreshBuilder = ResponseCookie.from("refresh_token", tokenResponse.getRefreshToken())
+                                .httpOnly(true).secure(cookieSecure).path("/api/v1/admin/auth")
+                                .sameSite("Lax").maxAge(Duration.ofDays(7));
+                        if (cookieDomain != null && !cookieDomain.isBlank()) {
+                            accessBuilder.domain(cookieDomain);
+                            refreshBuilder.domain(cookieDomain);
+                        }
+                        httpResponse.addCookie(accessBuilder.build());
+                        httpResponse.addCookie(refreshBuilder.build());
                         return ResponseEntity.status(HttpStatus.FOUND)
                                 .location(URI.create("/auth/oauth-callback?expires_in=" + tokenResponse.getExpiresIn()))
                                 .<Void>build();
