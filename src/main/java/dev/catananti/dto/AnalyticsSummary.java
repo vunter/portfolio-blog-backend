@@ -24,6 +24,7 @@ public class AnalyticsSummary {
     private List<TopSource> topSources;
     private List<DeviceStat> topDevices;
     private List<BrowserStat> topBrowsers;
+    private List<CountryStat> topCountries;
 
     @Data
     @Builder
@@ -79,6 +80,15 @@ public class AnalyticsSummary {
     @AllArgsConstructor
     public static class BrowserStat {
         private String browser;
+        private long count;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CountryStat {
+        private String countryCode;
         private long count;
     }
 }

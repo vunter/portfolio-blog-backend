@@ -41,6 +41,7 @@ public class AnalyticsService {
     private final ObjectMapper objectMapper;
     private final IdService idService;
     private final DatabaseClient databaseClient;
+    private final GeoIPService geoIPService;
 
     @Value("${app.analytics.retention-days:90}")
     private int retentionDays;
@@ -87,9 +88,12 @@ public class AnalyticsService {
 
         return articleValidation
                 .flatMap(valid -> {
+                    // Resolve country from raw IP before anonymization
+                    String rawIp = IpAddressExtractor.extractClientIp(httpRequest);
+                    String countryCode = geoIPService.getCountryCode(rawIp).orElse(null);
+
                     // SEC-08: Anonymize IP for GDPR/LGPD compliance
-                    String userIp = IpAddressExtractor.anonymizeIp(
-                            IpAddressExtractor.extractClientIp(httpRequest));
+                    String userIp = IpAddressExtractor.anonymizeIp(rawIp);
                     String userAgent = httpRequest.getHeaders().getFirst("User-Agent");
                     
                     // Parse device info from user-agent
@@ -112,8 +116,8 @@ public class AnalyticsService {
                     LocalDateTime now = LocalDateTime.now();
 
                     var spec = databaseClient.sql("""
-                            INSERT INTO analytics_events (id, article_id, event_type, user_ip, user_agent, device_type, browser_family, os_family, referrer, metadata, created_at)
-                            VALUES (:id, :articleId, :eventType, :userIp, :userAgent, :deviceType, :browserFamily, :osFamily, :referrer, :metadata::jsonb, :createdAt)
+                            INSERT INTO analytics_events (id, article_id, event_type, user_ip, user_agent, device_type, browser_family, os_family, country_code, referrer, metadata, created_at)
+                            VALUES (:id, :articleId, :eventType, :userIp, :userAgent, :deviceType, :browserFamily, :osFamily, :countryCode, :referrer, :metadata::jsonb, :createdAt)
                             """)
                             .bind("id", eventId)
                             .bind("eventType", eventType)
@@ -126,6 +130,7 @@ public class AnalyticsService {
                     // Bind nullable params
                     spec = articleId != null ? spec.bind("articleId", articleId) : spec.bindNull("articleId", Long.class);
                     spec = userAgent != null ? spec.bind("userAgent", userAgent) : spec.bindNull("userAgent", String.class);
+                    spec = countryCode != null ? spec.bind("countryCode", countryCode) : spec.bindNull("countryCode", String.class);
                     spec = referrer != null ? spec.bind("referrer", referrer) : spec.bindNull("referrer", String.class);
                     spec = metadataJson != null ? spec.bind("metadata", metadataJson) : spec.bindNull("metadata", String.class);
 
@@ -162,6 +167,7 @@ public class AnalyticsService {
 
         Mono<List<AnalyticsSummary.DeviceStat>> devicesMono = getTopDevices(since);
         Mono<List<AnalyticsSummary.BrowserStat>> browsersMono = getTopBrowsers(since);
+        Mono<List<AnalyticsSummary.CountryStat>> countriesMono = getTopCountries(since);
 
         return Mono.zip(
                 totalViewsMono,
@@ -172,7 +178,7 @@ public class AnalyticsService {
                 getTopArticles(since, 10),
                 getTopReferrers(since, 10),
                 getTopSources(since, 10)
-        ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono)
+        ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono, countriesMono)
                 .map(extra -> AnalyticsSummary.builder()
                 .totalViews(tuple.getT1())
                 .totalLikes(tuple.getT2())
@@ -184,6 +190,7 @@ public class AnalyticsService {
                 .topSources(tuple.getT8())
                 .topDevices(extra.getT1())
                 .topBrowsers(extra.getT2())
+                .topCountries(extra.getT3())
                 .build()));
     }
 
@@ -418,6 +425,7 @@ public class AnalyticsService {
 
         Mono<List<AnalyticsSummary.DeviceStat>> devicesMono = getTopDevicesByAuthor(since, authorId);
         Mono<List<AnalyticsSummary.BrowserStat>> browsersMono = getTopBrowsersByAuthor(since, authorId);
+        Mono<List<AnalyticsSummary.CountryStat>> countriesMono = getTopCountriesByAuthor(since, authorId);
 
         return Mono.zip(
                 totalViewsMono,
@@ -428,7 +436,7 @@ public class AnalyticsService {
                 getTopArticlesByAuthor(since, 10, authorId),
                 getTopReferrersByAuthor(since, 10, authorId),
                 getTopSourcesByAuthor(since, 10, authorId)
-        ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono)
+        ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono, countriesMono)
                 .map(extra -> AnalyticsSummary.builder()
                 .totalViews(tuple.getT1())
                 .totalLikes(tuple.getT2())
@@ -440,6 +448,7 @@ public class AnalyticsService {
                 .topSources(tuple.getT8())
                 .topDevices(extra.getT1())
                 .topBrowsers(extra.getT2())
+                .topCountries(extra.getT3())
                 .build()));
     }
 
@@ -645,6 +654,46 @@ public class AnalyticsService {
                 .bind("authorId", authorId)
                 .map((row, meta) -> AnalyticsSummary.BrowserStat.builder()
                         .browser(row.get("browser_family", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.CountryStat>> getTopCountries(LocalDateTime since) {
+        return databaseClient.sql("""
+                SELECT country_code, COUNT(*) AS cnt
+                FROM analytics_events
+                WHERE country_code IS NOT NULL AND created_at >= :since
+                GROUP BY country_code
+                ORDER BY cnt DESC
+                LIMIT 10
+                """)
+                .bind("since", since)
+                .map((row, meta) -> AnalyticsSummary.CountryStat.builder()
+                        .countryCode(row.get("country_code", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.CountryStat>> getTopCountriesByAuthor(LocalDateTime since, Long authorId) {
+        return databaseClient.sql("""
+                SELECT ae.country_code, COUNT(*) AS cnt
+                FROM analytics_events ae
+                JOIN articles a ON ae.article_id = a.id
+                WHERE ae.country_code IS NOT NULL AND ae.created_at >= :since AND a.author_id = :authorId
+                GROUP BY ae.country_code
+                ORDER BY cnt DESC
+                LIMIT 10
+                """)
+                .bind("since", since)
+                .bind("authorId", authorId)
+                .map((row, meta) -> AnalyticsSummary.CountryStat.builder()
+                        .countryCode(row.get("country_code", String.class))
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()

@@ -52,6 +52,9 @@ public class AnalyticsEvent implements Persistable<Long>, NewRecordAware {
     @Column("os_family")
     private String osFamily;
 
+    @Column("country_code")
+    private String countryCode;
+
     private String referrer;
 
     @Column("created_at")
