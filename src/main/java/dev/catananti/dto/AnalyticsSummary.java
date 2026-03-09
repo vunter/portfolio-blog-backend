@@ -22,6 +22,8 @@ public class AnalyticsSummary {
     private List<TopArticle> topArticles;
     private List<TopReferrer> topReferrers;
     private List<TopSource> topSources;
+    private List<DeviceStat> topDevices;
+    private List<BrowserStat> topBrowsers;
 
     @Data
     @Builder
@@ -59,6 +61,24 @@ public class AnalyticsSummary {
     public static class TopSource {
         private String source;
         private String medium;
+        private long count;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class DeviceStat {
+        private String deviceType;
+        private long count;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class BrowserStat {
+        private String browser;
         private long count;
     }
 }

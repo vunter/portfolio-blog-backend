@@ -8,6 +8,7 @@ import dev.catananti.dto.AnalyticsSummary;
 import dev.catananti.entity.AnalyticsEvent;
 import dev.catananti.repository.AnalyticsRepository;
 import dev.catananti.repository.ArticleRepository;
+import dev.catananti.util.DeviceParser;
 import dev.catananti.util.IpAddressExtractor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -91,6 +92,11 @@ public class AnalyticsService {
                             IpAddressExtractor.extractClientIp(httpRequest));
                     String userAgent = httpRequest.getHeaders().getFirst("User-Agent");
                     
+                    // Parse device info from user-agent
+                    String deviceType = DeviceParser.parseDeviceType(userAgent);
+                    String browserFamily = DeviceParser.parseBrowserFamily(userAgent);
+                    String osFamily = DeviceParser.parseOsFamily(userAgent);
+
                     String metadataJson = null;
                     if (request.getMetadata() != null) {
                         try {
@@ -106,12 +112,15 @@ public class AnalyticsService {
                     LocalDateTime now = LocalDateTime.now();
 
                     var spec = databaseClient.sql("""
-                            INSERT INTO analytics_events (id, article_id, event_type, user_ip, user_agent, referrer, metadata, created_at)
-                            VALUES (:id, :articleId, :eventType, :userIp, :userAgent, :referrer, :metadata::jsonb, :createdAt)
+                            INSERT INTO analytics_events (id, article_id, event_type, user_ip, user_agent, device_type, browser_family, os_family, referrer, metadata, created_at)
+                            VALUES (:id, :articleId, :eventType, :userIp, :userAgent, :deviceType, :browserFamily, :osFamily, :referrer, :metadata::jsonb, :createdAt)
                             """)
                             .bind("id", eventId)
                             .bind("eventType", eventType)
                             .bind("userIp", userIp != null ? userIp : "")
+                            .bind("deviceType", deviceType)
+                            .bind("browserFamily", browserFamily)
+                            .bind("osFamily", osFamily)
                             .bind("createdAt", now);
 
                     // Bind nullable params
@@ -151,6 +160,9 @@ public class AnalyticsService {
         Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since)
                 .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumLikesCount());
 
+        Mono<List<AnalyticsSummary.DeviceStat>> devicesMono = getTopDevices(since);
+        Mono<List<AnalyticsSummary.BrowserStat>> browsersMono = getTopBrowsers(since);
+
         return Mono.zip(
                 totalViewsMono,
                 totalLikesMono,
@@ -160,7 +172,8 @@ public class AnalyticsService {
                 getTopArticles(since, 10),
                 getTopReferrers(since, 10),
                 getTopSources(since, 10)
-        ).map(tuple -> AnalyticsSummary.builder()
+        ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono)
+                .map(extra -> AnalyticsSummary.builder()
                 .totalViews(tuple.getT1())
                 .totalLikes(tuple.getT2())
                 .totalShares(tuple.getT3())
@@ -169,7 +182,9 @@ public class AnalyticsService {
                 .topArticles(tuple.getT6())
                 .topReferrers(tuple.getT7())
                 .topSources(tuple.getT8())
-                .build());
+                .topDevices(extra.getT1())
+                .topBrowsers(extra.getT2())
+                .build()));
     }
 
     private Mono<Long> getUniqueVisitors(LocalDateTime since) {
@@ -401,6 +416,9 @@ public class AnalyticsService {
         Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since)
                 .flatMap(count -> count > 0 ? Mono.just(count) : Mono.just(0L));
 
+        Mono<List<AnalyticsSummary.DeviceStat>> devicesMono = getTopDevicesByAuthor(since, authorId);
+        Mono<List<AnalyticsSummary.BrowserStat>> browsersMono = getTopBrowsersByAuthor(since, authorId);
+
         return Mono.zip(
                 totalViewsMono,
                 totalLikesMono,
@@ -410,7 +428,8 @@ public class AnalyticsService {
                 getTopArticlesByAuthor(since, 10, authorId),
                 getTopReferrersByAuthor(since, 10, authorId),
                 getTopSourcesByAuthor(since, 10, authorId)
-        ).map(tuple -> AnalyticsSummary.builder()
+        ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono)
+                .map(extra -> AnalyticsSummary.builder()
                 .totalViews(tuple.getT1())
                 .totalLikes(tuple.getT2())
                 .totalShares(tuple.getT3())
@@ -419,7 +438,9 @@ public class AnalyticsService {
                 .topArticles(tuple.getT6())
                 .topReferrers(tuple.getT7())
                 .topSources(tuple.getT8())
-                .build());
+                .topDevices(extra.getT1())
+                .topBrowsers(extra.getT2())
+                .build()));
     }
 
     private Mono<List<AnalyticsSummary.DailyStat>> getDailyViewsByAuthor(LocalDateTime since, Long authorId) {
@@ -544,6 +565,86 @@ public class AnalyticsService {
                 .map((row, meta) -> AnalyticsSummary.TopSource.builder()
                         .source(row.get("source", String.class))
                         .medium(row.get("medium", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.DeviceStat>> getTopDevices(LocalDateTime since) {
+        return databaseClient.sql("""
+                SELECT device_type, COUNT(*) AS cnt
+                FROM analytics_events
+                WHERE device_type IS NOT NULL AND device_type != 'UNKNOWN' AND created_at >= :since
+                GROUP BY device_type
+                ORDER BY cnt DESC
+                """)
+                .bind("since", since)
+                .map((row, meta) -> AnalyticsSummary.DeviceStat.builder()
+                        .deviceType(row.get("device_type", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.DeviceStat>> getTopDevicesByAuthor(LocalDateTime since, Long authorId) {
+        return databaseClient.sql("""
+                SELECT ae.device_type, COUNT(*) AS cnt
+                FROM analytics_events ae
+                JOIN articles a ON ae.article_id = a.id
+                WHERE ae.device_type IS NOT NULL AND ae.device_type != 'UNKNOWN'
+                  AND ae.created_at >= :since AND a.author_id = :authorId
+                GROUP BY ae.device_type
+                ORDER BY cnt DESC
+                """)
+                .bind("since", since)
+                .bind("authorId", authorId)
+                .map((row, meta) -> AnalyticsSummary.DeviceStat.builder()
+                        .deviceType(row.get("device_type", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.BrowserStat>> getTopBrowsers(LocalDateTime since) {
+        return databaseClient.sql("""
+                SELECT browser_family, COUNT(*) AS cnt
+                FROM analytics_events
+                WHERE browser_family IS NOT NULL AND browser_family != 'Unknown' AND created_at >= :since
+                GROUP BY browser_family
+                ORDER BY cnt DESC
+                LIMIT 10
+                """)
+                .bind("since", since)
+                .map((row, meta) -> AnalyticsSummary.BrowserStat.builder()
+                        .browser(row.get("browser_family", String.class))
+                        .count(row.get("cnt", Long.class))
+                        .build())
+                .all()
+                .collectList()
+                .defaultIfEmpty(new ArrayList<>());
+    }
+
+    private Mono<List<AnalyticsSummary.BrowserStat>> getTopBrowsersByAuthor(LocalDateTime since, Long authorId) {
+        return databaseClient.sql("""
+                SELECT ae.browser_family, COUNT(*) AS cnt
+                FROM analytics_events ae
+                JOIN articles a ON ae.article_id = a.id
+                WHERE ae.browser_family IS NOT NULL AND ae.browser_family != 'Unknown'
+                  AND ae.created_at >= :since AND a.author_id = :authorId
+                GROUP BY ae.browser_family
+                ORDER BY cnt DESC
+                LIMIT 10
+                """)
+                .bind("since", since)
+                .bind("authorId", authorId)
+                .map((row, meta) -> AnalyticsSummary.BrowserStat.builder()
+                        .browser(row.get("browser_family", String.class))
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()

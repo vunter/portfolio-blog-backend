@@ -43,6 +43,15 @@ public class AnalyticsEvent implements Persistable<Long>, NewRecordAware {
     @Column("user_agent")
     private String userAgent;
 
+    @Column("device_type")
+    private String deviceType;
+
+    @Column("browser_family")
+    private String browserFamily;
+
+    @Column("os_family")
+    private String osFamily;
+
     private String referrer;
 
     @Column("created_at")
