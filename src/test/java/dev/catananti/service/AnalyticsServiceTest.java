@@ -36,6 +36,7 @@ class AnalyticsServiceTest {
     @Mock private ArticleRepository articleRepository;
     @Mock private IdService idService;
     @Mock private DatabaseClient databaseClient;
+    @Mock private GeoIPService geoIPService;
     @Mock private DatabaseClient.GenericExecuteSpec executeSpec;
     @SuppressWarnings("rawtypes")
     @Mock private RowsFetchSpec rowsFetchSpec;
@@ -46,7 +47,7 @@ class AnalyticsServiceTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        analyticsService = new AnalyticsService(analyticsRepository, articleRepository, objectMapper, idService, databaseClient);
+        analyticsService = new AnalyticsService(analyticsRepository, articleRepository, objectMapper, idService, databaseClient, geoIPService);
 
         // Lenient stubs for DatabaseClient chain used by trackEvent and analytics queries
         lenient().when(databaseClient.sql(anyString())).thenReturn(executeSpec);
