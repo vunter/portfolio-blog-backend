@@ -32,7 +32,7 @@ public class AnalyticsService {
 
     // F-141: Allowed event types to prevent arbitrary data injection
     private static final java.util.Set<String> ALLOWED_EVENT_TYPES = java.util.Set.of(
-            "VIEW", "LIKE", "SHARE", "CLICK", "SCROLL_DEPTH", "DOWNLOAD"
+            "VIEW", "LIKE", "SHARE", "CLICK", "SCROLL_DEPTH", "DOWNLOAD", "TIME_ON_PAGE", "PAGE_VIEW"
     );
 
     private final AnalyticsRepository analyticsRepository;

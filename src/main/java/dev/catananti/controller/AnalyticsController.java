@@ -16,8 +16,6 @@ import reactor.core.publisher.Mono;
 @RequestMapping("/api/v1/analytics")
 @RequiredArgsConstructor
 @Validated
-// F-071: All analytics endpoints return Mono<Void> (fire-and-forget tracking).
-// Summary DTOs are in AnalyticsSummary. No raw entities are exposed.
 @Slf4j
 public class AnalyticsController {
 
@@ -28,6 +26,10 @@ public class AnalyticsController {
     public Mono<Void> trackEvent(
             @Valid @RequestBody AnalyticsEventRequest request,
             ServerHttpRequest httpRequest) {
+        if (!hasAnalyticsConsent(httpRequest)) {
+            log.debug("Analytics event rejected: no consent header");
+            return Mono.empty();
+        }
         log.debug("Tracking analytics event");
         return analyticsService.trackEvent(request, httpRequest);
     }
@@ -37,7 +39,16 @@ public class AnalyticsController {
     public Mono<Void> trackView(
             @PathVariable @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
             ServerHttpRequest httpRequest) {
+        if (!hasAnalyticsConsent(httpRequest)) {
+            log.debug("Article view rejected: no consent header");
+            return Mono.empty();
+        }
         log.debug("Tracking article view for slug={}", slug);
         return analyticsService.trackArticleView(slug, httpRequest);
+    }
+
+    private boolean hasAnalyticsConsent(ServerHttpRequest request) {
+        String consent = request.getHeaders().getFirst("X-Analytics-Consent");
+        return "granted".equals(consent);
     }
 }
