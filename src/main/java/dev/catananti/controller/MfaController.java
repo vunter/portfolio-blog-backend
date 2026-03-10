@@ -183,6 +183,22 @@ public class MfaController {
     }
 
     /**
+     * Send an email OTP to the authenticated user (for security verification).
+     */
+    @PostMapping("/send-otp")
+    public Mono<ResponseEntity<Map<String, String>>> sendAuthenticatedOtp(@AuthenticationPrincipal String email) {
+        log.info("Authenticated OTP send requested for user={}", email);
+        return resolveUserId(email)
+                .flatMap(userId -> emailOtpService.sendOtp(userId)
+                        .thenReturn(ResponseEntity.ok(Map.of("message", "OTP sent to your email"))))
+                .onErrorResume(e -> {
+                    log.error("Failed to send OTP for user={}", email, e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(Map.of("message", "Failed to send OTP")));
+                });
+    }
+
+    /**
      * Get MFA status for the authenticated user.
      */
     @GetMapping("/status")
