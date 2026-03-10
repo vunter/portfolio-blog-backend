@@ -102,18 +102,60 @@ public class AuthController {
     @PostMapping("/refresh")
     public Mono<TokenResponse> refreshToken(ServerHttpRequest httpRequest,
                                              ServerHttpResponse httpResponse) {
-        log.info("Token refresh requested");
         String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
         String userAgent = httpRequest.getHeaders().getFirst("User-Agent");
-        return Mono.justOrEmpty(httpRequest.getCookies().getFirst(REFRESH_TOKEN_COOKIE))
+
+        // BUG-04: Read ALL refresh_token cookies — browsers may send duplicates if
+        // SameSite attributes differed between OAuth (Lax) and Auth (previously Strict).
+        // Try each cookie until one succeeds, starting from the last (most recent).
+        java.util.List<HttpCookie> refreshCookies = httpRequest.getCookies()
+                .getOrDefault(REFRESH_TOKEN_COOKIE, java.util.Collections.emptyList());
+
+        log.info("Token refresh requested from ip={}, refresh_token cookies={}", clientIp, refreshCookies.size());
+
+        if (refreshCookies.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("Refresh token is required"));
+        }
+
+        // Try cookies in reverse order (last = most recently set = most likely valid)
+        java.util.List<String> tokenValues = refreshCookies.stream()
                 .map(HttpCookie::getValue)
                 .filter(StringUtils::hasText)
-                .switchIfEmpty(Mono.error(new IllegalArgumentException("Refresh token is required")))
-                .flatMap(refreshToken -> authService.refreshAccessToken(refreshToken, clientIp, userAgent)
-                        .doOnNext(response -> {
-                            addAccessTokenCookie(httpResponse, response.getAccessToken());
-                            addRefreshTokenCookie(httpResponse, response.getRefreshToken(), true);
-                        }));
+                .collect(java.util.stream.Collectors.toList());
+        java.util.Collections.reverse(tokenValues);
+
+        if (tokenValues.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("Refresh token is required"));
+        }
+
+        // Try each token; on failure, fall through to the next
+        Mono<TokenResponse> result = Mono.empty();
+        for (String token : tokenValues) {
+            final String currentToken = token;
+            result = result.switchIfEmpty(
+                authService.refreshAccessToken(currentToken, clientIp, userAgent)
+                    .doOnNext(response -> {
+                        addAccessTokenCookie(httpResponse, response.getAccessToken());
+                        addRefreshTokenCookie(httpResponse, response.getRefreshToken(), true);
+                    })
+                    .onErrorResume(e -> {
+                        if (tokenValues.size() > 1) {
+                            log.warn("Refresh failed for one of {} cookies, trying next: {}",
+                                    tokenValues.size(), e.getMessage());
+                        }
+                        return Mono.empty();
+                    })
+            );
+        }
+
+        return result.switchIfEmpty(Mono.defer(() -> {
+            // All cookies failed — re-throw with the first token to get proper error handling
+            return authService.refreshAccessToken(tokenValues.get(0), clientIp, userAgent)
+                    .doOnNext(response -> {
+                        addAccessTokenCookie(httpResponse, response.getAccessToken());
+                        addRefreshTokenCookie(httpResponse, response.getRefreshToken(), true);
+                    });
+        }));
     }
 
     @PostMapping("/logout")
@@ -157,13 +199,21 @@ public class AuthController {
 
     // ===== Cookie Helpers =====
 
+    // BUG-04: All auth cookies MUST use SameSite=Lax to match OAuth2Controller.
+    // Using Strict here while OAuth uses Lax can cause browsers to maintain duplicate
+    // cookies (one Lax from OAuth, one Strict from refresh), and getFirst() reads the
+    // stale one — causing "revoked token reuse" failures after every rotation.
+    // Lax is safe: it prevents cross-site POST/fetch from sending cookies (CSRF protection)
+    // while allowing same-site AJAX and top-level navigations.
+    private static final String COOKIE_SAME_SITE = "Lax";
+
     private void addAccessTokenCookie(ServerHttpResponse response, String token) {
         ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(ACCESS_TOKEN_COOKIE, token)
                 .httpOnly(true)
                 .secure(cookieSecure)
                 .path("/api")
                 .maxAge(Duration.ofMillis(jwtExpirationMs))
-                .sameSite("Strict");
+                .sameSite(COOKIE_SAME_SITE);
         if (cookieDomain != null && !cookieDomain.isBlank()) {
             builder.domain(cookieDomain);
         }
@@ -179,7 +229,7 @@ public class AuthController {
                 // Using Duration.ofHours(24) instead of session cookie to ensure the refresh token
                 // survives page reloads and is consistently sent across user agents
                 .maxAge(rememberMe ? Duration.ofDays(7) : Duration.ofHours(24))
-                .sameSite("Strict");
+                .sameSite(COOKIE_SAME_SITE);
         if (cookieDomain != null && !cookieDomain.isBlank()) {
             builder.domain(cookieDomain);
         }
@@ -187,24 +237,28 @@ public class AuthController {
     }
 
     private void clearAuthCookies(ServerHttpResponse response) {
-        ResponseCookie.ResponseCookieBuilder accessBuilder = ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
-                .httpOnly(true)
-                .secure(cookieSecure)
-                .path("/api")
-                .maxAge(0)
-                .sameSite("Strict");
-        ResponseCookie.ResponseCookieBuilder refreshBuilder = ResponseCookie.from(REFRESH_TOKEN_COOKIE, "")
-                .httpOnly(true)
-                .secure(cookieSecure)
-                .path("/api/v1/admin/auth")
-                .maxAge(0)
-                .sameSite("Strict");
-        if (cookieDomain != null && !cookieDomain.isBlank()) {
-            accessBuilder.domain(cookieDomain);
-            refreshBuilder.domain(cookieDomain);
+        // BUG-04: Clear cookies with BOTH Lax and Strict SameSite to ensure any stale
+        // Strict cookies from before this fix are also cleared from the browser
+        for (String sameSite : new String[]{COOKIE_SAME_SITE, "Strict"}) {
+            ResponseCookie.ResponseCookieBuilder accessBuilder = ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
+                    .httpOnly(true)
+                    .secure(cookieSecure)
+                    .path("/api")
+                    .maxAge(0)
+                    .sameSite(sameSite);
+            ResponseCookie.ResponseCookieBuilder refreshBuilder = ResponseCookie.from(REFRESH_TOKEN_COOKIE, "")
+                    .httpOnly(true)
+                    .secure(cookieSecure)
+                    .path("/api/v1/admin/auth")
+                    .maxAge(0)
+                    .sameSite(sameSite);
+            if (cookieDomain != null && !cookieDomain.isBlank()) {
+                accessBuilder.domain(cookieDomain);
+                refreshBuilder.domain(cookieDomain);
+            }
+            response.addCookie(accessBuilder.build());
+            response.addCookie(refreshBuilder.build());
         }
-        response.addCookie(accessBuilder.build());
-        response.addCookie(refreshBuilder.build());
     }
 
     private String extractRefreshTokenFromCookie(ServerHttpRequest request) {

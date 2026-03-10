@@ -81,17 +81,21 @@ public class RefreshTokenService {
     @Transactional
     public Mono<RefreshToken> verifyAndRotate(String token, String ipAddress, String userAgent) {
         String hashedToken = hashToken(token);
+        String hashPrefix = hashedToken.substring(0, Math.min(12, hashedToken.length()));
         return refreshTokenRepository.findByToken(hashedToken)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.unauthorized")))
                 .flatMap(refreshToken -> {
                     if (refreshToken.isRevoked()) {
+                        log.warn("Refresh attempt with revoked token hash={}... for user={}", hashPrefix, refreshToken.getUserId());
                         return handleRevokedTokenReuse(refreshToken, ipAddress, userAgent);
                     }
 
                     if (refreshToken.isExpired()) {
+                        log.warn("Refresh attempt with expired token hash={}... for user={}", hashPrefix, refreshToken.getUserId());
                         return Mono.error(new SecurityException("error.unauthorized"));
                     }
 
+                    log.info("Token rotation: revoking hash={}... for user={}", hashPrefix, refreshToken.getUserId());
                     refreshToken.setRevoked(true);
                     return refreshTokenRepository.save(refreshToken)
                             .then(rotateRefreshToken(refreshToken, ipAddress, userAgent));
