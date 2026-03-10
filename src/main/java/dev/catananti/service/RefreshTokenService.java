@@ -76,6 +76,8 @@ public class RefreshTokenService {
         return verifyAndRotate(token, null, null);
     }
 
+    private static final int ROTATION_GRACE_PERIOD_SECONDS = 30;
+
     @Transactional
     public Mono<RefreshToken> verifyAndRotate(String token, String ipAddress, String userAgent) {
         String hashedToken = hashToken(token);
@@ -83,12 +85,7 @@ public class RefreshTokenService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.unauthorized")))
                 .flatMap(refreshToken -> {
                     if (refreshToken.isRevoked()) {
-                        log.warn("Attempted reuse of revoked refresh token for user: {}", refreshToken.getUserId());
-                        return auditService.logAction("REFRESH_TOKEN_REUSE", "USER",
-                                        refreshToken.getUserId().toString(), refreshToken.getUserId(), null,
-                                        "Possible token theft: revoked refresh token reused")
-                                .then(refreshTokenRepository.revokeAllByUserId(refreshToken.getUserId()))
-                                .then(Mono.error(new SecurityException("error.unauthorized")));
+                        return handleRevokedTokenReuse(refreshToken, ipAddress, userAgent);
                     }
 
                     if (refreshToken.isExpired()) {
@@ -97,8 +94,72 @@ public class RefreshTokenService {
 
                     refreshToken.setRevoked(true);
                     return refreshTokenRepository.save(refreshToken)
-                            .then(createRefreshToken(refreshToken.getUserId(), ipAddress, userAgent));
+                            .then(rotateRefreshToken(refreshToken, ipAddress, userAgent));
                 });
+    }
+
+    /**
+     * Handles reuse of a revoked refresh token with a grace period.
+     * If a new token was recently issued (within grace period), this is likely
+     * a retry after a failed rotation (e.g., deploy interrupted the response).
+     * Re-rotate from the latest active token instead of treating it as theft.
+     */
+    private Mono<RefreshToken> handleRevokedTokenReuse(RefreshToken revokedToken, String ipAddress, String userAgent) {
+        return refreshTokenRepository.findActiveByUserId(revokedToken.getUserId())
+                .next()
+                .flatMap(latestActive -> {
+                    boolean withinGrace = latestActive.getCreatedAt()
+                            .plusSeconds(ROTATION_GRACE_PERIOD_SECONDS)
+                            .isAfter(LocalDateTime.now());
+
+                    if (withinGrace) {
+                        log.info("Grace period: re-rotating for user {} (failed rotation retry)", revokedToken.getUserId());
+                        latestActive.setRevoked(true);
+                        return refreshTokenRepository.save(latestActive)
+                                .then(rotateRefreshToken(latestActive, ipAddress, userAgent));
+                    }
+
+                    log.warn("Revoked token reuse outside grace period for user: {}", revokedToken.getUserId());
+                    return auditService.logAction("REFRESH_TOKEN_REUSE", "USER",
+                                    revokedToken.getUserId().toString(), revokedToken.getUserId(), null,
+                                    "Possible token theft: revoked refresh token reused outside grace period")
+                            .then(refreshTokenRepository.revokeAllByUserId(revokedToken.getUserId()))
+                            .then(Mono.error(new SecurityException("error.unauthorized")));
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.warn("Revoked token reuse with no active tokens for user: {}", revokedToken.getUserId());
+                    return Mono.error(new SecurityException("error.unauthorized"));
+                }));
+    }
+
+    /**
+     * Creates a new refresh token for rotation without revoking all existing tokens.
+     * Used during token rotation where only the specific old token is revoked.
+     */
+    private Mono<RefreshToken> rotateRefreshToken(RefreshToken oldToken, String ipAddress, String userAgent) {
+        return Mono.defer(() -> {
+            String plainToken = generateSecureToken();
+            String hashedToken = hashToken(plainToken);
+
+            RefreshToken newToken = RefreshToken.builder()
+                    .id(idService.nextId())
+                    .userId(oldToken.getUserId())
+                    .token(hashedToken)
+                    .expiresAt(LocalDateTime.now().plusSeconds(refreshTokenExpirationMs / 1000))
+                    .createdAt(LocalDateTime.now())
+                    .revoked(false)
+                    .ipAddress(ipAddress)
+                    .userAgent(userAgent != null ? userAgent.substring(0, Math.min(userAgent.length(), 500)) : null)
+                    .deviceName(parseDeviceName(userAgent))
+                    .lastUsedAt(LocalDateTime.now())
+                    .build();
+
+            return refreshTokenRepository.save(newToken)
+                    .map(saved -> {
+                        saved.setToken(plainToken);
+                        return saved;
+                    });
+        }).doOnSuccess(rt -> log.info("Refresh token rotated for user: {}", oldToken.getUserId()));
     }
 
     @Transactional
