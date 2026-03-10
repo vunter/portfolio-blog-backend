@@ -51,10 +51,9 @@ public class EmailOtpService {
     }
 
     /**
-     * Enable email OTP for a user.
-     * Creates a verified MFA config entry (email OTP doesn't need separate setup verification).
+     * Initiate email OTP setup: create an unverified config and send a verification code.
      */
-    public Mono<Void> enableEmailOtp(Long userId) {
+    public Mono<Void> initSetup(Long userId) {
         var now = LocalDateTime.now();
         return mfaConfigRepository.deleteByUserIdAndMethod(userId, "EMAIL")
                 .then(Mono.defer(() -> {
@@ -62,28 +61,49 @@ public class EmailOtpService {
                             .id(idService.nextId())
                             .userId(userId)
                             .method("EMAIL")
-                            .secretEncrypted(null) // email OTP uses no persistent secret
-                            .verified(true) // immediately verified — the email is already confirmed
+                            .secretEncrypted(null)
+                            .verified(false)
                             .createdAt(now)
                             .updatedAt(now)
                             .build();
                     return mfaConfigRepository.save(config);
                 }))
-                .then(userRepository.findById(userId))
-                .flatMap(user -> {
-                    // Enable MFA on user if not already
-                    if (!Boolean.TRUE.equals(user.getMfaEnabled())) {
-                        user.setMfaEnabled(true);
+                .then(sendOtp(userId))
+                .doOnSuccess(_ -> log.info("Email OTP setup initiated for user {}", userId));
+    }
+
+    /**
+     * Verify the email OTP setup code: mark config as verified and enable MFA on the user.
+     */
+    public Mono<Void> verifySetup(Long userId, String code) {
+        return verifyOtp(userId, code)
+                .flatMap(valid -> {
+                    if (!valid) {
+                        return Mono.error(new IllegalArgumentException("Invalid verification code"));
                     }
-                    if (user.getMfaPreferredMethod() == null) {
-                        user.setMfaPreferredMethod("EMAIL");
-                    }
-                    user.setUpdatedAt(LocalDateTime.now());
-                    user.setNewRecord(false);
-                    return userRepository.save(user);
-                })
-                .doOnSuccess(_ -> log.info("Email OTP enabled for user {}", userId))
-                .then();
+                    return mfaConfigRepository.findByUserIdAndMethod(userId, "EMAIL")
+                            .switchIfEmpty(Mono.error(new IllegalStateException("No pending email OTP setup")))
+                            .flatMap(config -> {
+                                config.setVerified(true);
+                                config.setUpdatedAt(LocalDateTime.now());
+                                config.setNewRecord(false);
+                                return mfaConfigRepository.save(config);
+                            })
+                            .then(userRepository.findById(userId))
+                            .flatMap(user -> {
+                                if (!Boolean.TRUE.equals(user.getMfaEnabled())) {
+                                    user.setMfaEnabled(true);
+                                }
+                                if (user.getMfaPreferredMethod() == null) {
+                                    user.setMfaPreferredMethod("EMAIL");
+                                }
+                                user.setUpdatedAt(LocalDateTime.now());
+                                user.setNewRecord(false);
+                                return userRepository.save(user);
+                            })
+                            .doOnSuccess(_ -> log.info("Email OTP verified and enabled for user {}", userId))
+                            .then();
+                });
     }
 
     /**

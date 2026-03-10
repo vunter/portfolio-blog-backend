@@ -39,7 +39,7 @@ public class MfaController {
     /**
      * Initiate MFA setup (TOTP or EMAIL).
      * TOTP: returns QR code data URI + secret key text.
-     * EMAIL: enables email OTP immediately.
+     * EMAIL: sends a verification code to the user's email.
      */
     @PostMapping("/setup")
     public Mono<ResponseEntity<?>> setup(@AuthenticationPrincipal String email,
@@ -51,39 +51,47 @@ public class MfaController {
                         return mfaService.setupTotp(userId, email)
                                 .map(ResponseEntity::ok);
                     } else {
-                        return emailOtpService.enableEmailOtp(userId)
-                                .then(mfaService.generateBackupCodes(userId))
-                                .map(codes -> ResponseEntity.ok(Map.<String, Object>of(
+                        return emailOtpService.initSetup(userId)
+                                .thenReturn(ResponseEntity.ok(Map.<String, Object>of(
                                         "method", "EMAIL",
-                                        "message", "Email OTP enabled successfully",
-                                        "backupCodes", codes)));
+                                        "message", "Verification code sent to your email")));
                     }
                 });
     }
 
     /**
-     * Confirm TOTP setup by providing the first valid code from the authenticator app.
+     * Confirm MFA setup by providing the verification code.
+     * TOTP: code from authenticator app. EMAIL: code from email.
      */
     @PostMapping("/verify-setup")
     public Mono<ResponseEntity<Map<String, Object>>> verifySetup(@AuthenticationPrincipal String email,
                                                                    @Valid @RequestBody MfaVerifyRequest request) {
         log.info("MFA verify-setup for user={} method={}", email, request.getMethod());
-        if (!"TOTP".equals(request.getMethod())) {
-            return Mono.just(ResponseEntity.badRequest()
-                    .body(Map.of("verified", false, "message", "Only TOTP requires setup verification")));
-        }
         return resolveUserId(email)
-                .flatMap(userId -> mfaService.verifySetup(userId, request.getCode()))
-                .map(codes -> {
-                    if (codes.isEmpty()) {
-                        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                                .body(Map.<String, Object>of("verified", false, "message", "Invalid code. Please try again."));
+                .flatMap(userId -> {
+                    if ("EMAIL".equals(request.getMethod())) {
+                        return emailOtpService.verifySetup(userId, request.getCode())
+                                .then(mfaService.generateBackupCodes(userId))
+                                .map(codes -> ResponseEntity.ok(Map.<String, Object>of(
+                                        "verified", true,
+                                        "message", "Email OTP setup complete",
+                                        "backupCodes", codes)));
                     }
-                    return ResponseEntity.ok(Map.<String, Object>of(
-                            "verified", true,
-                            "message", "TOTP setup complete",
-                            "backupCodes", codes));
-                });
+                    return mfaService.verifySetup(userId, request.getCode())
+                            .map(codes -> {
+                                if (codes.isEmpty()) {
+                                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                            .body(Map.<String, Object>of("verified", false, "message", "Invalid code. Please try again."));
+                                }
+                                return ResponseEntity.ok(Map.<String, Object>of(
+                                        "verified", true,
+                                        "message", "TOTP setup complete",
+                                        "backupCodes", codes));
+                            });
+                })
+                .onErrorResume(IllegalArgumentException.class, e ->
+                        Mono.just(ResponseEntity.badRequest()
+                                .body(Map.of("verified", false, "message", e.getMessage()))));
     }
 
     /**
