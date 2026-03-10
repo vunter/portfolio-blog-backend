@@ -124,18 +124,19 @@ public class MfaService {
 
     /**
      * Verify setup: User provides the first TOTP code to confirm their authenticator is working.
-     * If valid, mark the config as verified and enable MFA on the user.
+     * If valid, mark the config as verified, enable MFA, and generate backup codes.
+     * Returns the plain-text backup codes on success, or empty list on failure.
      */
-    public Mono<Boolean> verifySetup(Long userId, String code) {
+    public Mono<List<String>> verifySetup(Long userId, String code) {
         return mfaConfigRepository.findByUserIdAndMethod(userId, "TOTP")
                 .flatMap(config -> {
                     if (config.getVerified()) {
-                        return Mono.just(true); // already verified
+                        return Mono.just(List.<String>of());
                     }
                     String rawSecret = aesEncryptor.decrypt(config.getSecretEncrypted());
                     return verifyTotpCode(rawSecret, code)
                             .flatMap(valid -> {
-                                if (!valid) return Mono.just(false);
+                                if (!valid) return Mono.just(List.<String>of());
 
                                 config.setVerified(true);
                                 config.setUpdatedAt(LocalDateTime.now());
@@ -143,10 +144,10 @@ public class MfaService {
 
                                 return mfaConfigRepository.save(config)
                                         .then(enableMfaOnUser(userId, "TOTP"))
-                                        .thenReturn(true);
+                                        .then(generateBackupCodes(userId));
                             });
                 })
-                .defaultIfEmpty(false);
+                .defaultIfEmpty(List.of());
     }
 
     /**
@@ -232,7 +233,8 @@ public class MfaService {
 
                     return Flux.fromIterable(entities)
                             .flatMap(backupCodeRepository::save)
-                            .then(Mono.just(plainCodes));
+                            .collectList()
+                            .thenReturn(plainCodes);
                 }));
     }
 

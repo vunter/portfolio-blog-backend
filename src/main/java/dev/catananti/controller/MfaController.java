@@ -52,9 +52,11 @@ public class MfaController {
                                 .map(ResponseEntity::ok);
                     } else {
                         return emailOtpService.enableEmailOtp(userId)
-                                .thenReturn(ResponseEntity.ok(Map.of(
+                                .then(mfaService.generateBackupCodes(userId))
+                                .map(codes -> ResponseEntity.ok(Map.<String, Object>of(
                                         "method", "EMAIL",
-                                        "message", "Email OTP enabled successfully")));
+                                        "message", "Email OTP enabled successfully",
+                                        "backupCodes", codes)));
                     }
                 });
     }
@@ -72,12 +74,15 @@ public class MfaController {
         }
         return resolveUserId(email)
                 .flatMap(userId -> mfaService.verifySetup(userId, request.getCode()))
-                .map(verified -> {
-                    if (verified) {
-                        return ResponseEntity.ok(Map.of("verified", true, "message", "TOTP setup complete"));
+                .map(codes -> {
+                    if (codes.isEmpty()) {
+                        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(Map.<String, Object>of("verified", false, "message", "Invalid code. Please try again."));
                     }
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                            .body(Map.<String, Object>of("verified", false, "message", "Invalid code. Please try again."));
+                    return ResponseEntity.ok(Map.<String, Object>of(
+                            "verified", true,
+                            "message", "TOTP setup complete",
+                            "backupCodes", codes));
                 });
     }
 
