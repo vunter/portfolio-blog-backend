@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Service for TOTP-based Multi-Factor Authentication.
@@ -214,7 +215,7 @@ public class MfaService {
      */
     public Mono<List<String>> generateBackupCodes(Long userId) {
         return backupCodeRepository.deleteByUserId(userId)
-                .then(Mono.defer(() -> {
+                .then(Mono.fromCallable(() -> {
                     List<String> plainCodes = new ArrayList<>();
                     List<MfaBackupCode> entities = new ArrayList<>();
                     LocalDateTime now = LocalDateTime.now();
@@ -231,11 +232,12 @@ public class MfaService {
                                 .build());
                     }
 
-                    return Flux.fromIterable(entities)
-                            .flatMap(backupCodeRepository::save)
-                            .collectList()
-                            .thenReturn(plainCodes);
-                }));
+                    return Map.entry(plainCodes, entities);
+                }).subscribeOn(Schedulers.boundedElastic()))
+                .flatMap(pair -> Flux.fromIterable(pair.getValue())
+                        .flatMap(backupCodeRepository::save)
+                        .collectList()
+                        .thenReturn(pair.getKey()));
     }
 
     /**
