@@ -92,6 +92,10 @@ public class MfaService {
             // Build otpauth URI for QR code
             String otpauthUri = buildOtpauthUri(userEmail, rawSecret);
 
+            // Convert to Base32 for display — authenticator apps expect Base32
+            byte[] rawBytes = Base64.getDecoder().decode(rawSecret);
+            String base32Secret = base32Encode(rawBytes);
+
             return Mono.fromCallable(() -> generateQrCodeDataUri(otpauthUri, 250, 250))
                     .subscribeOn(Schedulers.boundedElastic())
                     .flatMap(qrDataUri -> {
@@ -111,7 +115,7 @@ public class MfaService {
                                 .then(mfaConfigRepository.save(config))
                                 .thenReturn(MfaSetupResponse.builder()
                                         .qrCodeDataUri(qrDataUri)
-                                        .secretKey(rawSecret)
+                                        .secretKey(base32Secret)
                                         .method("TOTP")
                                         .build());
                     });
