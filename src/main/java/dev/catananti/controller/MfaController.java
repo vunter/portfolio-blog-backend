@@ -156,6 +156,33 @@ public class MfaController {
     }
 
     /**
+     * Disable a single MFA method after OTP verification.
+     */
+    @PostMapping("/disable-method")
+    public Mono<ResponseEntity<Map<String, Object>>> disableMethod(
+            @AuthenticationPrincipal String email,
+            @RequestBody Map<String, String> body) {
+        String method = body.get("method");
+        String code = body.get("code");
+        if (method == null || method.isBlank() || code == null || code.isBlank()) {
+            return Mono.just(ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", "Method and code are required")));
+        }
+        log.info("MFA disable-method={} requested for user={}", method, email);
+        return resolveUserId(email)
+                .flatMap(userId -> mfaService.verifyAnyCode(userId, code)
+                        .flatMap(valid -> {
+                            if (!valid) {
+                                return Mono.just(ResponseEntity.badRequest()
+                                        .body(Map.<String, Object>of("success", false, "message", "Invalid verification code")));
+                            }
+                            return mfaService.disableMethod(userId, method)
+                                    .thenReturn(ResponseEntity.ok(Map.<String, Object>of("success", true,
+                                            "message", method + " method disabled")));
+                        }));
+    }
+
+    /**
      * Get MFA status for the authenticated user.
      */
     @GetMapping("/status")
