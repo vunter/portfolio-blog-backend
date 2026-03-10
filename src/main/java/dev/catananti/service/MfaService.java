@@ -49,6 +49,7 @@ public class MfaService {
     private final UserRepository userRepository;
     private final AesEncryptor aesEncryptor;
     private final IdService idService;
+    private final EmailOtpService emailOtpService;
 
     private final String issuer;
     private final int digits;
@@ -61,6 +62,7 @@ public class MfaService {
                       UserRepository userRepository,
                       AesEncryptor aesEncryptor,
                       IdService idService,
+                      EmailOtpService emailOtpService,
                       @Value("${mfa.totp.issuer:Catananti Portfolio}") String issuer,
                       @Value("${mfa.totp.digits:6}") int digits,
                       @Value("${mfa.totp.period-seconds:30}") int periodSeconds) {
@@ -69,6 +71,7 @@ public class MfaService {
         this.userRepository = userRepository;
         this.aesEncryptor = aesEncryptor;
         this.idService = idService;
+        this.emailOtpService = emailOtpService;
         this.issuer = issuer;
         this.digits = digits;
         this.periodSeconds = periodSeconds;
@@ -180,6 +183,70 @@ public class MfaService {
                 })
                 .doOnSuccess(_ -> log.info("MFA disabled for user {}", userId))
                 .then();
+    }
+
+    /**
+     * Disable a single MFA method for a user after OTP verification.
+     * If no methods remain, fully disables MFA and deletes backup codes.
+     */
+    public Mono<Void> disableMethod(Long userId, String methodToDisable) {
+        return mfaConfigRepository.deleteByUserIdAndMethod(userId, methodToDisable)
+                .then(mfaConfigRepository.findByUserId(userId)
+                        .filter(UserMfaConfig::getVerified)
+                        .collectList())
+                .flatMap(remaining -> {
+                    if (remaining.isEmpty()) {
+                        return backupCodeRepository.deleteByUserId(userId)
+                                .then(userRepository.findById(userId))
+                                .flatMap(user -> {
+                                    user.setMfaEnabled(false);
+                                    user.setMfaPreferredMethod(null);
+                                    user.setUpdatedAt(LocalDateTime.now());
+                                    user.setNewRecord(false);
+                                    return userRepository.save(user);
+                                })
+                                .then();
+                    }
+                    return userRepository.findById(userId)
+                            .flatMap(user -> {
+                                if (methodToDisable.equals(user.getMfaPreferredMethod())) {
+                                    user.setMfaPreferredMethod(remaining.getFirst().getMethod());
+                                    user.setUpdatedAt(LocalDateTime.now());
+                                    user.setNewRecord(false);
+                                    return userRepository.save(user);
+                                }
+                                return Mono.just(user);
+                            })
+                            .then();
+                })
+                .doOnSuccess(_ -> log.info("MFA method {} disabled for user {}", methodToDisable, userId));
+    }
+
+    /**
+     * Verify an OTP code against any active MFA method for the user.
+     * Returns true if the code is valid for any method (TOTP or EMAIL).
+     */
+    public Mono<Boolean> verifyAnyCode(Long userId, String code) {
+        return mfaConfigRepository.findByUserId(userId)
+                .filter(UserMfaConfig::getVerified)
+                .collectList()
+                .flatMap(configs -> {
+                    Mono<Boolean> result = Mono.just(false);
+                    for (UserMfaConfig config : configs) {
+                        if ("TOTP".equals(config.getMethod()) && config.getSecretEncrypted() != null) {
+                            String decryptedSecret = aesEncryptor.decrypt(config.getSecretEncrypted());
+                            result = result.flatMap(valid -> valid ? Mono.just(true)
+                                    : verifyTotpCode(decryptedSecret, code));
+                        }
+                    }
+                    // Also try EMAIL OTP via Redis
+                    boolean hasEmail = configs.stream().anyMatch(c -> "EMAIL".equals(c.getMethod()));
+                    if (hasEmail) {
+                        result = result.flatMap(valid -> valid ? Mono.just(true)
+                                : emailOtpService.verifyOtp(userId, code));
+                    }
+                    return result;
+                });
     }
 
     /**
