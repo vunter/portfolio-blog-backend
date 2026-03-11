@@ -304,6 +304,124 @@ jobs:
           echo "Cleanup complete (deleted ${DELETED} old JARs)"
 
   # ──────────────────────────────────────────────
+  # Build Frontend dist → publish to Nexus with timestamp
+  # ──────────────────────────────────────────────
+  publish-frontend:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+        with:
+          repository: vunter/portfolio-blog-frontend
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies & build
+        run: |
+          npm ci --prefer-offline
+          npx ng build --configuration=production
+
+      - name: Package & upload to Nexus
+        run: |
+          TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
+          SHA_SHORT="${{ needs.prepare.outputs.sha_short }}"
+          DIST_NAME="portfolio-blog-frontend-${TIMESTAMP}-${SHA_SHORT}.tar.gz"
+          NEXUS_AUTH="${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}"
+
+          tar czf "$DIST_NAME" -C dist/frontend/browser .
+          FILE_SIZE=$(stat -c%s "$DIST_NAME")
+          FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
+          DIST_FILE="$DIST_NAME"
+
+          upload_with_progress() {
+            local URL="$1" LABEL="$2"
+            curl -s -o /dev/null -w "%{http_code}" \
+              -u "$NEXUS_AUTH" \
+              --upload-file "$DIST_FILE" \
+              "$URL" > /tmp/upload_code &
+            local PID=$!
+            local START=$(date +%s)
+
+            echo "📤 ${LABEL}: 0/${FILE_SIZE_MB}MB"
+            while kill -0 $PID 2>/dev/null; do
+              sleep 15
+              local NOW=$(date +%s) ELAPSED=$(($(date +%s) - START)) SENT=0
+              for fd_path in /proc/$PID/fdinfo/*; do
+                local fd_num=$(basename "$fd_path")
+                local fd_target=$(readlink "/proc/$PID/fd/$fd_num" 2>/dev/null || true)
+                if echo "$fd_target" | grep -q "\.tar\.gz"; then
+                  SENT=$(awk '/^pos:/{print $2}' "$fd_path" 2>/dev/null || echo 0)
+                  break
+                fi
+              done
+              if [ "$SENT" -gt 0 ] && [ "$ELAPSED" -gt 0 ]; then
+                local PCT=$((SENT * 100 / FILE_SIZE))
+                local SENT_MB=$((SENT / 1024 / 1024))
+                local AVG_BPS=$((SENT / ELAPSED))
+                if [ "$AVG_BPS" -gt 0 ]; then
+                  local REM=$(( (FILE_SIZE - SENT) / AVG_BPS ))
+                  local SPEED_KB=$((AVG_BPS / 1024))
+                  echo "📤 ${LABEL}: ${PCT}% (${SENT_MB}/${FILE_SIZE_MB}MB) — ${SPEED_KB} KB/s — ETA: $((REM/60))m$((REM%60))s"
+                else
+                  echo "📤 ${LABEL}: ${PCT}% (${SENT_MB}/${FILE_SIZE_MB}MB)"
+                fi
+              else
+                echo "⏳ ${LABEL}: waiting for data... ${ELAPSED}s elapsed"
+              fi
+            done
+            wait $PID
+            local TOTAL=$(( $(date +%s) - START ))
+            local HTTP_CODE=$(cat /tmp/upload_code)
+            echo "✅ ${LABEL}: done in $((TOTAL/60))m$((TOTAL%60))s (HTTP ${HTTP_CODE})"
+            return $([ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ] && echo 0 || echo 1)
+          }
+
+          UPLOAD_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/frontend/${DIST_NAME}"
+          upload_with_progress "$UPLOAD_URL" "${DIST_NAME}" || { echo "❌ Failed to upload frontend dist"; exit 1; }
+
+          LATEST_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/frontend/portfolio-blog-frontend-latest.tar.gz"
+          upload_with_progress "$LATEST_URL" "latest.tar.gz" || true
+
+      - name: Cleanup old frontend dists (keep 5 days)
+        continue-on-error: true
+        run: |
+          NEXUS_URL="${{ env.NEXUS_URL }}"
+          NEXUS_AUTH="${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}"
+          CUTOFF=$(date -u -d '5 days ago' +%Y-%m-%dT%H:%M:%S)
+
+          echo "Cleaning up frontend dists older than ${CUTOFF}"
+          CONTINUATION=""
+          while true; do
+            if [ -n "$CONTINUATION" ]; then
+              RESPONSE=$(curl -s -u "$NEXUS_AUTH" \
+                "${NEXUS_URL}/service/rest/v1/search/assets?repository=builds&group=/portfolio-blog/frontend&continuationToken=${CONTINUATION}")
+            else
+              RESPONSE=$(curl -s -u "$NEXUS_AUTH" \
+                "${NEXUS_URL}/service/rest/v1/search/assets?repository=builds&group=/portfolio-blog/frontend")
+            fi
+
+            echo "$RESPONSE" | jq -r '.items[] | select(.path | endswith("-latest.tar.gz") | not) | "\(.id) \(.blobCreated)"' 2>/dev/null | while read -r ASSET_ID BLOB_DATE; do
+              BLOB_DATE_TRIMMED=$(echo "$BLOB_DATE" | cut -d'+' -f1 | cut -d'.' -f1)
+              if [[ "$BLOB_DATE_TRIMMED" < "$CUTOFF" ]]; then
+                echo "Deleting old dist: $ASSET_ID (created: $BLOB_DATE_TRIMMED)"
+                curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                  -u "$NEXUS_AUTH" \
+                  "${NEXUS_URL}/service/rest/v1/assets/${ASSET_ID}"
+              fi
+            done
+
+            CONTINUATION=$(echo "$RESPONSE" | jq -r '.continuationToken // empty')
+            if [ -z "$CONTINUATION" ]; then break; fi
+          done
+          echo "Frontend cleanup complete"
+
+  # ──────────────────────────────────────────────
   # Deploy to production (no source code on server)
   # ──────────────────────────────────────────────
   deploy:
