@@ -30,7 +30,7 @@ public class I18nController {
     @GetMapping("/{locale}")
     @Operation(summary = "Get translations for a locale", description = "Returns translations filtered by caller's role. Anonymous gets public keys only.")
     public Mono<ResponseEntity<Map<String, String>>> getTranslations(
-            @PathVariable String locale,
+            @PathVariable @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2,4})?$") String locale,
             Mono<Authentication> authMono) {
 
         return authMono

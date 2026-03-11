@@ -23,7 +23,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/admin/media")
 @RequiredArgsConstructor
-@PreAuthorize("isAuthenticated()")
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')")
 @Tag(name = "Admin - Media", description = "Media asset upload and management (reusable across avatars, blogs, comments)")
 @SecurityRequirement(name = "Bearer Authentication")
 @Slf4j

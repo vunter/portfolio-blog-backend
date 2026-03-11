@@ -134,7 +134,9 @@ public class EmailOtpService {
         String redisKey = REDIS_PREFIX + userId;
         return redisTemplate.opsForValue().get(redisKey)
                 .flatMap(storedOtp -> {
-                    if (storedOtp.equals(code)) {
+                    if (java.security.MessageDigest.isEqual(
+                            storedOtp.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            code.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
                         // Delete OTP after successful verification (one-time use)
                         return redisTemplate.delete(redisKey)
                                 .thenReturn(true);

@@ -35,6 +35,28 @@ public class MfaController {
 
     private static final String OTP_SENDS_PREFIX = "mfa:otp-sends:";
     private static final int MAX_OTP_SENDS = 3;
+    private static final String MFA_RATE_PREFIX = "mfa:rate:";
+    private static final int MAX_MFA_OPS_PER_WINDOW = 5;
+    private static final Duration MFA_RATE_WINDOW = Duration.ofMinutes(5);
+
+    /**
+     * Rate-limit MFA operations per user (5 per 5 minutes).
+     */
+    private Mono<Boolean> checkMfaRateLimit(String email) {
+        String key = MFA_RATE_PREFIX + email;
+        return redisTemplate.opsForValue().increment(key)
+                .flatMap(count -> {
+                    if (count == 1) {
+                        return redisTemplate.expire(key, MFA_RATE_WINDOW).thenReturn(count);
+                    }
+                    return Mono.just(count);
+                })
+                .map(count -> count <= MAX_MFA_OPS_PER_WINDOW);
+    }
+
+    private <T> Mono<ResponseEntity<T>> rateLimitExceeded() {
+        return Mono.just(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build());
+    }
 
     /**
      * Initiate MFA setup (TOTP or EMAIL).
@@ -44,19 +66,22 @@ public class MfaController {
     @PostMapping("/setup")
     public Mono<ResponseEntity<?>> setup(@AuthenticationPrincipal String email,
                                           @Valid @RequestBody MfaSetupRequest request) {
-        log.info("MFA setup requested for user={} method={}", email, request.getMethod());
-        return resolveUserId(email)
-                .flatMap(userId -> {
-                    if ("TOTP".equals(request.getMethod())) {
-                        return mfaService.setupTotp(userId, email)
-                                .map(ResponseEntity::ok);
-                    } else {
-                        return emailOtpService.initSetup(userId)
-                                .thenReturn(ResponseEntity.ok(Map.<String, Object>of(
-                                        "method", "EMAIL",
-                                        "message", "Verification code sent to your email")));
-                    }
-                });
+        return checkMfaRateLimit(email).flatMap(allowed -> {
+            if (!allowed) return rateLimitExceeded();
+            log.info("MFA setup requested for user={} method={}", email, request.getMethod());
+            return resolveUserId(email)
+                    .flatMap(userId -> {
+                        if ("TOTP".equals(request.getMethod())) {
+                            return mfaService.setupTotp(userId, email)
+                                    .map(ResponseEntity::ok);
+                        } else {
+                            return emailOtpService.initSetup(userId)
+                                    .thenReturn(ResponseEntity.ok(Map.<String, Object>of(
+                                            "method", "EMAIL",
+                                            "message", "Verification code sent to your email")));
+                        }
+                    });
+        });
     }
 
     /**
@@ -66,32 +91,35 @@ public class MfaController {
     @PostMapping("/verify-setup")
     public Mono<ResponseEntity<Map<String, Object>>> verifySetup(@AuthenticationPrincipal String email,
                                                                    @Valid @RequestBody MfaVerifyRequest request) {
-        log.info("MFA verify-setup for user={} method={}", email, request.getMethod());
-        return resolveUserId(email)
-                .flatMap(userId -> {
-                    if ("EMAIL".equals(request.getMethod())) {
-                        return emailOtpService.verifySetup(userId, request.getCode())
-                                .then(mfaService.generateBackupCodes(userId))
-                                .map(codes -> ResponseEntity.ok(Map.<String, Object>of(
-                                        "verified", true,
-                                        "message", "Email OTP setup complete",
-                                        "backupCodes", codes)));
-                    }
-                    return mfaService.verifySetup(userId, request.getCode())
-                            .map(codes -> {
-                                if (codes.isEmpty()) {
-                                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                                            .body(Map.<String, Object>of("verified", false, "message", "Invalid code. Please try again."));
-                                }
-                                return ResponseEntity.ok(Map.<String, Object>of(
-                                        "verified", true,
-                                        "message", "TOTP setup complete",
-                                        "backupCodes", codes));
-                            });
-                })
-                .onErrorResume(IllegalArgumentException.class, e ->
-                        Mono.just(ResponseEntity.badRequest()
-                                .body(Map.of("verified", false, "message", e.getMessage()))));
+        return checkMfaRateLimit(email).flatMap(allowed -> {
+            if (!allowed) return rateLimitExceeded();
+            log.info("MFA verify-setup for user={} method={}", email, request.getMethod());
+            return resolveUserId(email)
+                    .flatMap(userId -> {
+                        if ("EMAIL".equals(request.getMethod())) {
+                            return emailOtpService.verifySetup(userId, request.getCode())
+                                    .then(mfaService.generateBackupCodes(userId))
+                                    .map(codes -> ResponseEntity.ok(Map.<String, Object>of(
+                                            "verified", true,
+                                            "message", "Email OTP setup complete",
+                                            "backupCodes", codes)));
+                        }
+                        return mfaService.verifySetup(userId, request.getCode())
+                                .map(codes -> {
+                                    if (codes.isEmpty()) {
+                                        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                                .body(Map.<String, Object>of("verified", false, "message", "Invalid code. Please try again."));
+                                    }
+                                    return ResponseEntity.ok(Map.<String, Object>of(
+                                            "verified", true,
+                                            "message", "TOTP setup complete",
+                                            "backupCodes", codes));
+                                });
+                    })
+                    .onErrorResume(IllegalArgumentException.class, e ->
+                            Mono.just(ResponseEntity.badRequest()
+                                    .body(Map.of("verified", false, "message", e.getMessage()))));
+        });
     }
 
     /**
@@ -162,24 +190,27 @@ public class MfaController {
     public Mono<ResponseEntity<Map<String, Object>>> disableMethod(
             @AuthenticationPrincipal String email,
             @RequestBody Map<String, String> body) {
-        String method = body.get("method");
-        String code = body.get("code");
-        if (method == null || method.isBlank() || code == null || code.isBlank()) {
-            return Mono.just(ResponseEntity.badRequest()
-                    .body(Map.of("success", false, "message", "Method and code are required")));
-        }
-        log.info("MFA disable-method={} requested for user={}", method, email);
-        return resolveUserId(email)
-                .flatMap(userId -> mfaService.verifyAnyCode(userId, code)
-                        .flatMap(valid -> {
-                            if (!valid) {
-                                return Mono.just(ResponseEntity.badRequest()
-                                        .body(Map.<String, Object>of("success", false, "message", "Invalid verification code")));
-                            }
-                            return mfaService.disableMethod(userId, method)
-                                    .thenReturn(ResponseEntity.ok(Map.<String, Object>of("success", true,
-                                            "message", method + " method disabled")));
-                        }));
+        return checkMfaRateLimit(email).flatMap(allowed -> {
+            if (!allowed) return rateLimitExceeded();
+            String method = body.get("method");
+            String code = body.get("code");
+            if (method == null || method.isBlank() || code == null || code.isBlank()) {
+                return Mono.just(ResponseEntity.badRequest()
+                        .body(Map.of("success", false, "message", "Method and code are required")));
+            }
+            log.info("MFA disable-method={} requested for user={}", method, email);
+            return resolveUserId(email)
+                    .flatMap(userId -> mfaService.verifyAnyCode(userId, code)
+                            .flatMap(valid -> {
+                                if (!valid) {
+                                    return Mono.just(ResponseEntity.badRequest()
+                                            .body(Map.<String, Object>of("success", false, "message", "Invalid verification code")));
+                                }
+                                return mfaService.disableMethod(userId, method)
+                                        .thenReturn(ResponseEntity.ok(Map.<String, Object>of("success", true,
+                                                "message", method + " method disabled")));
+                            }));
+        });
     }
 
     /**
@@ -187,15 +218,18 @@ public class MfaController {
      */
     @PostMapping("/send-otp")
     public Mono<ResponseEntity<Map<String, String>>> sendAuthenticatedOtp(@AuthenticationPrincipal String email) {
-        log.info("Authenticated OTP send requested for user={}", email);
-        return resolveUserId(email)
-                .flatMap(userId -> emailOtpService.sendOtp(userId)
-                        .thenReturn(ResponseEntity.ok(Map.of("message", "OTP sent to your email"))))
-                .onErrorResume(e -> {
-                    log.error("Failed to send OTP for user={}", email, e);
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(Map.of("message", "Failed to send OTP")));
-                });
+        return checkMfaRateLimit(email).flatMap(allowed -> {
+            if (!allowed) return rateLimitExceeded();
+            log.info("Authenticated OTP send requested for user={}", email);
+            return resolveUserId(email)
+                    .flatMap(userId -> emailOtpService.sendOtp(userId)
+                            .thenReturn(ResponseEntity.ok(Map.of("message", "OTP sent to your email"))))
+                    .onErrorResume(e -> {
+                        log.error("Failed to send OTP for user={}", email, e);
+                        return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                .body(Map.of("message", "Failed to send OTP")));
+                    });
+        });
     }
 
     /**
@@ -212,10 +246,13 @@ public class MfaController {
      */
     @PostMapping("/backup-codes")
     public Mono<ResponseEntity<Map<String, Object>>> generateBackupCodes(@AuthenticationPrincipal String email) {
-        log.info("Backup codes generation requested for user={}", email);
-        return resolveUserId(email)
-                .flatMap(mfaService::generateBackupCodes)
-                .map(codes -> ResponseEntity.ok(Map.<String, Object>of("codes", codes)));
+        return checkMfaRateLimit(email).flatMap(allowed -> {
+            if (!allowed) return rateLimitExceeded();
+            log.info("Backup codes generation requested for user={}", email);
+            return resolveUserId(email)
+                    .flatMap(mfaService::generateBackupCodes)
+                    .map(codes -> ResponseEntity.ok(Map.<String, Object>of("codes", codes)));
+        });
     }
 
     /**
