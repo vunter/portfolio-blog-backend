@@ -44,6 +44,9 @@ class PasswordResetServiceTest {
     @Mock
     private IdService idService;
 
+    @Mock
+    private RefreshTokenService refreshTokenService;
+
     @InjectMocks
     private PasswordResetService passwordResetService;
 
@@ -215,6 +218,7 @@ class PasswordResetServiceTest {
             when(auditService.logPasswordReset(testUser.getId(), testUser.getEmail())).thenReturn(Mono.empty());
             when(emailService.sendPasswordChangedNotification("user@example.com", "Test User"))
                     .thenReturn(Mono.empty());
+            when(refreshTokenService.revokeAllUserTokens(testUser.getId())).thenReturn(Mono.empty());
 
             StepVerifier.create(passwordResetService.resetPassword("valid-token", "StrongP@ss123!"))
                     .verifyComplete();
@@ -335,6 +339,7 @@ class PasswordResetServiceTest {
             when(auditService.logPasswordReset(testUser.getId(), testUser.getEmail())).thenReturn(Mono.empty());
             when(emailService.sendPasswordChangedNotification(anyString(), anyString()))
                     .thenReturn(Mono.error(new RuntimeException("SMTP failure")));
+            when(refreshTokenService.revokeAllUserTokens(testUser.getId())).thenReturn(Mono.empty());
 
             StepVerifier.create(passwordResetService.resetPassword("valid-token", "StrongP@ss123!"))
                     .verifyComplete();
