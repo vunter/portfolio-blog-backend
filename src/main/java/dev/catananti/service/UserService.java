@@ -39,6 +39,7 @@ public class UserService {
     private final EmailService emailService;
     private final EmailChangeService emailChangeService;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final RefreshTokenService refreshTokenService;
 
     public Flux<UserResponse> getAllUsers(int page, int size) {
         int offset = page * size;
@@ -275,7 +276,14 @@ public class UserService {
                                 return usernameCheck.then(emailCheck).then(passwordUpdate)
                                         .then(Mono.defer(() -> {
                                             user.setUpdatedAt(LocalDateTime.now());
-                                            return userRepository.save(user).map(UserResponse::fromEntity);
+                                            return userRepository.save(user)
+                                                    .flatMap(saved -> {
+                                                        if (passwordChanging) {
+                                                            return refreshTokenService.revokeAllUserTokens(saved.getId())
+                                                                    .then(Mono.just(UserResponse.fromEntity(saved)));
+                                                        }
+                                                        return Mono.just(UserResponse.fromEntity(saved));
+                                                    });
                                         }));
                             });
                 }

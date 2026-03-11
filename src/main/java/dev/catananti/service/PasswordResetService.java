@@ -33,6 +33,7 @@ public class PasswordResetService {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final IdService idService;
+    private final RefreshTokenService refreshTokenService;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
 
     private static final Duration TOKEN_VALIDITY = Duration.ofHours(1);
@@ -50,6 +51,7 @@ public class PasswordResetService {
                                  PasswordEncoder passwordEncoder,
                                  AuditService auditService,
                                  IdService idService,
+                                 RefreshTokenService refreshTokenService,
                                  @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate) {
         this.tokenRepository = tokenRepository;
         this.userRepository = userRepository;
@@ -57,6 +59,7 @@ public class PasswordResetService {
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
         this.idService = idService;
+        this.refreshTokenService = refreshTokenService;
         this.redisTemplate = redisTemplate;
     }
 
@@ -178,6 +181,7 @@ public class PasswordResetService {
 
                             return userRepository.save(user)
                                     .then(tokenRepository.markAsUsed(resetToken.getId(), LocalDateTime.now()))
+                                    .then(refreshTokenService.revokeAllUserTokens(user.getId()))
                                     .then(auditService.logPasswordReset(user.getId(), user.getEmail()))
                                     .doOnSuccess(v -> log.debug("Password reset completed for: {}", user.getEmail()))
                                     // Email notification sent outside core transaction — failure doesn't roll back password change

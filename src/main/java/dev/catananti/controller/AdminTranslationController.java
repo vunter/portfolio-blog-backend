@@ -61,7 +61,8 @@ public class AdminTranslationController {
         return translationRepository.updateValue(id, value)
             .doOnSuccess(rows -> {
                 if (rows > 0) {
-                    i18nController.invalidateCache().subscribe();
+                    i18nController.invalidateCache()
+                            .subscribe(null, e -> log.warn("Cache invalidation failed after update: {}", e.getMessage()));
                     log.info("Translation {} updated", id);
                 }
             })
@@ -85,7 +86,8 @@ public class AdminTranslationController {
 
         return translationRepository.insert(key, locale, value, namespace, visibility)
             .doOnSuccess(id -> {
-                i18nController.invalidateCache().subscribe();
+                i18nController.invalidateCache()
+                        .subscribe(null, e -> log.warn("Cache invalidation failed after create: {}", e.getMessage()));
                 log.info("Translation created: {} (locale={}, id={})", key, locale, id);
             })
             .map(id -> ResponseEntity.ok(Map.of("id", (Object) id, "status", (Object) "created")));
@@ -97,7 +99,8 @@ public class AdminTranslationController {
         return translationRepository.deleteById(id)
             .doOnSuccess(rows -> {
                 if (rows > 0) {
-                    i18nController.invalidateCache().subscribe();
+                    i18nController.invalidateCache()
+                            .subscribe(null, e -> log.warn("Cache invalidation failed after delete: {}", e.getMessage()));
                     log.info("Translation {} deleted", id);
                 }
             })

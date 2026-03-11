@@ -15,6 +15,7 @@ import dev.catananti.repository.UserRepository;
 import dev.catananti.security.AesEncryptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -50,12 +51,17 @@ public class MfaService {
     private final AesEncryptor aesEncryptor;
     private final IdService idService;
     private final EmailOtpService emailOtpService;
+    private final ReactiveStringRedisTemplate redisTemplate;
 
     private final String issuer;
     private final int digits;
     private final int periodSeconds;
     private static final int BACKUP_CODE_COUNT = 10;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final String TOTP_USED_PREFIX = "mfa:totp-used:";
+    private static final String TOTP_ATTEMPTS_PREFIX = "mfa:totp-attempts:";
+    private static final int MAX_TOTP_ATTEMPTS = 5;
+    private static final Duration TOTP_ATTEMPTS_WINDOW = Duration.ofMinutes(5);
 
     public MfaService(UserMfaConfigRepository mfaConfigRepository,
                       MfaBackupCodeRepository backupCodeRepository,
@@ -63,6 +69,7 @@ public class MfaService {
                       AesEncryptor aesEncryptor,
                       IdService idService,
                       EmailOtpService emailOtpService,
+                      ReactiveStringRedisTemplate redisTemplate,
                       @Value("${mfa.totp.issuer:Catananti Portfolio}") String issuer,
                       @Value("${mfa.totp.digits:6}") int digits,
                       @Value("${mfa.totp.period-seconds:30}") int periodSeconds) {
@@ -72,6 +79,7 @@ public class MfaService {
         this.aesEncryptor = aesEncryptor;
         this.idService = idService;
         this.emailOtpService = emailOtpService;
+        this.redisTemplate = redisTemplate;
         this.issuer = issuer;
         this.digits = digits;
         this.periodSeconds = periodSeconds;
@@ -156,15 +164,54 @@ public class MfaService {
 
     /**
      * Verify a TOTP code during login (MFA challenge).
+     * Includes brute force protection (5 attempts per 5 min) and code reuse prevention.
      */
     public Mono<Boolean> verifyTotp(Long userId, String code) {
-        return mfaConfigRepository.findByUserIdAndMethod(userId, "TOTP")
-                .filter(UserMfaConfig::getVerified)
-                .flatMap(config -> {
-                    String rawSecret = aesEncryptor.decrypt(config.getSecretEncrypted());
-                    return verifyTotpCode(rawSecret, code);
+        String attemptsKey = TOTP_ATTEMPTS_PREFIX + userId;
+        return redisTemplate.opsForValue().increment(attemptsKey)
+                .flatMap(attempts -> {
+                    if (attempts == 1) {
+                        return redisTemplate.expire(attemptsKey, TOTP_ATTEMPTS_WINDOW).thenReturn(attempts);
+                    }
+                    return Mono.just(attempts);
                 })
-                .defaultIfEmpty(false);
+                .flatMap(attempts -> {
+                    if (attempts > MAX_TOTP_ATTEMPTS) {
+                        log.warn("TOTP brute force limit reached for userId={}", userId);
+                        return Mono.just(false);
+                    }
+                    return mfaConfigRepository.findByUserIdAndMethod(userId, "TOTP")
+                            .filter(UserMfaConfig::getVerified)
+                            .flatMap(config -> {
+                                String rawSecret = aesEncryptor.decrypt(config.getSecretEncrypted());
+                                return verifyTotpCode(rawSecret, code)
+                                        .flatMap(valid -> {
+                                            if (!valid) return Mono.just(false);
+                                            // Prevent code reuse within the same window
+                                            String usedKey = TOTP_USED_PREFIX + userId + ":" + code;
+                                            return redisTemplate.opsForValue().setIfAbsent(usedKey, "1", Duration.ofSeconds(periodSeconds * 2L))
+                                                    .flatMap(wasAbsent -> {
+                                                        if (Boolean.FALSE.equals(wasAbsent)) {
+                                                            log.warn("TOTP code reuse detected for userId={}", userId);
+                                                            return Mono.just(false);
+                                                        }
+                                                        // Clear attempt counter on success
+                                                        return redisTemplate.delete(attemptsKey).thenReturn(true);
+                                                    });
+                                        });
+                            })
+                            .defaultIfEmpty(false);
+                })
+                .onErrorResume(e -> {
+                    log.warn("Redis unavailable for TOTP rate limiting, falling back to verify-only: {}", e.getMessage());
+                    return mfaConfigRepository.findByUserIdAndMethod(userId, "TOTP")
+                            .filter(UserMfaConfig::getVerified)
+                            .flatMap(config -> {
+                                String rawSecret = aesEncryptor.decrypt(config.getSecretEncrypted());
+                                return verifyTotpCode(rawSecret, code);
+                            })
+                            .defaultIfEmpty(false);
+                });
     }
 
     /**
@@ -382,7 +429,7 @@ public class MfaService {
                 for (int drift = -1; drift <= 1; drift++) {
                     Instant adjusted = now.plusSeconds((long) drift * periodSeconds);
                     String expected = String.format("%0" + digits + "d", generator.generateOneTimePassword(key, adjusted));
-                    if (expected.equals(code)) return true;
+                    if (MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), code.getBytes(StandardCharsets.UTF_8))) return true;
                 }
                 return false;
             } catch (Exception e) {

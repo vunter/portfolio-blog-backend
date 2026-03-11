@@ -81,6 +81,9 @@ public class AuthService {
         this.loginAttemptService = Optional.ofNullable(loginAttemptService);
         this.mfaService = Optional.ofNullable(mfaService);
         this.emailOtpService = Optional.ofNullable(emailOtpService);
+        if (loginAttemptService == null) {
+            log.warn("SEC: LoginAttemptService not available — brute force protection is DISABLED");
+        }
     }
 
     // Helper methods for optional LoginAttemptService
