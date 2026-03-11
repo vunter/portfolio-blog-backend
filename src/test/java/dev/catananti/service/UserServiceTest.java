@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
@@ -54,6 +55,9 @@ class UserServiceTest {
 
     @Mock
     private EmailChangeService emailChangeService;
+
+    @Mock
+    private RefreshTokenService refreshTokenService;
 
     @InjectMocks
     private UserService userService;
@@ -402,6 +406,7 @@ class UserServiceTest {
         when(passwordEncoder.matches("correctpass", "hashedPassword")).thenReturn(true);
         when(passwordEncoder.encode("newPassword123!")).thenReturn("newHashedPassword");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(refreshTokenService.revokeAllUserTokens(anyLong())).thenReturn(Mono.empty());
 
         ProfileUpdateRequest request = new ProfileUpdateRequest(null, null, null, null, null, "correctpass", "newPassword123!", null, null);
 

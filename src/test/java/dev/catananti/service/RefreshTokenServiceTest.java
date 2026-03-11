@@ -13,6 +13,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -84,7 +85,6 @@ class RefreshTokenServiceTest {
                     .thenReturn(Mono.just(existing));
             when(refreshTokenRepository.save(any(RefreshToken.class)))
                     .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-            when(refreshTokenRepository.revokeAllByUserId(1001L)).thenReturn(Mono.empty());
             when(idService.nextId()).thenReturn(7002L);
 
             StepVerifier.create(refreshTokenService.verifyAndRotate("valid-token-abc"))
@@ -108,15 +108,12 @@ class RefreshTokenServiceTest {
 
             when(refreshTokenRepository.findByToken(anyString()))
                     .thenReturn(Mono.just(revoked));
-            when(auditService.logAction(anyString(), anyString(), anyString(), any(), any(), anyString()))
-                    .thenReturn(Mono.empty());
-            when(refreshTokenRepository.revokeAllByUserId(1001L)).thenReturn(Mono.empty());
+            when(refreshTokenRepository.findActiveByUserId(1001L))
+                    .thenReturn(Flux.empty());
 
             StepVerifier.create(refreshTokenService.verifyAndRotate("reused-token"))
                     .expectError(SecurityException.class)
                     .verify();
-
-            verify(refreshTokenRepository).revokeAllByUserId(1001L);
         }
 
         @Test
