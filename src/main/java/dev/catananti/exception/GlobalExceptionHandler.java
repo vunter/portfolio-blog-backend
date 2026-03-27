@@ -225,7 +225,7 @@ public class GlobalExceptionHandler {
         log.warn("status=403 path={} Access denied: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.FORBIDDEN,
-                msg(locale, "error.forbidden"), "Access denied", exchange));
+                msg(locale, "error.forbidden"), msg(locale, "error.forbidden"), exchange));
     }
 
     @ExceptionHandler(ServerWebInputException.class)
@@ -246,7 +246,7 @@ public class GlobalExceptionHandler {
         log.warn("status=409 path={} Database constraint violation: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.CONFLICT,
-                msg(locale, "error.duplicate_resource"), ex.getMessage(), exchange));
+                msg(locale, "error.duplicate_resource"), msg(locale, "error.resource_already_exists"), exchange));
     }
 
     @ExceptionHandler(RuntimeException.class)
@@ -334,7 +334,7 @@ public class GlobalExceptionHandler {
         return switch (status) {
             case NOT_FOUND -> "error.not_found";
             case UNAUTHORIZED -> "error.unauthorized";
-            case FORBIDDEN -> "error.unauthorized";
+            case FORBIDDEN -> "error.forbidden";
             case CONFLICT -> "error.conflict";
             case BAD_REQUEST -> "error.bad_request";
             case TOO_MANY_REQUESTS -> "error.rate_limit_exceeded";

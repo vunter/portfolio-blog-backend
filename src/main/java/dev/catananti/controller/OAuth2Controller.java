@@ -56,7 +56,7 @@ public class OAuth2Controller {
             case "google" -> oAuth2Service.getGoogleAuthUrl(state);
             case "github" -> oAuth2Service.getGithubAuthUrl(state);
             case "linkedin" -> oAuth2Service.getLinkedinAuthUrl(state);
-            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider: " + provider);
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.unsupported_provider");
         };
         return oAuth2Service.storeState(state)
                 .thenReturn(ResponseEntity.status(HttpStatus.FOUND)
@@ -64,12 +64,21 @@ public class OAuth2Controller {
                         .<Void>build());
     }
 
+    private static final java.util.regex.Pattern UUID_PATTERN =
+            java.util.regex.Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+
     @GetMapping("/callback/{provider}")
     public Mono<ResponseEntity<Void>> callback(@PathVariable String provider,
                                                 @RequestParam String code,
                                                 @RequestParam String state,
                                                 ServerHttpRequest httpRequest,
                                                 ServerHttpResponse httpResponse) {
+        if (state == null || !UUID_PATTERN.matcher(state).matches()) {
+            log.warn("OAuth2 callback with invalid state format: {}", state);
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Invalid OAuth2 state parameter"));
+        }
         return oAuth2Service.validateAndConsumeState(state)
                 .flatMap(valid -> {
                     if (!valid) {
@@ -83,7 +92,7 @@ public class OAuth2Controller {
                         case "google" -> oAuth2Service.handleGoogleCallback(code, clientIp);
                         case "github" -> oAuth2Service.handleGithubCallback(code, clientIp);
                         case "linkedin" -> oAuth2Service.handleLinkedinCallback(code, clientIp);
-                        default -> Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider"));
+                        default -> Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.unsupported_provider"));
                     };
 
                     return callbackMono.map(tokenResponse -> {

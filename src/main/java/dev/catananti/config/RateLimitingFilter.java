@@ -1,6 +1,5 @@
 package dev.catananti.config;
 
-import dev.catananti.security.JwtTokenProvider;
 import dev.catananti.util.IpAddressExtractor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,8 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RateLimitingFilter implements WebFilter {
 
     private final ReactiveRedisTemplate<String, String> redisTemplate;
-    private final JwtTokenProvider tokenProvider;
-    
+
     // Configurable rate limits
     private final int maxRequestsAuthenticated;
     private final int maxRequestsAnonymous;
@@ -42,14 +40,12 @@ public class RateLimitingFilter implements WebFilter {
     private final ConcurrentHashMap<String, RateLimitEntry> inMemoryRateLimits = new ConcurrentHashMap<>();
 
     public RateLimitingFilter(
-            @Qualifier("reactiveRedisTemplate") ReactiveRedisTemplate<String, String> redisTemplate, 
-            JwtTokenProvider tokenProvider,
+            @Qualifier("reactiveRedisTemplate") ReactiveRedisTemplate<String, String> redisTemplate,
             @Value("${rate-limit.authenticated:100}") int maxRequestsAuthenticated,
             @Value("${rate-limit.anonymous:30}") int maxRequestsAnonymous,
             @Value("${rate-limit.login:10}") int maxRequestsLogin,
             @Value("${rate-limit.window-seconds:60}") int windowSeconds) {
         this.redisTemplate = redisTemplate;
-        this.tokenProvider = tokenProvider;
         this.maxRequestsAuthenticated = maxRequestsAuthenticated;
         this.maxRequestsAnonymous = maxRequestsAnonymous;
         this.maxRequestsLogin = maxRequestsLogin;
@@ -69,7 +65,6 @@ public class RateLimitingFilter implements WebFilter {
         String clientIp = IpAddressExtractor.extractClientIp(exchange);
         String rateLimitKey = buildRateLimitKey(clientIp, path);
 
-        // BUG-CRÍTICO-01: Determine rate limit reactively (removed .block() call)
         // F-025: Sliding window log — uses Redis sorted sets for accurate per-window counting
         return determineRateLimit(exchange, path)
                 .flatMap(maxRequests -> {
@@ -155,7 +150,6 @@ public class RateLimitingFilter implements WebFilter {
     }
 
     /**
-     * BUG-CRÍTICO-01: Refactored to return Mono<Integer> instead of blocking.
      * Determines rate limit reactively based on endpoint and authentication status.
      */
     private Mono<Integer> determineRateLimit(ServerWebExchange exchange, String path) {
@@ -167,6 +161,11 @@ public class RateLimitingFilter implements WebFilter {
         // F-082: Contact form gets the same strict limit as auth endpoints to prevent spam
         if (path.equals("/api/v1/contact")) {
             return Mono.just(maxRequestsLogin);
+        }
+
+        // SEC-AH: Analytics endpoints get a dedicated, tighter limit
+        if (path.startsWith("/api/v1/analytics/")) {
+            return Mono.just(maxRequestsAnonymous / 2); // 15 req/60s for analytics
         }
 
         // Check SecurityContext reactively to avoid blocking on Netty event loop
@@ -183,6 +182,10 @@ public class RateLimitingFilter implements WebFilter {
         // F-082: Separate bucket for contact form
         if (path.equals("/api/v1/contact")) {
             return "rate_limit:contact:" + clientIp;
+        }
+        // SEC-AH: Dedicated bucket for analytics event submission
+        if (path.startsWith("/api/v1/analytics/")) {
+            return "rate_limit:analytics:" + clientIp;
         }
         return "rate_limit:" + clientIp;
     }

@@ -19,6 +19,8 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -29,11 +31,15 @@ import java.util.Map;
 @Slf4j
 public class OAuth2Service {
 
+    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
+    private static final Duration OAUTH_TIMEOUT = Duration.ofSeconds(15);
+
     private final UserRepository userRepository;
     private final UserSocialAccountRepository socialAccountRepository;
     private final RefreshTokenService refreshTokenService;
     private final JwtTokenProvider tokenProvider;
     private final IdService idService;
+    private final AuditService auditService;
     private final WebClient webClient;
     private final ReactiveStringRedisTemplate redisTemplate;
 
@@ -65,12 +71,14 @@ public class OAuth2Service {
                          RefreshTokenService refreshTokenService,
                          JwtTokenProvider tokenProvider,
                          IdService idService,
+                         AuditService auditService,
                          ReactiveStringRedisTemplate redisTemplate) {
         this.userRepository = userRepository;
         this.socialAccountRepository = socialAccountRepository;
         this.refreshTokenService = refreshTokenService;
         this.tokenProvider = tokenProvider;
         this.idService = idService;
+        this.auditService = auditService;
         this.redisTemplate = redisTemplate;
         this.webClient = WebClient.builder().build();
     }
@@ -88,30 +96,36 @@ public class OAuth2Service {
     }
 
     public String getGoogleAuthUrl(String state) {
+        String encodedState = URLEncoder.encode(state, StandardCharsets.UTF_8);
+        String encodedRedirect = URLEncoder.encode(redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/google", StandardCharsets.UTF_8);
         return "https://accounts.google.com/o/oauth2/v2/auth"
                 + "?client_id=" + googleClientId
-                + "&redirect_uri=" + redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/google"
+                + "&redirect_uri=" + encodedRedirect
                 + "&response_type=code"
                 + "&scope=openid%20email%20profile"
-                + "&state=" + state
+                + "&state=" + encodedState
                 + "&access_type=offline";
     }
 
     public String getGithubAuthUrl(String state) {
+        String encodedState = URLEncoder.encode(state, StandardCharsets.UTF_8);
+        String encodedRedirect = URLEncoder.encode(redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/github", StandardCharsets.UTF_8);
         return "https://github.com/login/oauth/authorize"
                 + "?client_id=" + githubClientId
-                + "&redirect_uri=" + redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/github"
+                + "&redirect_uri=" + encodedRedirect
                 + "&scope=user:email"
-                + "&state=" + state;
+                + "&state=" + encodedState;
     }
 
     public String getLinkedinAuthUrl(String state) {
+        String encodedState = URLEncoder.encode(state, StandardCharsets.UTF_8);
+        String encodedRedirect = URLEncoder.encode(redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/linkedin", StandardCharsets.UTF_8);
         return "https://www.linkedin.com/oauth/v2/authorization"
                 + "?response_type=code"
                 + "&client_id=" + linkedinClientId
-                + "&redirect_uri=" + redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/linkedin"
+                + "&redirect_uri=" + encodedRedirect
                 + "&scope=openid%20profile%20email"
-                + "&state=" + state;
+                + "&state=" + encodedState;
     }
 
     /**
@@ -148,15 +162,16 @@ public class OAuth2Service {
                         .with("grant_type", "authorization_code"))
                 .retrieve()
                 .bodyToMono(String.class)
+                .timeout(OAUTH_TIMEOUT)
                 .doOnNext(body -> log.info("Google token response received, length={}", body.length()))
-                .map(body -> {
+                .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        var mapper = MAPPER;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         throw new RuntimeException("Failed to parse Google token response", e);
                     }
-                })
+                }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()))
                 .flatMap(tokenData -> {
                     String accessToken = (String) tokenData.get("access_token");
                     log.info("Got Google access token, fetching user info");
@@ -164,16 +179,17 @@ public class OAuth2Service {
                             .uri("https://www.googleapis.com/oauth2/v2/userinfo")
                             .header("Authorization", "Bearer " + accessToken)
                             .retrieve()
-                            .bodyToMono(String.class);
+                            .bodyToMono(String.class)
+                            .timeout(OAUTH_TIMEOUT);
                 })
-                .map(body -> {
+                .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        var mapper = MAPPER;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         throw new RuntimeException("Failed to parse Google userinfo response", e);
                     }
-                })
+                }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()))
                 .flatMap(userInfo -> {
                     log.info("Google userInfo keys: {}", userInfo.keySet());
                     String providerId = (String) userInfo.get("id");
@@ -195,7 +211,7 @@ public class OAuth2Service {
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("Google OAuth2 error: {}", e.getMessage());
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Google authentication failed"));
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.oauth_google_failed"));
                 });
     }
 
@@ -210,15 +226,16 @@ public class OAuth2Service {
                         .with("client_secret", githubClientSecret))
                 .retrieve()
                 .bodyToMono(String.class)
-                .map(body -> {
+                .timeout(OAUTH_TIMEOUT)
+                .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        var mapper = MAPPER;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse GitHub token response", e);
                         throw new RuntimeException("Failed to parse GitHub token response", e);
                     }
-                })
+                }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()))
                 .flatMap(tokenData -> {
                     String accessToken = (String) tokenData.get("access_token");
                     var userInfoMono = webClient.get()
@@ -227,31 +244,33 @@ public class OAuth2Service {
                             .header("Accept", "application/json")
                             .retrieve()
                             .bodyToMono(String.class)
-                            .map(body -> {
+                            .timeout(OAUTH_TIMEOUT)
+                            .flatMap(body -> Mono.fromCallable(() -> {
                                 try {
-                                    var mapper = new tools.jackson.databind.ObjectMapper();
+                                    var mapper = MAPPER;
                                     return (Map<String, Object>) mapper.readValue(body, Map.class);
                                 } catch (Exception e) {
                                     log.error("Failed to parse GitHub user response", e);
                                     throw new RuntimeException("Failed to parse GitHub user response", e);
                                 }
-                            });
+                            }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()));
                     var emailsMono = webClient.get()
                             .uri("https://api.github.com/user/emails")
                             .header("Authorization", "Bearer " + accessToken)
                             .header("Accept", "application/json")
                             .retrieve()
                             .bodyToMono(String.class)
-                            .map(body -> {
+                            .timeout(OAUTH_TIMEOUT)
+                            .flatMap(body -> Mono.fromCallable(() -> {
                                 try {
-                                    var mapper = new tools.jackson.databind.ObjectMapper();
+                                    var mapper = MAPPER;
                                     return (List<Map<String, Object>>) mapper.readValue(body,
                                             mapper.getTypeFactory().constructCollectionType(List.class, Map.class));
                                 } catch (Exception e) {
                                     log.error("Failed to parse GitHub emails response", e);
                                     throw new RuntimeException("Failed to parse GitHub emails response", e);
                                 }
-                            });
+                            }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()));
                     return Mono.zip(userInfoMono, emailsMono);
                 })
                 .flatMap(tuple -> {
@@ -284,7 +303,7 @@ public class OAuth2Service {
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("GitHub OAuth2 error", e);
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "GitHub authentication failed"));
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.oauth_github_failed"));
                 });
     }
 
@@ -300,16 +319,17 @@ public class OAuth2Service {
                         .with("redirect_uri", redirectBaseUrl + "/api/v1/admin/auth/oauth2/callback/linkedin"))
                 .retrieve()
                 .bodyToMono(String.class)
+                .timeout(OAUTH_TIMEOUT)
                 .doOnNext(body -> log.info("LinkedIn token response received, length={}", body.length()))
-                .map(body -> {
+                .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        var mapper = MAPPER;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse LinkedIn token response", e);
                         throw new RuntimeException("Failed to parse LinkedIn token response", e);
                     }
-                })
+                }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()))
                 .flatMap(tokenData -> {
                     String accessToken = (String) tokenData.get("access_token");
                     log.info("Got LinkedIn access token, fetching user info via OIDC userinfo");
@@ -317,17 +337,18 @@ public class OAuth2Service {
                             .uri("https://api.linkedin.com/v2/userinfo")
                             .header("Authorization", "Bearer " + accessToken)
                             .retrieve()
-                            .bodyToMono(String.class);
+                            .bodyToMono(String.class)
+                            .timeout(OAUTH_TIMEOUT);
                 })
-                .map(body -> {
+                .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        var mapper = MAPPER;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse LinkedIn userinfo response", e);
                         throw new RuntimeException("Failed to parse LinkedIn userinfo response", e);
                     }
-                })
+                }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()))
                 .flatMap(userInfo -> {
                     log.info("LinkedIn userInfo keys: {}", userInfo.keySet());
                     String providerId = (String) userInfo.get("sub");
@@ -346,7 +367,7 @@ public class OAuth2Service {
                 .onErrorResume(e -> {
                     if (e instanceof ResponseStatusException) return Mono.error(e);
                     log.error("LinkedIn OAuth2 error", e);
-                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "LinkedIn authentication failed"));
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.oauth_linkedin_failed"));
                 });
     }
 
@@ -374,7 +395,9 @@ public class OAuth2Service {
                             .avatarUrl(avatar)
                             .linkedAt(LocalDateTime.now())
                             .build();
-                    return socialAccountRepository.save(account);
+                    return socialAccountRepository.save(account)
+                            .flatMap(saved -> auditService.logOAuth2AccountLinked(userId, email, provider)
+                                    .thenReturn(saved));
                 }));
     }
 
@@ -385,8 +408,9 @@ public class OAuth2Service {
         return userRepository.findById(userId)
                 .flatMap(user -> {
                     boolean hasPassword = user.getPasswordHash() != null && !user.getPasswordHash().isBlank();
+                    Mono<Void> deleteMono;
                     if (!hasPassword) {
-                        return socialAccountRepository.countByUserId(userId)
+                        deleteMono = socialAccountRepository.countByUserId(userId)
                                 .flatMap(count -> {
                                     if (count <= 1) {
                                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -394,8 +418,11 @@ public class OAuth2Service {
                                     }
                                     return socialAccountRepository.deleteByUserIdAndProvider(userId, provider);
                                 });
+                    } else {
+                        deleteMono = socialAccountRepository.deleteByUserIdAndProvider(userId, provider);
                     }
-                    return socialAccountRepository.deleteByUserIdAndProvider(userId, provider);
+                    return deleteMono
+                            .then(auditService.logOAuth2AccountUnlinked(userId, user.getEmail(), provider));
                 });
     }
 

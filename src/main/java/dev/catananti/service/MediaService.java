@@ -111,10 +111,10 @@ public class MediaService {
 
                                             return thumbMono.defaultIfEmpty("")
                                                     .flatMap(thumbnailUrl -> {
-                                                        // Store medium/large variants (fire-and-forget for non-blocking)
-                                                        storeVariantAsync(variants.get("-medium"),
+                                                        // Store medium/large variants in parallel (non-critical)
+                                                        Mono<Void> mediumMono = storeVariantAsync(variants.get("-medium"),
                                                                 datePath + "/" + fileId + "-medium." + ext, contentType);
-                                                        storeVariantAsync(variants.get("-large"),
+                                                        Mono<Void> largeMono = storeVariantAsync(variants.get("-large"),
                                                                 datePath + "/" + fileId + "-large." + ext, contentType);
 
                                                         MediaAsset asset = MediaAsset.builder()
@@ -133,7 +133,10 @@ public class MediaService {
                                                                 .newRecord(true)
                                                                 .build();
 
-                                                        return mediaAssetRepository.save(asset);
+                                                        return mediaAssetRepository.save(asset)
+                                                                .flatMap(savedAsset ->
+                                                                        Mono.when(mediumMono, largeMono)
+                                                                                .thenReturn(savedAsset));
                                                     });
                                         });
                             });
@@ -145,7 +148,7 @@ public class MediaService {
      */
     public Mono<Void> delete(Long id) {
         return mediaAssetRepository.findById(id)
-                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Media asset not found")))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.media_not_found")))
                 .flatMap(asset -> {
                     Mono<Void> deleteOriginal = storageProvider.delete(asset.getStorageKey());
                     Mono<Void> deleteThumb = Mono.empty();
@@ -237,7 +240,7 @@ public class MediaService {
         if (filename == null || filename.isBlank() ||
                 filename.contains("..") || filename.contains("/") ||
                 filename.contains("\\") || filename.contains("\0")) {
-            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid filename"));
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.invalid_filename"));
         }
 
         String extension = getExtension(filename).toLowerCase();
@@ -314,19 +317,20 @@ public class MediaService {
     }
 
     /**
-     * Fire-and-forget upload for non-critical variants (medium, large).
+     * Upload non-critical variants (medium, large). Returns Mono for proper chaining.
      */
-    private void storeVariantAsync(ImageProcessingService.ImageVariant variant,
+    private Mono<Void> storeVariantAsync(ImageProcessingService.ImageVariant variant,
                                    String key, String contentType) {
         if (variant != null) {
-            storageProvider.store(key, variant.data(), contentType)
+            return storageProvider.store(key, variant.data(), contentType)
                     .doOnSuccess(url -> log.debug("Stored variant: {}", key))
-                    .doOnError(e -> log.error("Failed to store image variant {}: {}", key, e.getMessage(), e))
-                    .subscribe(
-                            url -> {},
-                            error -> log.error("Image variant storage error for {}: {}", key, error.getMessage(), error)
-                    );
+                    .onErrorResume(e -> {
+                        log.error("Failed to store image variant {}: {}", key, e.getMessage(), e);
+                        return Mono.empty();
+                    })
+                    .then();
         }
+        return Mono.empty();
     }
 
     /**

@@ -7,7 +7,9 @@ import dev.catananti.security.AesEncryptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.security.SecureRandom;
@@ -23,6 +25,9 @@ import java.time.LocalDateTime;
 public class EmailOtpService {
 
     private static final String REDIS_PREFIX = "mfa:email-otp:";
+    private static final String OTP_EMAIL_RATE_PREFIX = "mfa:otp:email:";
+    private final int maxOtpSendsPerEmail;
+    private final Duration otpEmailRateWindow;
     private final SecureRandom secureRandom = new SecureRandom();
 
     private final ReactiveStringRedisTemplate redisTemplate;
@@ -40,7 +45,9 @@ public class EmailOtpService {
                            UserRepository userRepository,
                            IdService idService,
                            @Value("${mfa.email-otp.length:6}") int otpLength,
-                           @Value("${mfa.email-otp.expiration-minutes:10}") int expirationMinutes) {
+                           @Value("${mfa.email-otp.expiration-minutes:10}") int expirationMinutes,
+                           @Value("${mfa.email-otp.max-sends:3}") int maxOtpSendsPerEmail,
+                           @Value("${mfa.email-otp.rate-window-minutes:15}") int otpEmailRateWindowMinutes) {
         this.redisTemplate = redisTemplate;
         this.emailService = emailService;
         this.mfaConfigRepository = mfaConfigRepository;
@@ -48,6 +55,8 @@ public class EmailOtpService {
         this.idService = idService;
         this.otpLength = otpLength;
         this.expirationMinutes = expirationMinutes;
+        this.maxOtpSendsPerEmail = maxOtpSendsPerEmail;
+        this.otpEmailRateWindow = Duration.ofMinutes(otpEmailRateWindowMinutes);
     }
 
     /**
@@ -79,7 +88,7 @@ public class EmailOtpService {
         return verifyOtp(userId, code)
                 .flatMap(valid -> {
                     if (!valid) {
-                        return Mono.error(new IllegalArgumentException("Invalid verification code"));
+                        return Mono.error(new IllegalArgumentException("error.invalid_verification_code"));
                     }
                     return mfaConfigRepository.findByUserIdAndMethod(userId, "EMAIL")
                             .switchIfEmpty(Mono.error(new IllegalStateException("No pending email OTP setup")))
@@ -109,21 +118,61 @@ public class EmailOtpService {
     /**
      * Generate and send an OTP code to the user's email.
      * Called during login when MFA is required.
+     *
+     * Per-email rate limit: max 3 OTP sends per 15 minutes.
+     * OTP reuse: if an OTP already exists for this user and hasn't expired,
+     * the same OTP is resent instead of generating a new one (prevents
+     * an attacker from invalidating a legitimate user's OTP).
      */
     public Mono<Void> sendOtp(Long userId) {
         return userRepository.findById(userId)
                 .flatMap(user -> {
-                    String otp = generateOtp();
-                    String redisKey = REDIS_PREFIX + userId;
+                    String emailRateKey = OTP_EMAIL_RATE_PREFIX + user.getEmail().toLowerCase();
 
-                    return redisTemplate.opsForValue()
-                            .set(redisKey, otp, Duration.ofMinutes(expirationMinutes))
-                            .then(emailService.sendOtpVerification(
-                                    user.getEmail(),
-                                    user.getName(),
-                                    otp,
-                                    expirationMinutes))
-                            .doOnSuccess(_ -> log.debug("Email OTP sent to user {}", userId));
+                    // Check per-email rate limit
+                    return redisTemplate.opsForValue().increment(emailRateKey)
+                            .flatMap(count -> {
+                                if (count == 1) {
+                                    return redisTemplate.expire(emailRateKey, otpEmailRateWindow).thenReturn(count);
+                                }
+                                return Mono.just(count);
+                            })
+                            .flatMap(count -> {
+                                if (count > maxOtpSendsPerEmail) {
+                                    log.warn("OTP email rate limit exceeded for user {}", userId);
+                                    return Mono.error(new ResponseStatusException(
+                                            HttpStatus.TOO_MANY_REQUESTS,
+                                            "error.otp_rate_limit"));
+                                }
+
+                                String redisKey = REDIS_PREFIX + userId;
+
+                                // Reuse existing OTP if one is still valid
+                                return redisTemplate.opsForValue().get(redisKey)
+                                        .flatMap(existingOtp -> {
+                                            log.debug("Reusing existing OTP for user {}", userId);
+                                            return emailService.sendOtpVerification(
+                                                    user.getEmail(),
+                                                    user.getName(),
+                                                    existingOtp,
+                                                    expirationMinutes)
+                                                    .doOnSuccess(_ -> log.debug("Email OTP resent to user {}", userId))
+                                                    .thenReturn(existingOtp);
+                                        })
+                                        .switchIfEmpty(Mono.defer(() -> {
+                                            // No existing OTP — generate a new one
+                                            String otp = generateOtp();
+                                            return redisTemplate.opsForValue()
+                                                    .set(redisKey, otp, Duration.ofMinutes(expirationMinutes))
+                                                    .then(emailService.sendOtpVerification(
+                                                            user.getEmail(),
+                                                            user.getName(),
+                                                            otp,
+                                                            expirationMinutes))
+                                                    .thenReturn(otp);
+                                        }))
+                                        .then();
+                            });
                 });
     }
 

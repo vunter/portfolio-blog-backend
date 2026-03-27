@@ -2,12 +2,14 @@ package dev.catananti.controller;
 
 import dev.catananti.service.AuditService;
 import dev.catananti.service.SiteSettingsService;
+import dev.catananti.util.PiiMasker;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
@@ -30,9 +32,14 @@ public class AdminSettingsController {
     private final SiteSettingsService settingsService;
     private final AuditService auditService;
 
-    private static final int MAX_SETTINGS_ENTRIES = 50;
-    private static final int MAX_KEY_LENGTH = 100;
-    private static final int MAX_VALUE_LENGTH = 5000;
+    @Value("${app.settings.max-entries:50}")
+    private int maxSettingsEntries;
+
+    @Value("${app.settings.max-key-length:100}")
+    private int maxKeyLength;
+
+    @Value("${app.settings.max-value-length:5000}")
+    private int maxValueLength;
 
     @GetMapping
     @Operation(summary = "Get application settings", description = "Retrieve current application settings")
@@ -59,8 +66,8 @@ public class AdminSettingsController {
                                                      Authentication authentication) {
         log.info("Updating site settings");
         // SEC-10: Validate input size constraints
-        if (settings.size() > MAX_SETTINGS_ENTRIES) {
-            return Mono.error(new IllegalArgumentException("Too many settings entries (max " + MAX_SETTINGS_ENTRIES + ")"));
+        if (settings.size() > maxSettingsEntries) {
+            return Mono.error(new IllegalArgumentException("error.too_many_settings"));
         }
 
         // F-136: Per-key validation
@@ -73,12 +80,12 @@ public class AdminSettingsController {
         }
 
         Map<String, Object> sanitized = settings.entrySet().stream()
-                .filter(e -> e.getKey() != null && e.getKey().length() <= MAX_KEY_LENGTH)
-                .filter(e -> e.getValue() == null || e.getValue().toString().length() <= MAX_VALUE_LENGTH)
+                .filter(e -> e.getKey() != null && e.getKey().length() <= maxKeyLength)
+                .filter(e -> e.getValue() == null || e.getValue().toString().length() <= maxValueLength)
                 .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
 
         // F-135: Audit trail for settings changes
-        String email = authentication != null ? authentication.getName() : "unknown";
+        String email = authentication != null ? PiiMasker.extractEmail(authentication) : "unknown";
         return settingsService.updateSettings(sanitized)
                 .flatMap(result -> auditService.logAction(
                         "SETTINGS_UPDATE", "SETTINGS", "site_settings",

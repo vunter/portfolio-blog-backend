@@ -4,10 +4,12 @@ import dev.catananti.entity.EmailChangeToken;
 import dev.catananti.repository.EmailChangeTokenRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.util.DigestUtils;
+import dev.catananti.util.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
@@ -32,14 +34,21 @@ public class EmailChangeService {
     private final IdService idService;
     private final AuditService auditService;
 
-    private static final Duration TOKEN_VALIDITY = Duration.ofHours(1);
     private static final Duration REVERT_TOKEN_VALIDITY = Duration.ofHours(48);
-    private static final int MAX_TOKENS_PER_HOUR = 3;
     private static final int TOKEN_LENGTH = 32;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     @Value("${app.site-url:http://localhost:4200}")
     private String siteUrl;
+
+    @Value("${app.email-change.token-validity-hours:1}")
+    private int tokenValidityHours;
+
+    @Value("${app.email-change.max-tokens-per-hour:3}")
+    private int maxTokensPerHour;
+
+    @Value("${app.email-change.max-tokens-per-target-email-per-hour:5}")
+    private int maxTokensPerTargetEmailPerHour;
 
     public EmailChangeService(EmailChangeTokenRepository tokenRepository,
                                UserRepository userRepository,
@@ -60,10 +69,22 @@ public class EmailChangeService {
     @Transactional
     public Mono<Void> initiateEmailChange(Long userId, String newEmail, String userName) {
         LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
+        String normalizedNewEmail = newEmail.toLowerCase().trim();
+
+        // Check both per-user and per-target-email rate limits
         return tokenRepository.countRecentTokensByUserId(userId, oneHourAgo)
-                .flatMap(count -> {
-                    if (count >= MAX_TOKENS_PER_HOUR) {
+                .zipWith(tokenRepository.countRecentTokensByNewEmail(normalizedNewEmail, oneHourAgo))
+                .flatMap(counts -> {
+                    long userCount = counts.getT1();
+                    long targetEmailCount = counts.getT2();
+
+                    if (userCount >= maxTokensPerHour) {
                         log.warn("Email change rate limit exceeded for userId: {}", userId);
+                        return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                "error.email_change_rate_limit"));
+                    }
+                    if (targetEmailCount >= maxTokensPerTargetEmailPerHour) {
+                        log.warn("Email change rate limit exceeded for target email: {}", PiiMasker.maskEmail(normalizedNewEmail));
                         return Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
                                 "error.email_change_rate_limit"));
                     }
@@ -76,7 +97,7 @@ public class EmailChangeService {
                             .userId(userId)
                             .newEmail(newEmail)
                             .token(hashedToken)
-                            .expiresAt(LocalDateTime.now().plus(TOKEN_VALIDITY))
+                            .expiresAt(LocalDateTime.now().plus(Duration.ofHours(tokenValidityHours)))
                             .used(false)
                             .createdAt(LocalDateTime.now())
                             .build();
@@ -84,7 +105,7 @@ public class EmailChangeService {
                     return tokenRepository.save(token)
                             .flatMap(saved -> emailService.sendEmailChangeVerification(
                                     newEmail, userName, plainToken)
-                                    .doOnSuccess(v -> log.info("Email change verification sent to: {} for userId: {}", newEmail, userId))
+                                    .doOnSuccess(v -> log.info("Email change verification sent to: {} for userId: {}", PiiMasker.maskEmail(newEmail), userId))
                                     .onErrorResume(e -> {
                                         log.warn("Email send failed for email change (userId: {}), token saved for retry: {}", userId, e.getMessage(), e);
                                         return Mono.empty();
@@ -95,7 +116,7 @@ public class EmailChangeService {
     /**
      * Verify an email change token and apply the email update.
      */
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<String> verifyEmailChange(String plainToken) {
         String hashedToken = DigestUtils.sha256Hex(plainToken);
         return tokenRepository.findByTokenAndUsedFalse(hashedToken)
@@ -158,7 +179,7 @@ public class EmailChangeService {
      * Revert an email change using a revert token sent to the old email address.
      * Only tokens with oldEmail set (revert tokens) are accepted.
      */
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<String> revertEmailChange(String plainToken) {
         String hashedToken = DigestUtils.sha256Hex(plainToken);
         return tokenRepository.findByTokenAndUsedFalse(hashedToken)

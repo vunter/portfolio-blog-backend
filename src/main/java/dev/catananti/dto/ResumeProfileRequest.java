@@ -24,6 +24,12 @@ public class ResumeProfileRequest {
 
     private String title;
     private String email;
+
+    /** Q7.10: Normalize email to lowercase to prevent case-sensitive duplicates */
+    public void setEmail(String email) {
+        this.email = email != null ? email.toLowerCase().trim() : null;
+    }
+
     private String phone;
     private String linkedin;
     private String github;

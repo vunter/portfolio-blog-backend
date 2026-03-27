@@ -10,6 +10,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -33,11 +34,11 @@ public class AdminExportController {
     private final ExportImportService exportImportService;
     private final ArticleRepository articleRepository;
 
-    /** SEC-03: Max import payload size (2 MB) */
-    private static final int MAX_IMPORT_SIZE = 2 * 1024 * 1024;
+    @Value("${app.export.max-import-size-bytes:2097152}")
+    private int maxImportSize;
 
-    /** Max articles allowed in a single export to prevent OOM */
-    private static final int MAX_EXPORT_ARTICLES = 10_000;
+    @Value("${app.export.max-export-articles:10000}")
+    private int maxExportArticles;
 
     @GetMapping
     @Operation(summary = "Export blog data", description = "Export all articles and tags as JSON")
@@ -83,7 +84,8 @@ public class AdminExportController {
             @RequestParam(defaultValue = "false") boolean overwrite) {
         log.info("Importing blog data: overwrite={}", overwrite);
         // SEC-03: Reject payloads exceeding max import size to prevent OOM
-        if (jsonData == null || jsonData.length() > MAX_IMPORT_SIZE) {
+        // Q7.8: Use byte-length (not char-length) since UTF-8 chars can be 1-4 bytes
+        if (jsonData == null || jsonData.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > maxImportSize) {
             return Mono.just(ResponseEntity.badRequest().body(Map.of(
                     "message", "Import payload too large. Maximum size is 2 MB."
             )));
@@ -110,9 +112,9 @@ public class AdminExportController {
     private Mono<Void> checkExportLimit() {
         return articleRepository.countAll()
                 .flatMap(count -> {
-                    if (count > MAX_EXPORT_ARTICLES) {
+                    if (count > maxExportArticles) {
                         return Mono.error(new IllegalStateException(
-                                "Export limit exceeded. Maximum " + MAX_EXPORT_ARTICLES + " articles allowed, found " + count));
+                                "Export limit exceeded. Maximum " + maxExportArticles + " articles allowed, found " + count));
                     }
                     return Mono.empty();
                 });

@@ -4,11 +4,13 @@ import dev.catananti.dto.AuthResponse;
 import dev.catananti.dto.LoginRequest;
 import dev.catananti.dto.RegisterRequest;
 import dev.catananti.dto.TokenResponse;
+import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.RecaptchaService;
 import dev.catananti.service.RefreshTokenService;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.util.IpAddressExtractor;
+import dev.catananti.util.PiiMasker;
 import dev.catananti.service.EmailChangeService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,8 +23,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRepository;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
@@ -39,6 +43,8 @@ public class AuthController {
     private final EmailChangeService emailChangeService;
     private final RefreshTokenService refreshTokenService;
     private final UserRepository userRepository;
+    private final ServerCsrfTokenRepository csrfTokenRepository;
+    private final BlogMetrics blogMetrics;
 
     @Value("${jwt.expiration:86400000}")
     private long jwtExpirationMs;
@@ -54,32 +60,26 @@ public class AuthController {
 
     // F-076: Rate-limited via nginx login zone (5r/m)
     // F-077: Password complexity enforced via @Pattern annotation on RegisterRequest DTO
+    // Q7.14: Unified login endpoint (merged v1 and v2 - returns TokenResponse with refresh token)
     @PostMapping("/login")
-    public Mono<AuthResponse> login(@Valid @RequestBody LoginRequest request,
-                                     ServerHttpRequest httpRequest,
-                                     ServerHttpResponse httpResponse) {
-        log.info("Login attempt for user='{}' from ip={}", request.getEmail(), IpAddressExtractor.extractClientIp(httpRequest));
-        String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
-        return recaptchaService.verify(request.getRecaptchaToken(), "login")
-                .then(authService.login(request, clientIp))
-                .doOnNext(response -> {
-                    addAccessTokenCookie(httpResponse, response.getToken());
-                });
-    }
-
-    @PostMapping("/login/v2")
-    public Mono<TokenResponse> loginV2(@Valid @RequestBody LoginRequest request,
+    public Mono<TokenResponse> login(@Valid @RequestBody LoginRequest request,
                                         ServerHttpRequest httpRequest,
-                                        ServerHttpResponse httpResponse) {
-        log.info("Login V2 attempt for user='{}' from ip={}", request.getEmail(), IpAddressExtractor.extractClientIp(httpRequest));
+                                        ServerHttpResponse httpResponse,
+                                        ServerWebExchange exchange) {
+        log.info("Login attempt for user='{}' from ip={}", PiiMasker.maskEmail(request.getEmail()), IpAddressExtractor.extractClientIp(httpRequest));
         String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
         String userAgent = httpRequest.getHeaders().getFirst("User-Agent");
         return recaptchaService.verify(request.getRecaptchaToken(), "login")
                 .then(authService.loginWithRefreshToken(request, clientIp, userAgent))
-                .doOnNext(response -> {
+                .flatMap(response -> {
                     addAccessTokenCookie(httpResponse, response.getAccessToken());
                     addRefreshTokenCookie(httpResponse, response.getRefreshToken(), Boolean.TRUE.equals(request.getRememberMe()));
-                });
+                    // Q12.3: Track login success
+                    blogMetrics.incrementLoginSuccess();
+                    // Q4.2: Rotate CSRF token after auth state change to prevent token fixation
+                    return rotateCsrfToken(exchange).thenReturn(response);
+                })
+                .doOnError(e -> blogMetrics.incrementLoginFailure());
     }
 
     // F-076: Rate-limited via nginx login zone (5r/m)
@@ -87,15 +87,18 @@ public class AuthController {
     public Mono<ResponseEntity<TokenResponse>> register(
             @Valid @RequestBody RegisterRequest request,
             ServerHttpRequest httpRequest,
-            ServerHttpResponse httpResponse) {
-        log.info("Registration attempt for user='{}' from ip={}", request.email(), IpAddressExtractor.extractClientIp(httpRequest));
+            ServerHttpResponse httpResponse,
+            ServerWebExchange exchange) {
+        log.info("Registration attempt for user='{}' from ip={}", PiiMasker.maskEmail(request.email()), IpAddressExtractor.extractClientIp(httpRequest));
         String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
         return recaptchaService.verify(request.recaptchaToken(), "register")
                 .then(authService.register(request, clientIp))
-                .map(tokenResponse -> {
+                .flatMap(tokenResponse -> {
                     addAccessTokenCookie(httpResponse, tokenResponse.getAccessToken());
                     addRefreshTokenCookie(httpResponse, tokenResponse.getRefreshToken(), false);
-                    return ResponseEntity.status(HttpStatus.CREATED).body(tokenResponse);
+                    // Q4.2: Rotate CSRF token after auth state change
+                    return rotateCsrfToken(exchange)
+                            .thenReturn(ResponseEntity.status(HttpStatus.CREATED).body(tokenResponse));
                 });
     }
 
@@ -114,7 +117,7 @@ public class AuthController {
         log.info("Token refresh requested from ip={}, refresh_token cookies={}", clientIp, refreshCookies.size());
 
         if (refreshCookies.isEmpty()) {
-            return Mono.error(new IllegalArgumentException("Refresh token is required"));
+            return Mono.error(new IllegalArgumentException("error.refresh_token_required"));
         }
 
         // Try cookies in reverse order (last = most recently set = most likely valid)
@@ -125,7 +128,7 @@ public class AuthController {
         java.util.Collections.reverse(tokenValues);
 
         if (tokenValues.isEmpty()) {
-            return Mono.error(new IllegalArgumentException("Refresh token is required"));
+            return Mono.error(new IllegalArgumentException("error.refresh_token_required"));
         }
 
         // Try each token; on failure, fall through to the next
@@ -161,23 +164,29 @@ public class AuthController {
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public Mono<Void> logout(ServerHttpRequest httpRequest,
-                              ServerHttpResponse httpResponse) {
+                              ServerHttpResponse httpResponse,
+                              ServerWebExchange exchange) {
         log.info("Logout requested");
         // Extract tokens from cookies
         String refreshToken = extractRefreshTokenFromCookie(httpRequest);
         String accessToken = extractAccessTokenFromCookie(httpRequest);
 
-        // Clear cookies immediately
-        clearAuthCookies(httpResponse);
-
+        // First blacklist tokens, THEN clear cookies, THEN rotate CSRF token
+        Mono<Void> logoutMono = Mono.empty();
         if (refreshToken != null) {
-            return authService.logout(refreshToken, accessToken);
+            logoutMono = authService.logout(refreshToken, accessToken);
+        } else if (accessToken != null) {
+            logoutMono = authService.logout(null, accessToken);
         }
-        // Even without refresh token, blacklist the access token
-        if (accessToken != null) {
-            return authService.logout(null, accessToken);
-        }
-        return Mono.empty();
+        return logoutMono
+                .then(Mono.fromRunnable(() -> clearAuthCookies(httpResponse)))
+                // Q4.2: Rotate CSRF token after auth state change
+                .then(rotateCsrfToken(exchange))
+                .onErrorResume(e -> {
+                    log.warn("Logout blacklisting failed, clearing cookies anyway: {}", e.getMessage());
+                    clearAuthCookies(httpResponse);
+                    return rotateCsrfToken(exchange);
+                });
     }
 
     // F-075: Explicitly require authentication (also enforced by SecurityConfig /api/v1/admin/auth/** rule)
@@ -195,6 +204,18 @@ public class AuthController {
             "roles", userDetails.getAuthorities().stream()
                 .map(a -> a.getAuthority()).toList()
         ));
+    }
+
+    // ===== CSRF Token Rotation =====
+
+    /**
+     * Q4.2: Rotate the CSRF token after auth state changes (login/register/logout)
+     * to prevent CSRF token fixation attacks where an attacker pre-sets a known token
+     * before the user authenticates.
+     */
+    private Mono<Void> rotateCsrfToken(ServerWebExchange exchange) {
+        return csrfTokenRepository.generateToken(exchange)
+                .flatMap(token -> csrfTokenRepository.saveToken(exchange, token));
     }
 
     // ===== Cookie Helpers =====
