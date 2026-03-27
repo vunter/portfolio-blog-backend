@@ -3,6 +3,22 @@
 -- Q13.6: Merge supported_languages into languages and drop the duplicate table.
 
 -- ============================================
+-- Step 0: Add locale column to email_custom_variables if missing
+-- (schema.sql defines it but older databases may not have it)
+-- ============================================
+ALTER TABLE email_custom_variables ADD COLUMN IF NOT EXISTS locale VARCHAR(10) NOT NULL DEFAULT '*';
+
+-- Update unique constraint to include locale
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'email_custom_variables_var_key_template_id_key') THEN
+        ALTER TABLE email_custom_variables DROP CONSTRAINT email_custom_variables_var_key_template_id_key;
+    END IF;
+    ALTER TABLE email_custom_variables ADD CONSTRAINT email_custom_variables_var_key_template_id_locale_key
+        UNIQUE (var_key, template_id, locale);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- ============================================
 -- Step 1: Standardize locale values across the codebase
 -- ============================================
 
