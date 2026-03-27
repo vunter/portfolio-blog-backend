@@ -78,13 +78,6 @@ public class PdfGenerationService {
                 BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
                         .setHeadless(true);
 
-                // Use system Chromium if PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH is set
-                String chromiumPath = System.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH");
-                if (chromiumPath != null && !chromiumPath.isBlank()) {
-                    log.info("Using system Chromium at: {}", chromiumPath);
-                    launchOptions.setExecutablePath(java.nio.file.Paths.get(chromiumPath));
-                }
-
                 // Container-safe flags
                 launchOptions.setArgs(java.util.List.of(
                         "--no-sandbox",
