@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS comments (
     status VARCHAR(50) DEFAULT 'PENDING',
     parent_id BIGINT REFERENCES comments(id) ON DELETE CASCADE,
     moderation_note VARCHAR(500),
+    likes_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -212,22 +213,6 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_password_reset_user_id ON password_reset_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at) WHERE NOT used;
-
--- Email Change Tokens table (for verified email changes)
-CREATE TABLE IF NOT EXISTS email_change_tokens (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    new_email VARCHAR(255) NOT NULL,
-    old_email VARCHAR(255),
-    token VARCHAR(255) NOT NULL,
-    expires_at TIMESTAMP NOT NULL,
-    used BOOLEAN DEFAULT FALSE,
-    used_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_email_change_token ON email_change_tokens(token);
-CREATE INDEX IF NOT EXISTS idx_email_change_user_id ON email_change_tokens(user_id);
 
 -- Resume Templates table (for HTML resume templates and PDF generation)
 CREATE TABLE IF NOT EXISTS resume_templates (
@@ -630,8 +615,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100) UNIQUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
 
--- Migration: Add updated_at to comments
+-- Migration: Add updated_at and likes_count to comments
 ALTER TABLE comments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS likes_count INTEGER DEFAULT 0;
 
 -- DB-01: Restore functional uniqueness for JSONB tag names (per-locale)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_en_unique ON tags ((name->>'en'));
@@ -722,33 +708,6 @@ CREATE TABLE IF NOT EXISTS user_mfa_config (
 CREATE INDEX IF NOT EXISTS idx_user_mfa_config_user ON user_mfa_config(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_mfa_config_method ON user_mfa_config(user_id, method);
 
-CREATE TABLE IF NOT EXISTS mfa_backup_codes (
-    id              BIGINT PRIMARY KEY,
-    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    code_hash       VARCHAR(128) NOT NULL,
-    used            BOOLEAN DEFAULT FALSE,
-    used_at         TIMESTAMP,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_mfa_backup_codes_user ON mfa_backup_codes(user_id);
-CREATE INDEX IF NOT EXISTS idx_mfa_backup_codes_unused ON mfa_backup_codes(user_id) WHERE NOT used;
-
-CREATE TABLE IF NOT EXISTS user_social_accounts (
-    id              BIGINT PRIMARY KEY,
-    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider        VARCHAR(20) NOT NULL,
-    provider_id     VARCHAR(255) NOT NULL,
-    provider_email  VARCHAR(255),
-    display_name    VARCHAR(255),
-    avatar_url      VARCHAR(1000),
-    linked_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(provider, provider_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_social_accounts_user ON user_social_accounts(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_social_accounts_provider ON user_social_accounts(provider, provider_id);
-
 -- ============================================
 -- F-285: pg_trgm GIN indexes for LIKE queries
 -- ============================================
@@ -758,46 +717,6 @@ CREATE INDEX IF NOT EXISTS idx_articles_excerpt_trgm ON articles USING gin (exce
 CREATE INDEX IF NOT EXISTS idx_subscribers_email_trgm ON subscribers USING gin (email gin_trgm_ops);
 -- For resume_templates, LIKE search uses jsonb_each_text(name); index the default locale for partial coverage
 CREATE INDEX IF NOT EXISTS idx_resume_templates_name_en_trgm ON resume_templates USING gin ((name->>'en') gin_trgm_ops);
-
--- ============================================
--- Search Query Analytics
--- ============================================
-CREATE TABLE IF NOT EXISTS search_queries (
-    id BIGSERIAL PRIMARY KEY,
-    query_text VARCHAR(500) NOT NULL,
-    results_count INTEGER NOT NULL DEFAULT 0,
-    user_id BIGINT,
-    user_ip VARCHAR(45),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_search_queries_created ON search_queries(created_at);
-CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text);
-
--- ============================================
--- Article Reviews (review workflow)
--- ============================================
-CREATE TABLE IF NOT EXISTS article_reviews (
-    id BIGSERIAL PRIMARY KEY,
-    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-    reviewer_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-    status VARCHAR(30) NOT NULL,
-    feedback TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);
-
--- ============================================
--- Reading History
--- ============================================
-CREATE TABLE IF NOT EXISTS reading_history (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-    last_read_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    read_count INTEGER NOT NULL DEFAULT 1,
-    CONSTRAINT uq_reading_history_user_article UNIQUE (user_id, article_id)
-);
-CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id, last_read_at DESC);
 
 -- ============================================
 -- H8: Fix missing ON DELETE clauses for user deletion support
@@ -944,29 +863,10 @@ CREATE TABLE IF NOT EXISTS reading_history (
 CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id, last_read_at DESC);
 
 -- ============================================
--- M17: Supported languages (i18n)
--- ============================================
-CREATE TABLE IF NOT EXISTS supported_languages (
-    code VARCHAR(10) PRIMARY KEY,
-    name VARCHAR(50) NOT NULL,
-    native_name VARCHAR(50) NOT NULL,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    sort_order INTEGER NOT NULL DEFAULT 0
-);
-
--- Seed default languages
-INSERT INTO supported_languages (code, name, native_name, enabled, sort_order) VALUES
-    ('en', 'English', 'English', TRUE, 1),
-    ('pt', 'Portuguese', 'Português', TRUE, 2),
-    ('es', 'Spanish', 'Español', TRUE, 3),
-    ('it', 'Italian', 'Italiano', TRUE, 4)
-ON CONFLICT (code) DO NOTHING;
-
--- ============================================
 -- M18: UI translations (DB-driven i18n)
 -- ============================================
 CREATE TABLE IF NOT EXISTS ui_translations (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGINT PRIMARY KEY,
     translation_key VARCHAR(255) NOT NULL,
     locale VARCHAR(10) NOT NULL,
     value TEXT NOT NULL,
@@ -992,7 +892,7 @@ CREATE TABLE IF NOT EXISTS email_template_overrides (
 -- M20: Email custom variables
 -- ============================================
 CREATE TABLE IF NOT EXISTS email_custom_variables (
-    id SERIAL PRIMARY KEY,
+    id BIGINT PRIMARY KEY,
     var_key VARCHAR(100) NOT NULL,
     var_value TEXT NOT NULL,
     description VARCHAR(500),
@@ -1011,3 +911,151 @@ DO $$ BEGIN
         ALTER TABLE users ADD COLUMN preferred_locale VARCHAR(10);
     END IF;
 END $$;
+
+-- ============================================
+-- M22: Migrate SERIAL/BIGSERIAL columns to BIGINT (Snowflake IDs)
+-- For existing databases that created these tables with auto-increment.
+-- ============================================
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='search_queries' AND column_name='id' AND is_identity='YES') THEN
+        ALTER TABLE search_queries ALTER COLUMN id DROP IDENTITY IF EXISTS;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='article_reviews' AND column_name='id' AND is_identity='YES') THEN
+        ALTER TABLE article_reviews ALTER COLUMN id DROP IDENTITY IF EXISTS;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='ui_translations' AND column_name='id' AND is_identity='YES') THEN
+        ALTER TABLE ui_translations ALTER COLUMN id DROP IDENTITY IF EXISTS;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_custom_variables' AND column_name='id' AND is_identity='YES') THEN
+        ALTER TABLE email_custom_variables ALTER COLUMN id DROP IDENTITY IF EXISTS;
+    END IF;
+END $$;
+
+-- Ensure id columns are BIGINT (SERIAL creates INTEGER, BIGSERIAL creates BIGINT)
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_custom_variables' AND column_name='id' AND data_type='integer') THEN
+        ALTER TABLE email_custom_variables ALTER COLUMN id TYPE BIGINT;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='search_queries' AND column_name='id' AND data_type='integer') THEN
+        ALTER TABLE search_queries ALTER COLUMN id TYPE BIGINT;
+    END IF;
+END $$;
+
+-- Add updated_at to article_reviews if missing
+ALTER TABLE article_reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+-- Drop orphaned sequences from old SERIAL/BIGSERIAL definitions
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'search_queries_id_seq' AND relkind = 'S') THEN
+        DROP SEQUENCE search_queries_id_seq CASCADE;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'article_reviews_id_seq' AND relkind = 'S') THEN
+        DROP SEQUENCE article_reviews_id_seq CASCADE;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'ui_translations_id_seq' AND relkind = 'S') THEN
+        DROP SEQUENCE ui_translations_id_seq CASCADE;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'email_custom_variables_id_seq' AND relkind = 'S') THEN
+        DROP SEQUENCE email_custom_variables_id_seq CASCADE;
+    END IF;
+END $$;
+
+-- ============================================
+-- M23: Seed frontend i18n translations for admin.settings keys (pt/es/it)
+-- English is bundled in en.ts; other locales come from this table.
+-- ============================================
+INSERT INTO ui_translations (id, translation_key, locale, value, namespace, visibility) VALUES
+-- Portuguese (pt)
+(10001, 'admin.settings.templateLoadError', 'pt', 'Falha ao carregar o template', 'frontend', 'admin'),
+(10002, 'admin.settings.templatePreviewError', 'pt', 'Falha ao pré-visualizar o template', 'frontend', 'admin'),
+(10003, 'admin.settings.templateSaveSuccess', 'pt', 'Template salvo com sucesso', 'frontend', 'admin'),
+(10004, 'admin.settings.templateSaveError', 'pt', 'Falha ao salvar o template', 'frontend', 'admin'),
+(10005, 'admin.settings.revertTemplateTitle', 'pt', 'Reverter Template', 'frontend', 'admin'),
+(10006, 'admin.settings.revertTemplateMessage', 'pt', 'Reverter este template para a versão padrão? Suas personalizações serão perdidas.', 'frontend', 'admin'),
+(10007, 'admin.settings.revertTemplateConfirm', 'pt', 'Reverter', 'frontend', 'admin'),
+(10008, 'admin.settings.templateRevertSuccess', 'pt', 'Template revertido para o padrão', 'frontend', 'admin'),
+(10009, 'admin.settings.templateRevertError', 'pt', 'Falha ao reverter o template', 'frontend', 'admin'),
+(10010, 'admin.settings.variableKeyInvalid', 'pt', 'A chave da variável deve começar com uma letra e conter apenas letras, números e sublinhados', 'frontend', 'admin'),
+(10011, 'admin.settings.variableCreated', 'pt', 'Variável criada', 'frontend', 'admin'),
+(10012, 'admin.settings.variableCreateError', 'pt', 'Falha ao criar a variável', 'frontend', 'admin'),
+(10013, 'admin.settings.variableUpdated', 'pt', 'Variável atualizada', 'frontend', 'admin'),
+(10014, 'admin.settings.variableUpdateError', 'pt', 'Falha ao atualizar a variável', 'frontend', 'admin'),
+(10015, 'admin.settings.deleteVariableTitle', 'pt', 'Excluir Variável', 'frontend', 'admin'),
+(10016, 'admin.settings.deleteVariableMessage', 'pt', 'Excluir esta variável? Templates que a utilizam a mostrarão vazia.', 'frontend', 'admin'),
+(10017, 'admin.settings.variableDeleted', 'pt', 'Variável excluída', 'frontend', 'admin'),
+(10018, 'admin.settings.variableDeleteError', 'pt', 'Falha ao excluir a variável', 'frontend', 'admin'),
+(10019, 'admin.settings.translationLoadError', 'pt', 'Falha ao carregar as traduções', 'frontend', 'admin'),
+(10020, 'admin.settings.translationUpdated', 'pt', 'Tradução atualizada', 'frontend', 'admin'),
+(10021, 'admin.settings.translationUpdateError', 'pt', 'Falha ao atualizar a tradução', 'frontend', 'admin'),
+(10022, 'admin.settings.translationCreated', 'pt', 'Tradução criada', 'frontend', 'admin'),
+(10023, 'admin.settings.translationCreateError', 'pt', 'Falha ao criar a tradução', 'frontend', 'admin'),
+(10024, 'admin.settings.deleteTranslationTitle', 'pt', 'Excluir Tradução', 'frontend', 'admin'),
+(10025, 'admin.settings.deleteTranslationMessage', 'pt', 'Excluir esta chave de tradução?', 'frontend', 'admin'),
+(10026, 'admin.settings.translationDeleted', 'pt', 'Tradução excluída', 'frontend', 'admin'),
+(10027, 'admin.settings.translationDeleteError', 'pt', 'Falha ao excluir a tradução', 'frontend', 'admin'),
+(10028, 'admin.settings.cacheInvalidated', 'pt', 'Cache de i18n invalidado', 'frontend', 'admin'),
+(10029, 'admin.settings.cacheInvalidateError', 'pt', 'Falha ao invalidar o cache', 'frontend', 'admin'),
+(10030, 'admin.settings.emailTemplatePreviewError', 'pt', 'Falha ao carregar a pré-visualização do template', 'frontend', 'admin'),
+-- Spanish (es)
+(10031, 'admin.settings.templateLoadError', 'es', 'Error al cargar el template', 'frontend', 'admin'),
+(10032, 'admin.settings.templatePreviewError', 'es', 'Error al previsualizar el template', 'frontend', 'admin'),
+(10033, 'admin.settings.templateSaveSuccess', 'es', 'Template guardado exitosamente', 'frontend', 'admin'),
+(10034, 'admin.settings.templateSaveError', 'es', 'Error al guardar el template', 'frontend', 'admin'),
+(10035, 'admin.settings.revertTemplateTitle', 'es', 'Revertir Template', 'frontend', 'admin'),
+(10036, 'admin.settings.revertTemplateMessage', 'es', 'Revertir este template a la versión por defecto? Se perderán las personalizaciones.', 'frontend', 'admin'),
+(10037, 'admin.settings.revertTemplateConfirm', 'es', 'Revertir', 'frontend', 'admin'),
+(10038, 'admin.settings.templateRevertSuccess', 'es', 'Template revertido al valor por defecto', 'frontend', 'admin'),
+(10039, 'admin.settings.templateRevertError', 'es', 'Error al revertir el template', 'frontend', 'admin'),
+(10040, 'admin.settings.variableKeyInvalid', 'es', 'La clave de la variable debe comenzar con una letra y contener solo letras, números y guiones bajos', 'frontend', 'admin'),
+(10041, 'admin.settings.variableCreated', 'es', 'Variable creada', 'frontend', 'admin'),
+(10042, 'admin.settings.variableCreateError', 'es', 'Error al crear la variable', 'frontend', 'admin'),
+(10043, 'admin.settings.variableUpdated', 'es', 'Variable actualizada', 'frontend', 'admin'),
+(10044, 'admin.settings.variableUpdateError', 'es', 'Error al actualizar la variable', 'frontend', 'admin'),
+(10045, 'admin.settings.deleteVariableTitle', 'es', 'Eliminar Variable', 'frontend', 'admin'),
+(10046, 'admin.settings.deleteVariableMessage', 'es', 'Eliminar esta variable? Los templates que la usen la mostrarán vacía.', 'frontend', 'admin'),
+(10047, 'admin.settings.variableDeleted', 'es', 'Variable eliminada', 'frontend', 'admin'),
+(10048, 'admin.settings.variableDeleteError', 'es', 'Error al eliminar la variable', 'frontend', 'admin'),
+(10049, 'admin.settings.translationLoadError', 'es', 'Error al cargar las traducciones', 'frontend', 'admin'),
+(10050, 'admin.settings.translationUpdated', 'es', 'Traducción actualizada', 'frontend', 'admin'),
+(10051, 'admin.settings.translationUpdateError', 'es', 'Error al actualizar la traducción', 'frontend', 'admin'),
+(10052, 'admin.settings.translationCreated', 'es', 'Traducción creada', 'frontend', 'admin'),
+(10053, 'admin.settings.translationCreateError', 'es', 'Error al crear la traducción', 'frontend', 'admin'),
+(10054, 'admin.settings.deleteTranslationTitle', 'es', 'Eliminar Traducción', 'frontend', 'admin'),
+(10055, 'admin.settings.deleteTranslationMessage', 'es', 'Eliminar esta clave de traducción?', 'frontend', 'admin'),
+(10056, 'admin.settings.translationDeleted', 'es', 'Traducción eliminada', 'frontend', 'admin'),
+(10057, 'admin.settings.translationDeleteError', 'es', 'Error al eliminar la traducción', 'frontend', 'admin'),
+(10058, 'admin.settings.cacheInvalidated', 'es', 'Caché de i18n invalidada', 'frontend', 'admin'),
+(10059, 'admin.settings.cacheInvalidateError', 'es', 'Error al invalidar la caché', 'frontend', 'admin'),
+(10060, 'admin.settings.emailTemplatePreviewError', 'es', 'Error al cargar la previsualización del template', 'frontend', 'admin'),
+-- Italian (it)
+(10061, 'admin.settings.templateLoadError', 'it', 'Errore nel caricamento del template', 'frontend', 'admin'),
+(10062, 'admin.settings.templatePreviewError', 'it', 'Errore nell''anteprima del template', 'frontend', 'admin'),
+(10063, 'admin.settings.templateSaveSuccess', 'it', 'Template salvato con successo', 'frontend', 'admin'),
+(10064, 'admin.settings.templateSaveError', 'it', 'Errore nel salvataggio del template', 'frontend', 'admin'),
+(10065, 'admin.settings.revertTemplateTitle', 'it', 'Ripristina Template', 'frontend', 'admin'),
+(10066, 'admin.settings.revertTemplateMessage', 'it', 'Ripristinare questo template alla versione predefinita? Le personalizzazioni saranno perse.', 'frontend', 'admin'),
+(10067, 'admin.settings.revertTemplateConfirm', 'it', 'Ripristina', 'frontend', 'admin'),
+(10068, 'admin.settings.templateRevertSuccess', 'it', 'Template ripristinato al valore predefinito', 'frontend', 'admin'),
+(10069, 'admin.settings.templateRevertError', 'it', 'Errore nel ripristino del template', 'frontend', 'admin'),
+(10070, 'admin.settings.variableKeyInvalid', 'it', 'La chiave della variabile deve iniziare con una lettera e contenere solo lettere, numeri e trattini bassi', 'frontend', 'admin'),
+(10071, 'admin.settings.variableCreated', 'it', 'Variabile creata', 'frontend', 'admin'),
+(10072, 'admin.settings.variableCreateError', 'it', 'Errore nella creazione della variabile', 'frontend', 'admin'),
+(10073, 'admin.settings.variableUpdated', 'it', 'Variabile aggiornata', 'frontend', 'admin'),
+(10074, 'admin.settings.variableUpdateError', 'it', 'Errore nell''aggiornamento della variabile', 'frontend', 'admin'),
+(10075, 'admin.settings.deleteVariableTitle', 'it', 'Elimina Variabile', 'frontend', 'admin'),
+(10076, 'admin.settings.deleteVariableMessage', 'it', 'Eliminare questa variabile? I template che la usano la mostreranno vuota.', 'frontend', 'admin'),
+(10077, 'admin.settings.variableDeleted', 'it', 'Variabile eliminata', 'frontend', 'admin'),
+(10078, 'admin.settings.variableDeleteError', 'it', 'Errore nell''eliminazione della variabile', 'frontend', 'admin'),
+(10079, 'admin.settings.translationLoadError', 'it', 'Errore nel caricamento delle traduzioni', 'frontend', 'admin'),
+(10080, 'admin.settings.translationUpdated', 'it', 'Traduzione aggiornata', 'frontend', 'admin'),
+(10081, 'admin.settings.translationUpdateError', 'it', 'Errore nell''aggiornamento della traduzione', 'frontend', 'admin'),
+(10082, 'admin.settings.translationCreated', 'it', 'Traduzione creata', 'frontend', 'admin'),
+(10083, 'admin.settings.translationCreateError', 'it', 'Errore nella creazione della traduzione', 'frontend', 'admin'),
+(10084, 'admin.settings.deleteTranslationTitle', 'it', 'Elimina Traduzione', 'frontend', 'admin'),
+(10085, 'admin.settings.deleteTranslationMessage', 'it', 'Eliminare questa chiave di traduzione?', 'frontend', 'admin'),
+(10086, 'admin.settings.translationDeleted', 'it', 'Traduzione eliminata', 'frontend', 'admin'),
+(10087, 'admin.settings.translationDeleteError', 'it', 'Errore nell''eliminazione della traduzione', 'frontend', 'admin'),
+(10088, 'admin.settings.cacheInvalidated', 'it', 'Cache i18n invalidata', 'frontend', 'admin'),
+(10089, 'admin.settings.cacheInvalidateError', 'it', 'Errore nell''invalidazione della cache', 'frontend', 'admin'),
+(10090, 'admin.settings.emailTemplatePreviewError', 'it', 'Errore nel caricamento dell''anteprima del template', 'frontend', 'admin')
+ON CONFLICT (translation_key, locale, namespace) DO NOTHING;
