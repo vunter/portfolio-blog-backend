@@ -26,6 +26,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
@@ -54,7 +55,12 @@ class ExportImportServiceTest {
     private Tag testTag;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
+        // Set @Value field that is not injected by Mockito
+        Field maxImportSizeField = ExportImportService.class.getDeclaredField("maxImportSize");
+        maxImportSizeField.setAccessible(true);
+        maxImportSizeField.setInt(exportImportService, 2097152); // 2 MB default
+
         testArticle = Article.builder()
                 .id(1L)
                 .slug("test-article")

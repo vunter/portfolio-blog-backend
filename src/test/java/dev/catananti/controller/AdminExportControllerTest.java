@@ -16,6 +16,8 @@ import org.springframework.http.HttpStatus;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import org.springframework.test.util.ReflectionTestUtils;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +42,9 @@ class AdminExportControllerTest {
 
     @BeforeEach
     void setUp() {
+        ReflectionTestUtils.setField(controller, "maxExportArticles", 10000);
+        ReflectionTestUtils.setField(controller, "maxImportSize", 2097152);
+
         lenient().when(articleRepository.countAll()).thenReturn(Mono.just(25L));
 
         blogStats = BlogExport.BlogStats.builder()

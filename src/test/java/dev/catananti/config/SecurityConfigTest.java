@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -37,9 +38,12 @@ class SecurityConfigTest {
     @Mock
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    @Mock
+    private Environment environment;
+
     @BeforeEach
     void setUp() {
-        securityConfig = new SecurityConfig(jwtAuthenticationFilter);
+        securityConfig = new SecurityConfig(jwtAuthenticationFilter, environment);
         // Inject default @Value fields
         ReflectionTestUtils.setField(securityConfig, "allowedOrigins", "http://localhost:3000,http://127.0.0.1:3000");
         ReflectionTestUtils.setField(securityConfig, "allowedMethods", "GET,POST,PUT,DELETE,PATCH,OPTIONS");
@@ -155,7 +159,8 @@ class SecurityConfigTest {
                     .containsExactlyInAnyOrder(
                             "Authorization", "Content-Type", "Accept", "Origin",
                             "X-Requested-With", "Cache-Control", "Accept-Language",
-                            "X-XSRF-TOKEN", "X-Visitor-Id"
+                            "X-XSRF-TOKEN", "X-Visitor-Id",
+                            "X-Analytics-Token", "X-Analytics-Consent", "X-Idempotency-Key"
                     );
         }
 

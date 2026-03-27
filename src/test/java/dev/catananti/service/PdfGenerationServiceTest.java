@@ -1,5 +1,8 @@
 package dev.catananti.service;
 
+import dev.catananti.metrics.BlogMetrics;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.test.StepVerifier;
@@ -7,11 +10,22 @@ import reactor.test.StepVerifier;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @DisplayName("PdfGenerationService Tests")
 class PdfGenerationServiceTest {
 
-    private final PdfGenerationService pdfService = new PdfGenerationService();
+    private static final BlogMetrics blogMetrics = createBlogMetricsMock();
+
+    private static BlogMetrics createBlogMetricsMock() {
+        BlogMetrics metrics = mock(BlogMetrics.class);
+        Timer timer = Timer.builder("test.pdf.timer").register(new SimpleMeterRegistry());
+        when(metrics.getPdfGenerationTimer()).thenReturn(timer);
+        return metrics;
+    }
+
+    private final PdfGenerationService pdfService = new PdfGenerationService(blogMetrics);
 
     @Test
     @DisplayName("Should generate PDF from simple HTML")

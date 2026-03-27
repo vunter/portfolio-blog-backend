@@ -55,6 +55,9 @@ class SearchServiceTest {
     private SearchQueryRepository searchQueryRepository;
 
     @Mock
+    private IdService idService;
+
+    @Mock
     private DatabaseClient databaseClient;
 
     @Mock
@@ -264,10 +267,6 @@ class SearchServiceTest {
                     .size(10)
                     .build();
 
-            // The tag+query path uses r2dbcTemplate dynamic SQL
-            // executeSpec chain is already mocked in setUp - returns empty
-            when(tagsFetchSpec.all()).thenReturn(Flux.empty());
-
             StepVerifier.create(searchService.searchArticles(request))
                     .assertNext(page -> {
                         assertThat(page.getContent()).isEmpty();
@@ -373,8 +372,6 @@ class SearchServiceTest {
                     .size(10)
                     .build();
 
-            when(tagsFetchSpec.all()).thenReturn(Flux.empty());
-
             StepVerifier.create(searchService.searchArticles(request))
                     .assertNext(page -> assertThat(page.getContent()).isEmpty())
                     .verifyComplete();
@@ -455,8 +452,6 @@ class SearchServiceTest {
                     .size(10)
                     .build();
 
-            when(tagsFetchSpec.all()).thenReturn(Flux.empty());
-
             StepVerifier.create(searchService.searchArticles(request))
                     .assertNext(page -> assertThat(page.getContent()).isEmpty())
                     .verifyComplete();
@@ -473,8 +468,6 @@ class SearchServiceTest {
                     .page(0)
                     .size(10)
                     .build();
-
-            when(tagsFetchSpec.all()).thenReturn(Flux.empty());
 
             StepVerifier.create(searchService.searchArticles(request))
                     .assertNext(page -> assertThat(page.getContent()).isEmpty())

@@ -337,29 +337,49 @@ class ApiEndpointIntegrationTest {
 
         @Mock private AuthService authService;
         @Mock private RecaptchaService recaptchaService;
-        @InjectMocks private AuthController authController;
+        @Mock private EmailChangeService emailChangeService;
+        @Mock private RefreshTokenService refreshTokenService;
+        @Mock private UserRepository userRepository;
+        @Mock private org.springframework.security.web.server.csrf.ServerCsrfTokenRepository csrfTokenRepository;
+        @Mock private dev.catananti.metrics.BlogMetrics blogMetrics;
 
+        private AuthController authController;
         private WebTestClient client;
 
         @BeforeEach
-        void setUp() {
+        void setUp() throws Exception {
+            authController = new AuthController(authService, recaptchaService, emailChangeService,
+                    refreshTokenService, userRepository, csrfTokenRepository, blogMetrics);
+            // Set @Value fields via reflection (not injected in standalone mode)
+            java.lang.reflect.Field expField = AuthController.class.getDeclaredField("jwtExpirationMs");
+            expField.setAccessible(true);
+            expField.setLong(authController, 86400000L);
+            java.lang.reflect.Field secureField = AuthController.class.getDeclaredField("cookieSecure");
+            secureField.setAccessible(true);
+            secureField.setBoolean(authController, false);
+            java.lang.reflect.Field domainField = AuthController.class.getDeclaredField("cookieDomain");
+            domainField.setAccessible(true);
+            domainField.set(authController, "");
+
             client = WebTestClient.bindToController(authController)
                     .configureClient().build();
             lenient().when(recaptchaService.verify(any(), any())).thenReturn(Mono.empty());
+            lenient().when(csrfTokenRepository.generateToken(any())).thenReturn(Mono.empty());
+            lenient().when(csrfTokenRepository.saveToken(any(), any())).thenReturn(Mono.empty());
         }
 
         @Test
-        @DisplayName("POST /auth/login — legacy v1 returns AuthResponse (200)")
-        void loginV1_200() {
-            // Given
-            var resp = AuthResponse.builder()
-                    .token("jwt-token-v1")
-                    .type("Bearer")
+        @DisplayName("POST /auth/login — unified login returns TokenResponse (200)")
+        void login_200() {
+            // Given — Q7.14: Unified login endpoint returns TokenResponse
+            var resp = TokenResponse.builder()
+                    .accessToken("access-jwt")
+                    .refreshToken("refresh-jwt")
+                    .expiresIn(86400)
                     .email("admin@test.com")
                     .name("Admin")
-                    .role("ADMIN")
                     .build();
-            when(authService.login(any(LoginRequest.class), anyString()))
+            when(authService.loginWithRefreshToken(any(LoginRequest.class), anyString(), any()))
                     .thenReturn(Mono.just(resp));
 
             // When & Then
@@ -368,14 +388,16 @@ class ApiEndpointIntegrationTest {
                     .bodyValue(new LoginRequest("admin@test.com", "password12345", false, null))
                     .exchange()
                     .expectStatus().isOk()
+                    .expectHeader().exists("Set-Cookie")
                     .expectBody()
-                    .jsonPath("$.token").isEqualTo("jwt-token-v1")
-                    .jsonPath("$.email").isEqualTo("admin@test.com");
+                    .jsonPath("$.accessToken").isEqualTo("access-jwt")
+                    .jsonPath("$.email").isEqualTo("admin@test.com")
+                    .jsonPath("$.expiresIn").isEqualTo(86400);
         }
 
         @Test
-        @DisplayName("POST /auth/login/v2 — cookie-based login returns TokenResponse (200)")
-        void loginV2_200() {
+        @DisplayName("POST /auth/login — with rememberMe returns TokenResponse (200)")
+        void loginRememberMe_200() {
             // Given
             var resp = TokenResponse.builder()
                     .accessToken("access-jwt")
@@ -388,7 +410,7 @@ class ApiEndpointIntegrationTest {
                     .thenReturn(Mono.just(resp));
 
             // When & Then
-            client.post().uri("/api/v1/admin/auth/login/v2")
+            client.post().uri("/api/v1/admin/auth/login")
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(new LoginRequest("admin@test.com", "password12345", true, null))
                     .exchange()
@@ -403,7 +425,7 @@ class ApiEndpointIntegrationTest {
         @DisplayName("POST /auth/login — bad credentials returns error (delegated to service)")
         void login_badCredentials() {
             // Given — BadCredentialsException propagates as error from service
-            when(authService.login(any(LoginRequest.class), anyString()))
+            when(authService.loginWithRefreshToken(any(LoginRequest.class), anyString(), any()))
                     .thenReturn(Mono.error(new org.springframework.security.authentication.BadCredentialsException("Bad credentials")));
 
             // When & Then — Standalone WebTestClient doesn't have Spring Security's
@@ -415,7 +437,7 @@ class ApiEndpointIntegrationTest {
                     .exchange()
                     .expectStatus().is5xxServerError();
 
-            verify(authService).login(any(LoginRequest.class), anyString());
+            verify(authService).loginWithRefreshToken(any(LoginRequest.class), anyString(), any());
         }
 
         @Test
@@ -444,7 +466,7 @@ class ApiEndpointIntegrationTest {
         @Test
         @DisplayName("POST /auth/logout — clears cookies (204)")
         void logout_204() {
-            // Given
+            // Given — logout now takes (refreshToken, accessToken) — two String params
             when(authService.logout(eq("some-refresh"), any()))
                     .thenReturn(Mono.empty());
 
@@ -588,16 +610,16 @@ class ApiEndpointIntegrationTest {
     class AdminTagCrud {
 
         @Mock private TagService tagService;
-        @Mock private UserRepository userRepository;
+        @Mock private UserService userService;
         @InjectMocks private AdminTagController adminTagController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
-            lenient().when(userRepository.findByEmail("admin@test.com"))
-                    .thenReturn(Mono.just(dev.catananti.entity.User.builder()
-                            .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+            lenient().when(userService.getUserByEmail("admin@test.com"))
+                    .thenReturn(Mono.just(UserResponse.builder()
+                            .id("1").email("admin@test.com").name("Admin").role("ADMIN").build()));
             var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
                     List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
             var secCtx = new SecurityContextImpl(auth);
@@ -613,6 +635,9 @@ class ApiEndpointIntegrationTest {
         void listTags_200() {
             when(tagService.getAllTags(isNull()))
                     .thenReturn(Flux.just(buildTag("Java", "java"), buildTag("Angular", "angular")));
+            when(userService.getUserByEmail("admin@test.com"))
+                    .thenReturn(Mono.just(UserResponse.builder()
+                            .id("1").email("admin@test.com").name("Admin").role("ADMIN").build()));
 
             var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
                     List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
@@ -1196,8 +1221,18 @@ class ApiEndpointIntegrationTest {
         private AdminSettingsController settingsController;
 
         @BeforeEach
-        void setUp() {
+        void setUp() throws Exception {
             settingsController = new AdminSettingsController(settingsService, auditService);
+            // Set @Value fields via reflection (not injected in standalone mode)
+            java.lang.reflect.Field maxEntries = AdminSettingsController.class.getDeclaredField("maxSettingsEntries");
+            maxEntries.setAccessible(true);
+            maxEntries.setInt(settingsController, 50);
+            java.lang.reflect.Field maxKey = AdminSettingsController.class.getDeclaredField("maxKeyLength");
+            maxKey.setAccessible(true);
+            maxKey.setInt(settingsController, 100);
+            java.lang.reflect.Field maxVal = AdminSettingsController.class.getDeclaredField("maxValueLength");
+            maxVal.setAccessible(true);
+            maxVal.setInt(settingsController, 5000);
         }
 
         @Test

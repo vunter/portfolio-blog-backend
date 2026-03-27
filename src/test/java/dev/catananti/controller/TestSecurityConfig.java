@@ -32,7 +32,7 @@ public class TestSecurityConfig {
     @Bean
     @Primary
     public JwtAuthenticationFilter mockJwtAuthenticationFilter() {
-        return new JwtAuthenticationFilter(null, null, null) {
+        return new JwtAuthenticationFilter(null, null, null, null) {
             @Override
             public Mono<Void> filter(org.springframework.web.server.ServerWebExchange exchange, 
                                       org.springframework.web.server.WebFilterChain chain) {

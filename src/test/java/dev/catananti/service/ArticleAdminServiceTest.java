@@ -9,6 +9,7 @@ import dev.catananti.entity.User;
 import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ArticleRepository;
+import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
@@ -41,6 +42,9 @@ class ArticleAdminServiceTest {
 
     @Mock
     private ArticleRepository articleRepository;
+
+    @Mock
+    private ArticleReviewRepository articleReviewRepository;
 
     @Mock
     private TagRepository tagRepository;
@@ -258,7 +262,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(articleAdminService.createArticle(draftRequest))
+            StepVerifier.create(withAdminAuth(articleAdminService.createArticle(draftRequest)))
                     .assertNext(response -> {
                         assertThat(response.getSlug()).isEqualTo("test-article");
                     })
@@ -284,7 +288,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then - should succeed with auto-suffixed slug
-            StepVerifier.create(articleAdminService.createArticle(draftRequest))
+            StepVerifier.create(withAdminAuth(articleAdminService.createArticle(draftRequest)))
                     .assertNext(response -> {
                         assertThat(response).isNotNull();
                     })
@@ -327,7 +331,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(scheduledResponse);
 
             // When & Then
-            StepVerifier.create(articleAdminService.createArticle(scheduledRequest))
+            StepVerifier.create(withAdminAuth(articleAdminService.createArticle(scheduledRequest)))
                     .assertNext(response -> {
                         assertThat(response.getStatus()).isEqualTo("SCHEDULED");
                     })
@@ -609,7 +613,7 @@ class ArticleAdminServiceTest {
                     });
 
             // When & Then
-            StepVerifier.create(articleAdminService.createArticle(request))
+            StepVerifier.create(withAdminAuth(articleAdminService.createArticle(request)))
                     .assertNext(response -> {
                         assertThat(response.getReadingTimeMinutes()).isEqualTo(1);
                     })
@@ -644,7 +648,7 @@ class ArticleAdminServiceTest {
                     });
 
             // When & Then
-            StepVerifier.create(articleAdminService.createArticle(request))
+            StepVerifier.create(withAdminAuth(articleAdminService.createArticle(request)))
                     .assertNext(response -> {
                         assertThat(response.getReadingTimeMinutes()).isEqualTo(3);
                     })
@@ -679,7 +683,7 @@ class ArticleAdminServiceTest {
                     });
 
             // When & Then
-            StepVerifier.create(articleAdminService.createArticle(request))
+            StepVerifier.create(withAdminAuth(articleAdminService.createArticle(request)))
                     .assertNext(response -> {
                         assertThat(response.getReadingTimeMinutes()).isEqualTo(10);
                     })

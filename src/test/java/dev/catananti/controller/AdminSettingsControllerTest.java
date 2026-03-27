@@ -2,6 +2,7 @@ package dev.catananti.controller;
 
 import dev.catananti.service.AuditService;
 import dev.catananti.service.SiteSettingsService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,8 @@ import reactor.test.StepVerifier;
 
 import java.util.HashMap;
 import java.util.Map;
+
+import java.lang.reflect.Field;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -34,6 +37,19 @@ class AdminSettingsControllerTest {
 
     @InjectMocks
     private AdminSettingsController controller;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        setField(controller, "maxSettingsEntries", 50);
+        setField(controller, "maxKeyLength", 100);
+        setField(controller, "maxValueLength", 5000);
+    }
+
+    private void setField(Object target, String fieldName, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
 
     @Nested
     @DisplayName("GET /api/v1/admin/settings")
@@ -103,7 +119,7 @@ class AdminSettingsControllerTest {
 
             StepVerifier.create(controller.updateSettings(tooMany, authentication))
                     .expectErrorMatches(ex -> ex instanceof IllegalArgumentException
-                            && ex.getMessage().contains("Too many settings entries"))
+                            && ex.getMessage().contains("error.too_many_settings"))
                     .verify();
 
             verifyNoInteractions(settingsService);

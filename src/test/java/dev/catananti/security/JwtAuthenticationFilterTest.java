@@ -3,6 +3,7 @@ package dev.catananti.security;
 import dev.catananti.entity.User;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.TokenBlacklistService;
+import dev.catananti.service.UserCacheService;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,6 +43,9 @@ class JwtAuthenticationFilterTest {
 
     @Mock
     private TokenBlacklistService tokenBlacklistService;
+
+    @Mock
+    private UserCacheService userCacheService;
 
     @InjectMocks
     private JwtAuthenticationFilter filter;

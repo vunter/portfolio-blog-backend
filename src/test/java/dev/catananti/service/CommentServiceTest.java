@@ -392,7 +392,7 @@ class CommentServiceTest {
         when(commentRepository.findApprovedByArticleIdSortedByLikes(articleId, 10, 0))
                 .thenReturn(Flux.just(testComment));
         when(commentRepository.countApprovedByArticleId(articleId)).thenReturn(Mono.just(1L));
-        when(commentRepository.findApprovedRepliesByParentId(commentId)).thenReturn(Flux.empty());
+        when(commentRepository.findApprovedRepliesByParentIds(anyList())).thenReturn(Flux.empty());
 
         StepVerifier.create(commentService.getApprovedCommentsByArticleSlugPaginated("test-article", 0, 10))
                 .assertNext(page -> {

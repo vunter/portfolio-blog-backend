@@ -54,6 +54,9 @@ class EmailChangeServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "siteUrl", "http://localhost:4200");
+        ReflectionTestUtils.setField(service, "tokenValidityHours", 1);
+        ReflectionTestUtils.setField(service, "maxTokensPerHour", 3);
+        ReflectionTestUtils.setField(service, "maxTokensPerTargetEmailPerHour", 5);
 
         testUserId = 1234567890123456789L;
         testUser = User.builder()
@@ -74,6 +77,8 @@ class EmailChangeServiceTest {
     void shouldInitiateEmailChangeSuccessfully() {
         when(tokenRepository.countRecentTokensByUserId(eq(testUserId), any(LocalDateTime.class)))
                 .thenReturn(Mono.just(0L));
+        when(tokenRepository.countRecentTokensByNewEmail(anyString(), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(0L));
         when(idService.nextId()).thenReturn(100L);
         when(tokenRepository.save(any(EmailChangeToken.class)))
                 .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
@@ -89,6 +94,8 @@ class EmailChangeServiceTest {
     void shouldRejectWhenRateLimitExceeded() {
         when(tokenRepository.countRecentTokensByUserId(eq(testUserId), any(LocalDateTime.class)))
                 .thenReturn(Mono.just(3L));
+        when(tokenRepository.countRecentTokensByNewEmail(anyString(), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(0L));
 
         StepVerifier.create(service.initiateEmailChange(testUserId, "new@example.com", "Test User"))
                 .expectErrorMatches(e -> e instanceof ResponseStatusException
@@ -100,6 +107,8 @@ class EmailChangeServiceTest {
     @DisplayName("Should succeed even if email send fails")
     void shouldSucceedEvenIfEmailSendFails() {
         when(tokenRepository.countRecentTokensByUserId(eq(testUserId), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(0L));
+        when(tokenRepository.countRecentTokensByNewEmail(anyString(), any(LocalDateTime.class)))
                 .thenReturn(Mono.just(0L));
         when(idService.nextId()).thenReturn(100L);
         when(tokenRepository.save(any(EmailChangeToken.class)))

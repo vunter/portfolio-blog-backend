@@ -153,13 +153,11 @@ class RecaptchaServiceTest {
         @SuppressWarnings("unchecked")
         private void setupWebClientChain(WebClient webClient, Mono<?> responseMono) {
             WebClient.RequestBodyUriSpec requestBodyUriSpec = mock(WebClient.RequestBodyUriSpec.class);
-            WebClient.RequestBodySpec requestBodySpec = mock(WebClient.RequestBodySpec.class);
             WebClient.RequestHeadersSpec requestHeadersSpec = mock(WebClient.RequestHeadersSpec.class);
             WebClient.ResponseSpec responseSpec = mock(WebClient.ResponseSpec.class);
 
             when(webClient.post()).thenReturn(requestBodyUriSpec);
-            when(requestBodyUriSpec.contentType(any())).thenReturn(requestBodySpec);
-            when(requestBodySpec.bodyValue(any())).thenReturn(requestHeadersSpec);
+            when(requestBodyUriSpec.body(any())).thenReturn(requestHeadersSpec);
             when(requestHeadersSpec.retrieve()).thenReturn(responseSpec);
             when(responseSpec.bodyToMono(any(Class.class))).thenReturn((Mono) responseMono);
         }
@@ -253,13 +251,11 @@ class RecaptchaServiceTest {
         @SuppressWarnings("unchecked")
         private void setupWebClientChain(WebClient webClient, Mono<?> responseMono) {
             WebClient.RequestBodyUriSpec requestBodyUriSpec = mock(WebClient.RequestBodyUriSpec.class);
-            WebClient.RequestBodySpec requestBodySpec = mock(WebClient.RequestBodySpec.class);
             WebClient.RequestHeadersSpec requestHeadersSpec = mock(WebClient.RequestHeadersSpec.class);
             WebClient.ResponseSpec responseSpec = mock(WebClient.ResponseSpec.class);
 
             when(webClient.post()).thenReturn(requestBodyUriSpec);
-            when(requestBodyUriSpec.contentType(any())).thenReturn(requestBodySpec);
-            when(requestBodySpec.bodyValue(any())).thenReturn(requestHeadersSpec);
+            when(requestBodyUriSpec.body(any())).thenReturn(requestHeadersSpec);
             when(requestHeadersSpec.retrieve()).thenReturn(responseSpec);
             when(responseSpec.bodyToMono(any(Class.class))).thenReturn((Mono) responseMono);
         }

@@ -290,14 +290,12 @@
 			<artifactId>netty-nio-client</artifactId>
 		</dependency>
 
-		<!-- Sentry Error Tracking — disabled: v8.4.0 incompatible with Spring Boot 4 -->
-		<!--
+		<!-- Sentry Error Tracking — Spring Boot 4 compatible artifact (Q10.11) -->
 		<dependency>
 			<groupId>io.sentry</groupId>
-			<artifactId>sentry-spring-boot-starter-jakarta</artifactId>
-			<version>8.4.0</version>
+			<artifactId>sentry-spring-boot-4-starter</artifactId>
+			<version>8.36.0</version>
 		</dependency>
-		-->
 
 		<!-- 2FA: TOTP (Time-based One-Time Password) -->
 		<dependency>
@@ -321,6 +319,13 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- MockWebServer for HTTP client testing -->
+		<dependency>
+			<groupId>com.squareup.okhttp3</groupId>
+			<artifactId>mockwebserver</artifactId>
+			<version>4.12.0</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
@@ -370,13 +375,13 @@
 		<dependency>
 			<groupId>io.r2dbc</groupId>
 			<artifactId>r2dbc-h2</artifactId>
-			<scope>runtime</scope>
+			<scope>test</scope>
 			<optional>true</optional>
 		</dependency>
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>
-			<scope>runtime</scope>
+			<scope>test</scope>
 			<optional>true</optional>
 		</dependency>
 		<dependency>
@@ -442,10 +447,6 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<configuration>
-					<!-- F-004: Enable Java 25 preview features -->
-					<compilerArgs>
-						<arg>--enable-preview</arg>
-					</compilerArgs>
 					<annotationProcessorPaths>
 						<path>
 							<groupId>org.projectlombok</groupId>
@@ -458,8 +459,6 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
-					<!-- F-004: Enable preview features at runtime -->
-					<jvmArguments>--enable-preview</jvmArguments>
 					<excludes>
 						<exclude>
 							<groupId>org.projectlombok</groupId>
@@ -468,8 +467,7 @@
 					</excludes>
 				</configuration>
 			</plugin>
-			<!-- F-004: Enable preview features in test JVM -->
-				<!-- F-005: Enforce minimum Maven/Java versions and ban duplicate deps -->
+			<!-- F-005: Enforce minimum Maven/Java versions and ban duplicate deps -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-enforcer-plugin</artifactId>
@@ -495,7 +493,7 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<configuration>
-					<argLine>--enable-preview @{argLine}</argLine>
+					<argLine>@{argLine}</argLine>
 				</configuration>
 			</plugin>
 			<plugin>
@@ -541,6 +539,19 @@
 						</goals>
 					</execution>
 				</executions>
+			</plugin>
+			<!-- Q11.5: OWASP Dependency-Check for known vulnerability scanning -->
+			<plugin>
+				<groupId>org.owasp</groupId>
+				<artifactId>dependency-check-maven</artifactId>
+				<version>12.1.1</version>
+				<configuration>
+					<failBuildOnCVSS>9</failBuildOnCVSS>
+					<suppressionFiles>
+						<suppressionFile>dependency-check-suppressions.xml</suppressionFile>
+					</suppressionFiles>
+					<nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

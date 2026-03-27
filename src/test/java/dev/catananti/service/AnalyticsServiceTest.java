@@ -57,6 +57,9 @@ class AnalyticsServiceTest {
         lenient().when(executeSpec.then()).thenReturn(Mono.empty());
         lenient().when(rowsFetchSpec.all()).thenReturn(Flux.empty());
         lenient().when(rowsFetchSpec.one()).thenReturn(Mono.empty());
+
+        // GeoIP service returns empty Mono by default (no country resolved)
+        lenient().when(geoIPService.getCountryCode(anyString())).thenReturn(Mono.empty());
     }
 
     @Nested
@@ -133,7 +136,7 @@ class AnalyticsServiceTest {
         void shouldSerializeMetadata() {
             AnalyticsEventRequest request = AnalyticsEventRequest.builder()
                     .eventType("SCROLL_DEPTH")
-                    .metadata(Map.of("depth", 75, "duration", 30))
+                    .metadata(Map.of("depth", "75", "duration", "30"))
                     .build();
 
             MockServerHttpRequest httpRequest = MockServerHttpRequest.get("/").build();
