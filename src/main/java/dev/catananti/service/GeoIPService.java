@@ -8,6 +8,8 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.File;
 import java.io.IOException;
@@ -64,29 +66,31 @@ public class GeoIPService {
     }
 
     /**
-     * Resolve an IP address string to a country code.
-     * Returns empty if the database is not loaded, the IP is private/invalid,
+     * Resolve an IP address string to a country code (reactive).
+     * Returns empty Mono if the database is not loaded, the IP is private/invalid,
      * or no country mapping exists.
      */
-    public Optional<String> getCountryCode(String ipAddress) {
+    public Mono<String> getCountryCode(String ipAddress) {
         if (reader == null || ipAddress == null || ipAddress.isBlank()) {
-            return Optional.empty();
+            return Mono.empty();
         }
-        try {
+        // F-ASYNC-03: Offload InetAddress.getByName() DNS lookup from Netty event loop
+        return Mono.fromCallable(() -> {
             InetAddress addr = InetAddress.getByName(ipAddress.trim());
             if (addr.isLoopbackAddress() || addr.isSiteLocalAddress() || addr.isLinkLocalAddress()) {
-                return Optional.empty();
+                return Optional.<String>empty();
             }
             CountryResponse response = reader.country(addr);
             String code = response.getCountry().getIsoCode();
             return Optional.ofNullable(code);
-        } catch (GeoIp2Exception e) {
-            // Address not found in database — expected for some IPs
-            return Optional.empty();
-        } catch (IOException e) {
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .flatMap(Mono::justOrEmpty)
+        .onErrorResume(GeoIp2Exception.class, e -> Mono.empty())
+        .onErrorResume(IOException.class, e -> {
             log.debug("GeoIP lookup failed for {}: {}", ipAddress, e.getMessage());
-            return Optional.empty();
-        }
+            return Mono.empty();
+        });
     }
 
     public boolean isAvailable() {

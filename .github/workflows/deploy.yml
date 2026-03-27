@@ -1,11 +1,10 @@
 name: Build & Deploy to Production
 
 on:
-  # Auto-deploy after CI passes on main
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  # Deploy on version tags (e.g. v1.0.0, v2.3.1)
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
   # Manual deploy with optional SHA override
   workflow_dispatch:
     inputs:
@@ -27,9 +26,6 @@ jobs:
   # ──────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
       sha_short: ${{ steps.sha.outputs.sha_short }}
@@ -37,10 +33,10 @@ jobs:
       - name: Resolve deploy SHA
         id: sha
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SHA="${{ github.event.inputs.sha || github.sha }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.sha }}" ]; then
+            SHA="${{ github.event.inputs.sha }}"
           else
-            SHA="${{ github.event.workflow_run.head_sha }}"
+            SHA="${{ github.sha }}"
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "sha_short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
@@ -499,6 +495,8 @@ jobs:
             echo "=== Deploying (zero-downtime rolling recreate) ==="
             doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate --remove-orphans
             docker image prune -f
+            docker builder prune -f --filter until=48h || true
+            docker image prune -a --filter until=168h -f || true
 
             echo "=== Health check ==="
             for i in $(seq 1 30); do

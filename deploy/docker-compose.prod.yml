@@ -60,6 +60,8 @@ services:
       - DD_LOGS_INJECTION=true
       - DD_PROFILING_ENABLED=false
       - DD_METRICS_ENABLED=true
+      # Q7.16: Explicit node ID for SnowflakeId — must be unique per instance
+      - SNOWFLAKE_NODE_ID=${SNOWFLAKE_NODE_ID:-1}
     depends_on:
       redis:
         condition: service_healthy
@@ -97,7 +99,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: blog-redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD}
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     healthcheck:

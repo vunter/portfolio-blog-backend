@@ -109,23 +109,23 @@ public class CacheWarmingService {
         log.info("Starting cache warming...");
         Instant start = Instant.now();
 
-        // Warm in parallel but don't block startup
         Flux.merge(
                 warmPublishedArticles(),
                 warmAllTags(),
                 warmPopularArticles()
         )
         .then()
-        .doOnSuccess(v -> {
-            long elapsed = Duration.between(start, Instant.now()).toMillis();
-            log.info("Cache warming completed in {}ms", elapsed);
-            startupWarmingComplete.set(true);
-            warmed = true;
-        })
-        .doOnError(e -> log.warn("Cache warming failed: {}", e.getMessage()))
         .subscribe(
-                null,
-                error -> log.error("Cache warming subscription error: {}", error.getMessage(), error)
+                v -> {
+                    long elapsed = Duration.between(start, Instant.now()).toMillis();
+                    log.info("Cache warming completed in {}ms", elapsed);
+                    startupWarmingComplete.set(true);
+                    warmed = true;
+                },
+                e -> {
+                    log.warn("Cache warming failed: {}", e.getMessage(), e);
+                    startupWarmingComplete.set(true);
+                }
         );
     }
 
@@ -175,25 +175,23 @@ public class CacheWarmingService {
 
         log.debug("Refreshing popular content cache");
         
-        // F-164: Use .block() instead of fire-and-forget .subscribe() —
-        // @Scheduled runs on its own thread pool, so blocking is safe and
-        // ensures completion before next scheduled run
-        try {
-            articleRepository.findTopByViewsCount(20)
-                    .flatMap(article ->
-                        cacheService.invalidateArticle(article.getSlug())
-                                .then(articleService.getPublishedArticleBySlug(article.getSlug()))
-                                .onErrorResume(e -> {
-                                    log.warn("Failed to refresh cache for article: {}", article.getSlug(), e);
-                                    return Mono.empty();
-                                })
-                    )
-                    .then()
-                    .block();
-        } catch (Exception e) {
-            backgroundErrors.incrementAndGet();
-            log.error("refreshPopularContent failed: {}", e.getMessage(), e);
-        }
+        articleRepository.findTopByViewsCount(20)
+                .flatMap(article ->
+                    cacheService.invalidateArticle(article.getSlug())
+                            .then(articleService.getPublishedArticleBySlug(article.getSlug()))
+                            .onErrorResume(e -> {
+                                log.warn("Failed to refresh cache for article: {}", article.getSlug(), e);
+                                return Mono.empty();
+                            })
+                )
+                .then()
+                .subscribe(
+                        v -> {},
+                        e -> {
+                            backgroundErrors.incrementAndGet();
+                            log.error("refreshPopularContent failed: {}", e.getMessage(), e);
+                        }
+                );
     }
 
     // ==================== PREFETCH ON ACCESS ====================
