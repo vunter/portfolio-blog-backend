@@ -40,36 +40,33 @@ RUN cp target/*.jar application.jar && \
 # Download Datadog agent in build stage (keeps wget out of runtime)
 RUN wget -q -O /tmp/dd-java-agent.jar https://dtdg.co/latest-java-tracer
 
-# Stage 2: Runtime (Alpine, minimal)
-FROM eclipse-temurin:25-jre-alpine AS runtime
+# Stage 2: Runtime (Debian — Playwright's Chromium requires glibc)
+FROM eclipse-temurin:25-jre-noble AS runtime
 
 LABEL maintainer="Leonardo Catananti <leonardo.catananti@gmail.com>" \
       version="2.0.0" \
       description="Portfolio Blog API"
 
-# Node.js + system deps for Playwright PDF generation
-# ttf-freefont covers Latin/European; font-noto-cjk removed (saves ~300MB)
-RUN apk add --no-cache \
-      nss \
-      freetype \
-      harfbuzz \
-      ca-certificates \
-      ttf-freefont \
+# Node.js for Playwright PDF generation
+RUN apt-get update && apt-get install -y --no-install-recommends \
       nodejs \
-      npm
+      npm \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright's own Chromium + its required system dependencies
+# Install Playwright's compatible Chromium + all system dependencies
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npx -y playwright@1.51.0 install --with-deps chromium
 
 # Datadog APM agent (copied from builder — no curl needed at runtime)
 COPY --from=builder /tmp/dd-java-agent.jar /opt/datadog/dd-java-agent.jar
 
-# Playwright: use Playwright-managed Chromium + system Node.js
+# Playwright: system Node.js for Playwright driver
 ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
+# Prevent Playwright Java from re-downloading browsers at runtime
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # Non-root user + writable dirs (before COPY to avoid chown layer duplication)
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
 WORKDIR /app
 
