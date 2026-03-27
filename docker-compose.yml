@@ -60,17 +60,25 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
       - S3_PUBLIC_URL=${S3_PUBLIC_URL:-http://localhost:9000/media}
+      # Q7.16: Explicit node ID for SnowflakeId to prevent MAC-based collisions in Docker
+      - SNOWFLAKE_NODE_ID=${SNOWFLAKE_NODE_ID:-1}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Q10.2: Memory limit to prevent unbounded heap growth
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # Q10.10: Wait for R2DBC pool initialization
+      start_period: 90s
     volumes:
       - uploads_data:/app/uploads
       - app_logs:/app/logs
@@ -123,7 +131,7 @@ services:
     container_name: blog-redis
     # ports:
     #   - "6379:6379"  # Uncomment for local development access
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-redis}
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD:-redis}
     read_only: true
     tmpfs:
       - /tmp:size=64M
@@ -188,6 +196,10 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: blog-prometheus
+    # Q10.5: Read-only filesystem with tmpfs for runtime data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
     # ports:  # INFRA-04: Prometheus NOT exposed directly; access via nginx at /prometheus
     #   - "9090:9090"
     volumes:
@@ -220,6 +232,10 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: blog-grafana
+    # Q10.5: Read-only filesystem with tmpfs for runtime data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
     # ports:  # SEC-06: Grafana NOT exposed directly; access via nginx at /grafana
     #   - "3000:3000"
     environment:

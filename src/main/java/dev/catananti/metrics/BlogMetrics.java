@@ -6,6 +6,7 @@ import dev.catananti.repository.SubscriberRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +36,11 @@ public class BlogMetrics {
     private Counter commentCreatedCounter;
     private Counter subscriptionNewCounter;
     private Counter subscriptionCancelledCounter;
+    // Q12.3: Security & operational counters
+    private Counter loginSuccessCounter;
+    private Counter loginFailureCounter;
+    private Counter pdfGeneratedCounter;
+    private Timer pdfGenerationTimer;
 
     @PostConstruct
     public void init() {
@@ -73,11 +79,18 @@ public class BlogMetrics {
         commentCreatedCounter = meterRegistry.counter("blog.comment.events.created");
         subscriptionNewCounter = meterRegistry.counter("blog.subscriptions.new");
         subscriptionCancelledCounter = meterRegistry.counter("blog.subscriptions.cancelled");
+
+        // Q12.3: Security & operational metrics
+        loginSuccessCounter = meterRegistry.counter("blog.auth.login", "result", "success");
+        loginFailureCounter = meterRegistry.counter("blog.auth.login", "result", "failure");
+        pdfGeneratedCounter = meterRegistry.counter("blog.pdf.generated");
+        pdfGenerationTimer = Timer.builder("blog.pdf.generation.duration")
+                .description("Time to generate PDF documents")
+                .register(meterRegistry);
     }
 
     @Scheduled(fixedRateString = "${scheduling.metrics-update-ms:60000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public void updateMetrics() {
-        // Combine all metric queries into a single subscribe to avoid 6 independent subscriptions
         reactor.core.publisher.Mono.zip(
                 articleRepository.countAll().onErrorReturn(0L),
                 articleRepository.countByStatus("PUBLISHED").onErrorReturn(0L),
@@ -94,7 +107,7 @@ public class BlogMetrics {
                     pendingComments.set(tuple.getT5());
                     activeSubscribers.set(tuple.getT6());
                 },
-                error -> log.warn("Failed to update metrics: {}", error.getMessage())
+                e -> log.warn("Failed to update metrics: {}", e.getMessage(), e)
         );
     }
 
@@ -122,5 +135,23 @@ public class BlogMetrics {
     public void incrementUnsubscription() {
         // F-055: Use cached counter reference
         subscriptionCancelledCounter.increment();
+    }
+
+    // Q12.3: Security metrics
+    public void incrementLoginSuccess() {
+        loginSuccessCounter.increment();
+    }
+
+    public void incrementLoginFailure() {
+        loginFailureCounter.increment();
+    }
+
+    // Q12.3: PDF generation metrics
+    public void incrementPdfGenerated() {
+        pdfGeneratedCounter.increment();
+    }
+
+    public Timer getPdfGenerationTimer() {
+        return pdfGenerationTimer;
     }
 }

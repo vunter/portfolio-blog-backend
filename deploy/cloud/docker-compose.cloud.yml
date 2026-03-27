@@ -244,6 +244,8 @@ services:
       - DD_PROCESS_AGENT_ENABLED=${DD_PROCESS_AGENT_ENABLED}
       - DD_TAGS=${DD_TAGS}
       - DD_HOSTNAME=${DD_HOSTNAME}
+      # Q10.3: Scrub sensitive data from logs before sending to Datadog
+      - DD_LOGS_CONFIG_PROCESSING_RULES=[{"type":"mask_sequences","name":"mask_emails","replace_placeholder":"[EMAIL_REDACTED]","pattern":"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+"},{"type":"mask_sequences","name":"mask_tokens","replace_placeholder":"[TOKEN_REDACTED]","pattern":"(Bearer |token=|password=|secret=)[^\\s,;\"]+"},{"type":"mask_sequences","name":"mask_ips","replace_placeholder":"[IP_REDACTED]","pattern":"\\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\b"}]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro

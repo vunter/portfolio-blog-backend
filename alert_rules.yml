@@ -30,3 +30,53 @@ groups:
         annotations:
           summary: "High API response latency"
           description: "95th percentile response time is above 2 seconds for the last 5 minutes."
+
+      # Q12.4: Login brute-force — more than 10 failed logins in 5 minutes
+      - alert: HighLoginFailureRate
+        expr: rate(blog_auth_login_total{result="failure"}[5m]) * 300 > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High login failure rate"
+          description: "More than 10 failed login attempts in the last 5 minutes — possible brute-force."
+
+      # Q12.4: Database circuit breaker open
+      - alert: DatabaseCircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{name="database"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database circuit breaker is OPEN"
+          description: "Database circuit breaker has been open for over 1 minute — DB connectivity issues."
+
+      # Q12.4: JVM heap usage above 85%
+      - alert: HighHeapUsage
+        expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "JVM heap usage above 85%"
+          description: "JVM heap memory usage has exceeded 85% for over 5 minutes."
+
+      # Q12.4: Pending comments spike — more than 20 unmoderated
+      - alert: PendingCommentsHigh
+        expr: blog_comments_pending > 20
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "High number of pending comments"
+          description: "{{ $value }} comments are awaiting moderation for over 30 minutes."
+
+      # Q12.4: PDF generation failures
+      - alert: PdfGenerationSlow
+        expr: histogram_quantile(0.95, rate(blog_pdf_generation_duration_seconds_bucket[15m])) > 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PDF generation is slow"
+          description: "95th percentile PDF generation time exceeds 15 seconds."

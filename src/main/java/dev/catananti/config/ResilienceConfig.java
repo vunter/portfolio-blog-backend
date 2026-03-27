@@ -1,5 +1,7 @@
 package dev.catananti.config;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +31,7 @@ public class ResilienceConfig {
     private final int databaseRetryMaxAttempts;
     private final Duration databaseRetryMinBackoff;
     private final Duration databaseRetryMaxBackoff;
+    private final CircuitBreaker databaseCircuitBreaker;
 
     public ResilienceConfig(
             @Value("${resilience.database.timeout-seconds:10}") int databaseTimeoutSeconds,
@@ -36,7 +39,11 @@ public class ResilienceConfig {
             @Value("${resilience.database.retry-min-backoff-ms:100}") int databaseRetryMinBackoffMs,
             @Value("${resilience.database.retry-max-backoff-ms:1000}") int databaseRetryMaxBackoffMs,
             @Value("${resilience.redis.timeout-seconds:5}") int redisTimeoutSeconds,
-            @Value("${resilience.external.timeout-seconds:30}") int externalTimeoutSeconds
+            @Value("${resilience.external.timeout-seconds:30}") int externalTimeoutSeconds,
+            @Value("${resilience.database.cb-failure-rate:50}") int cbFailureRate,
+            @Value("${resilience.database.cb-wait-open-seconds:30}") int cbWaitOpenSeconds,
+            @Value("${resilience.database.cb-sliding-window-size:10}") int cbSlidingWindowSize,
+            @Value("${resilience.database.cb-min-calls:5}") int cbMinCalls
     ) {
         this.databaseTimeout = Duration.ofSeconds(databaseTimeoutSeconds);
         this.redisTimeout = Duration.ofSeconds(redisTimeoutSeconds);
@@ -44,7 +51,18 @@ public class ResilienceConfig {
         this.databaseRetryMaxAttempts = databaseRetryMaxAttempts;
         this.databaseRetryMinBackoff = Duration.ofMillis(databaseRetryMinBackoffMs);
         this.databaseRetryMaxBackoff = Duration.ofMillis(databaseRetryMaxBackoffMs);
-        log.info("Resilience configuration initialized");
+
+        // Q9.2: Circuit breaker for database operations — fast-fails when DB is down
+        CircuitBreakerConfig cbConfig = CircuitBreakerConfig.custom()
+                .failureRateThreshold(cbFailureRate)
+                .waitDurationInOpenState(Duration.ofSeconds(cbWaitOpenSeconds))
+                .slidingWindowSize(cbSlidingWindowSize)
+                .minimumNumberOfCalls(cbMinCalls)
+                .build();
+        this.databaseCircuitBreaker = CircuitBreaker.of("database", cbConfig);
+
+        log.info("Resilience configuration initialized (DB circuit breaker: failureRate={}%, window={}, waitOpen={}s)",
+                cbFailureRate, cbSlidingWindowSize, cbWaitOpenSeconds);
     }
 
     /**
