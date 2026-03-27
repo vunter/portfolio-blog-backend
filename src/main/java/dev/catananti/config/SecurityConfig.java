@@ -192,8 +192,7 @@ public class SecurityConfig {
                         // CSP violation reports (public, sent by browsers automatically)
                         .pathMatchers(HttpMethod.POST, "/api/v1/csp-report").permitAll()
                         // Actuator - health/info/prometheus public (prometheus protected by nginx basic auth externally)
-                        .pathMatchers("/actuator/health/**", "/actuator/info").permitAll()
-                        .pathMatchers("/actuator/prometheus").hasRole("ADMIN")
+                        .pathMatchers("/actuator/health/**", "/actuator/info", "/actuator/prometheus").permitAll()
                         .pathMatchers("/actuator/**").hasRole("ADMIN")
                         // Kubernetes probes
                         .pathMatchers("/livez", "/readyz").permitAll()

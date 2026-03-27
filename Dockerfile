@@ -47,25 +47,26 @@ LABEL maintainer="Leonardo Catananti <leonardo.catananti@gmail.com>" \
       version="2.0.0" \
       description="Portfolio Blog API"
 
-# Chromium + Node.js for Playwright PDF generation
+# Node.js + system deps for Playwright PDF generation
 # ttf-freefont covers Latin/European; font-noto-cjk removed (saves ~300MB)
 RUN apk add --no-cache \
-      chromium \
       nss \
       freetype \
       harfbuzz \
       ca-certificates \
       ttf-freefont \
-      nodejs
+      nodejs \
+      npm
+
+# Install Playwright's own Chromium + its required system dependencies
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx -y playwright@1.51.0 install --with-deps chromium
 
 # Datadog APM agent (copied from builder — no curl needed at runtime)
 COPY --from=builder /tmp/dd-java-agent.jar /opt/datadog/dd-java-agent.jar
 
-# Playwright: use system Chromium + system Node.js
-ENV PLAYWRIGHT_BROWSERS_PATH=/usr \
-    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-    PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
+# Playwright: use Playwright-managed Chromium + system Node.js
+ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
 
 # Non-root user + writable dirs (before COPY to avoid chown layer duplication)
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
@@ -73,7 +74,8 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
 
 RUN mkdir -p /app/uploads /app/logs && \
-    chown -R appuser:appgroup /app /tmp
+    chown -R appuser:appgroup /app /tmp && \
+    chmod -R o+rx /ms-playwright
 
 # Spring Boot layered JAR: each COPY = separate Docker layer
 # Dependencies (~250MB) rarely change → cached between deploys
