@@ -66,6 +66,9 @@ public class Comment implements Persistable<Long>, NewRecordAware {
     @Column("created_at")
     private LocalDateTime createdAt;
 
+    @Column("updated_at")
+    private LocalDateTime updatedAt;
+
     @Transient
     @Builder.Default
     private List<Comment> replies = new ArrayList<>();

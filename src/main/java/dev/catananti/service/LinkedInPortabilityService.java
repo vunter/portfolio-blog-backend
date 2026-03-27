@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class LinkedInPortabilityService {
 
+    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
     private static final String SNAPSHOT_API = "https://api.linkedin.com/rest/memberSnapshotData";
     private static final String TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
     private static final String AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization";
@@ -79,15 +80,16 @@ public class LinkedInPortabilityService {
                         .with("redirect_uri", redirectBaseUrl + "/api/v1/resume/import/linkedin/callback"))
                 .retrieve()
                 .bodyToMono(String.class)
-                .map(body -> {
+                .timeout(Duration.ofSeconds(15))
+                .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = new tools.jackson.databind.ObjectMapper();
+                        var mapper = MAPPER;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse LinkedIn token response", e);
                         throw new RuntimeException("Failed to parse LinkedIn token response", e);
                     }
-                });
+                }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()));
     }
 
     /**
@@ -113,15 +115,16 @@ public class LinkedInPortabilityService {
                 .doOnError(e -> log.error("LinkedIn portability import failed: {}", e.getMessage(), e));
     }
 
-    public Mono<String> storeImportResult(String json) {
+    public Mono<String> storeImportResult(String json, String userIdentifier) {
         String key = UUID.randomUUID().toString();
+        String fullKey = REDIS_PREFIX + userIdentifier + ":" + key;
         return redisTemplate.opsForValue()
-                .set(REDIS_PREFIX + key, json, IMPORT_TTL)
+                .set(fullKey, json, IMPORT_TTL)
                 .thenReturn(key);
     }
 
-    public Mono<String> retrieveImportResult(String key) {
-        String fullKey = REDIS_PREFIX + key;
+    public Mono<String> retrieveImportResult(String key, String userIdentifier) {
+        String fullKey = REDIS_PREFIX + userIdentifier + ":" + key;
         return redisTemplate.opsForValue().getAndDelete(fullKey);
     }
 
@@ -154,9 +157,9 @@ public class LinkedInPortabilityService {
             responseMono = callSnapshotApi(accessToken, uri);
         }
 
-        return responseMono.map(body -> {
+        return responseMono.flatMap(body -> Mono.fromCallable(() -> {
             try {
-                var mapper = new tools.jackson.databind.ObjectMapper();
+                var mapper = MAPPER;
                 Map<String, Object> json = (Map<String, Object>) mapper.readValue(body, Map.class);
                 List<Map<String, Object>> elements = new ArrayList<>();
 
@@ -191,7 +194,7 @@ public class LinkedInPortabilityService {
                 log.error("Failed to parse LinkedIn snapshot response for {}", domain, e);
                 throw new RuntimeException("Failed to parse LinkedIn snapshot response for " + domain, e);
             }
-        });
+        }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()));
     }
 
     private Mono<String> callSnapshotApi(String accessToken, String uri) {
@@ -201,7 +204,8 @@ public class LinkedInPortabilityService {
                 .header("LinkedIn-Version", "202401")
                 .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
                 .retrieve()
-                .bodyToMono(String.class);
+                .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(30));
     }
 
     // ── Mapping ──────────────────────────────────────────────────────────

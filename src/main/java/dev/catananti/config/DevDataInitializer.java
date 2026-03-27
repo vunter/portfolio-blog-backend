@@ -46,7 +46,7 @@ public class DevDataInitializer {
     private static final String RESUME_NAME = "Leonardo Catananti - Senior Backend Engineer";
     @Value("${dev.admin.password:dev-s3cur3-p@ssw0rd-2026}") private String devAdminPassword;
     @Value("${dev.resume.html-path:classpath:dev/resume-template.html}") private String resumeHtmlFilePath;
-    private Map<String, Long> tagIdMap = new HashMap<>();
+    private final Map<String, Long> tagIdMap = new java.util.concurrent.ConcurrentHashMap<>();
 
     private String loadResource(String path) {
         try (InputStream is = new ClassPathResource(path).getInputStream()) {
@@ -84,12 +84,14 @@ public class DevDataInitializer {
             }
             long userId = idService.nextId();
             LocalDateTime now = LocalDateTime.now();
-            return databaseClient.sql("INSERT INTO users (id, email, password_hash, name, role, created_at, updated_at) VALUES (:id, :email, :passwordHash, :name, :role, :createdAt, :updatedAt)")
-                    .bind("id", userId).bind("email", DEV_ADMIN_EMAIL).bind("passwordHash", passwordEncoder.encode(devAdminPassword))
+            return Mono.fromCallable(() -> passwordEncoder.encode(devAdminPassword))
+                    .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                    .flatMap(encodedPassword -> databaseClient.sql("INSERT INTO users (id, email, password_hash, name, role, created_at, updated_at) VALUES (:id, :email, :passwordHash, :name, :role, :createdAt, :updatedAt)")
+                    .bind("id", userId).bind("email", DEV_ADMIN_EMAIL).bind("passwordHash", encodedPassword)
                     .bind("name", DEV_ADMIN_NAME).bind("role", "ADMIN").bind("createdAt", now).bind("updatedAt", now)
                     .fetch().rowsUpdated().doOnSuccess(r -> log.info("Dev admin user created: {}***@{}",
                             DEV_ADMIN_EMAIL.substring(0, Math.min(3, DEV_ADMIN_EMAIL.indexOf('@'))),
-                            DEV_ADMIN_EMAIL.substring(DEV_ADMIN_EMAIL.indexOf('@') + 1))).thenReturn(userId);
+                            DEV_ADMIN_EMAIL.substring(DEV_ADMIN_EMAIL.indexOf('@') + 1))).thenReturn(userId));
         });
     }
 

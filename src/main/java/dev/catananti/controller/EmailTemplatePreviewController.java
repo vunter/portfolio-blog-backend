@@ -363,7 +363,7 @@ public class EmailTemplatePreviewController {
 
     /** Update a custom variable by ID. */
     @PutMapping("/custom-variables/{id}")
-    public Mono<Map<String, Object>> updateCustomVariable(@PathVariable int id, @RequestBody Map<String, String> body) {
+    public Mono<Map<String, Object>> updateCustomVariable(@PathVariable long id, @RequestBody Map<String, String> body) {
         String value = body.get("value");
         if (value == null) {
             return Mono.error(new ResponseStatusException(
@@ -377,7 +377,7 @@ public class EmailTemplatePreviewController {
 
     /** Delete a custom variable by ID. */
     @DeleteMapping("/custom-variables/{id}")
-    public Mono<Map<String, String>> deleteCustomVariable(@PathVariable int id) {
+    public Mono<Map<String, String>> deleteCustomVariable(@PathVariable long id) {
         return templateService.deleteCustomVariable(id)
             .map(deleted -> deleted
                 ? Map.of("message", "Variable deleted")

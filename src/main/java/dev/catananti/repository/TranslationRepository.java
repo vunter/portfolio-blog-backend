@@ -106,9 +106,10 @@ public class TranslationRepository {
             .map(Long::intValue);
     }
 
-    public Mono<Long> insert(String key, String locale, String value, String namespace, String visibility) {
+    public Mono<Long> insert(long id, String key, String locale, String value, String namespace, String visibility) {
         return r2dbcTemplate.getDatabaseClient()
-            .sql("INSERT INTO ui_translations (translation_key, locale, value, namespace, visibility) VALUES (:key, :locale, :value, :ns, :vis) RETURNING id")
+            .sql("INSERT INTO ui_translations (id, translation_key, locale, value, namespace, visibility) VALUES (:id, :key, :locale, :value, :ns, :vis) RETURNING id")
+            .bind("id", id)
             .bind("key", key)
             .bind("locale", locale)
             .bind("value", value)

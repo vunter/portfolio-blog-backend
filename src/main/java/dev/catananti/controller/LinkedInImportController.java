@@ -3,6 +3,7 @@ package dev.catananti.controller;
 import dev.catananti.dto.ResumeProfileRequest;
 import dev.catananti.service.LinkedInPortabilityService;
 import dev.catananti.service.OAuth2Service;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
+
+import org.springframework.security.core.Authentication;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -24,6 +27,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 public class LinkedInImportController {
+
+    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
 
     private final LinkedInPortabilityService portabilityService;
     private final OAuth2Service oAuth2Service;
@@ -55,7 +60,9 @@ public class LinkedInImportController {
 
     @GetMapping("/callback")
     public Mono<ResponseEntity<Void>> callback(@RequestParam String code,
-                                                @RequestParam String state) {
+                                                @RequestParam String state,
+                                                Authentication authentication) {
+        String userIdentifier = PiiMasker.extractEmail(authentication);
         return oAuth2Service.validateAndConsumeState(state)
                 .flatMap(valid -> {
                     if (!valid) {
@@ -74,9 +81,9 @@ public class LinkedInImportController {
                             })
                             .flatMap(profileRequest -> {
                                 try {
-                                    var mapper = new tools.jackson.databind.ObjectMapper();
+                                    var mapper = MAPPER;
                                     String json = mapper.writeValueAsString(profileRequest);
-                                    return portabilityService.storeImportResult(json);
+                                    return portabilityService.storeImportResult(json, userIdentifier);
                                 } catch (Exception e) {
                                     return Mono.error(new RuntimeException("Failed to serialize import result", e));
                                 }
@@ -99,12 +106,13 @@ public class LinkedInImportController {
     }
 
     @GetMapping("/result/{key}")
-    public Mono<ResponseEntity<ResumeProfileRequest>> getResult(@PathVariable String key) {
-        return portabilityService.retrieveImportResult(key)
+    public Mono<ResponseEntity<ResumeProfileRequest>> getResult(@PathVariable String key,
+                                                                  Authentication authentication) {
+        String userIdentifier = PiiMasker.extractEmail(authentication);
+        return portabilityService.retrieveImportResult(key, userIdentifier)
                 .flatMap(json -> {
                     try {
-                        var mapper = new tools.jackson.databind.ObjectMapper();
-                        ResumeProfileRequest result = mapper.readValue(json, ResumeProfileRequest.class);
+                        ResumeProfileRequest result = MAPPER.readValue(json, ResumeProfileRequest.class);
                         return Mono.just(ResponseEntity.ok(result));
                     } catch (Exception e) {
                         log.error("Failed to deserialize import result for key={}: {}", key, e.getMessage(), e);

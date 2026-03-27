@@ -27,6 +27,15 @@ public enum AuditEventType {
     ARTICLE_PUBLISH,
     ARTICLE_RESTORE,
 
+    // OAuth2 operations
+    OAUTH2_ACCOUNT_LINKED,
+    OAUTH2_ACCOUNT_UNLINKED,
+
+    // MFA operations
+    MFA_ENABLED,
+    MFA_DISABLED,
+    MFA_METHOD_DISABLED,
+
     // System operations
     CACHE_INVALIDATE,
     DATA_EXPORT,

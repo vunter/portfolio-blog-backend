@@ -6,6 +6,7 @@ import dev.catananti.dto.ResumeTemplateRequest;
 import dev.catananti.dto.ResumeTemplateResponse;
 import dev.catananti.service.ResumeProfileService;
 import dev.catananti.service.ResumeTemplateService;
+import dev.catananti.util.PiiMasker;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -194,28 +195,6 @@ public class ResumeTemplateController {
                 .flatMap(userId -> templateService.getTemplatesByOwner(userId, page, size));
     }
 
-    @Operation(summary = "Get templates by status")
-    @GetMapping("/templates/status/{status}")
-    public Mono<List<ResumeTemplateResponse>> getTemplatesByStatus(
-            @PathVariable String status,
-            Authentication authentication) {
-        
-        return extractUserId(authentication)
-                .flatMapMany(userId -> templateService.getTemplatesByOwnerAndStatus(userId, status))
-                .collectList();
-    }
-
-    @Operation(summary = "Search templates by name")
-    @GetMapping("/templates/search")
-    public Mono<List<ResumeTemplateResponse>> searchTemplates(
-            @RequestParam String q,
-            Authentication authentication) {
-        
-        return extractUserId(authentication)
-                .flatMapMany(userId -> templateService.searchTemplates(userId, q))
-                .collectList();
-    }
-
     // ==================== INC-06: Duplicate & Preview ====================
 
     @Operation(summary = "Duplicate a template",
@@ -275,50 +254,7 @@ public class ResumeTemplateController {
                 });
     }
 
-    @Operation(summary = "Get most downloaded templates")
-    @GetMapping("/templates/popular")
-    public Mono<List<ResumeTemplateResponse>> getPopularTemplates(
-            @RequestParam(defaultValue = "10") int limit) {
-        return templateService.getMostDownloaded(limit).collectList();
-    }
-
-    @Operation(summary = "Get default template")
-    @GetMapping("/templates/default")
-    public Mono<ResumeTemplateResponse> getDefaultTemplate(
-            Authentication authentication) {
-        
-        return extractUserId(authentication)
-                .flatMap(templateService::getDefaultTemplate);
-    }
-
     // ==================== PDF Generation ====================
-
-    @Operation(summary = "Generate PDF from a saved template",
-               description = "Convert a saved HTML template to PDF for download")
-    @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "PDF generated successfully",
-                     content = @Content(mediaType = "application/pdf")),
-        @ApiResponse(responseCode = "404", description = "Template not found")
-    })
-    @PostMapping("/templates/{id}/pdf")
-    public Mono<ResponseEntity<byte[]>> generatePdfFromTemplate(
-            @Parameter(description = "Template ID") @PathVariable Long id,
-            @RequestBody(required = false) Map<String, String> variables,
-            Authentication authentication) {
-        // F-097: Verify ownership to prevent IDOR
-        return extractUserId(authentication)
-                .flatMap(userId -> templateService.getTemplateById(id)
-                        .flatMap(template -> verifyOwnership(template, userId)))
-                .then(templateService.generatePdfFromTemplate(id, variables))
-                .map(pdfBytes -> {
-                    String filename = generateFilename("resume");
-                    return ResponseEntity.ok()
-                            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                            .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_PDF_VALUE)
-                            .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(pdfBytes.length))
-                            .body(pdfBytes);
-                });
-    }
 
     @Operation(summary = "Generate PDF from template slug")
     @PostMapping("/templates/slug/{slug}/pdf")
@@ -360,38 +296,6 @@ public class ResumeTemplateController {
                 });
     }
 
-    @Operation(summary = "Preview PDF in browser",
-               description = "Generate PDF and display inline in browser instead of downloading")
-    @PostMapping("/pdf/preview")
-    public Mono<ResponseEntity<byte[]>> previewPdf(
-            @Valid @RequestBody PdfGenerationRequest request) {
-        
-        return templateService.generatePdfFromHtml(request)
-                .map(pdfBytes -> ResponseEntity.ok()
-                        .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
-                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_PDF_VALUE)
-                        .body(pdfBytes));
-    }
-
-    @Operation(summary = "Get default CSS styles",
-               description = "Returns default CSS styles for resume templates")
-    @GetMapping("/css/default")
-    public Mono<ResponseEntity<String>> getDefaultCss() {
-        // F-101: Load CSS from resource file instead of inline string literal
-        return Mono.fromCallable(() -> {
-                    try (var is = getClass().getResourceAsStream("/templates/default-resume.css")) {
-                        if (is == null) {
-                            throw new IllegalStateException("Default CSS resource not found");
-                        }
-                        return new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                    }
-                })
-                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                .map(defaultCss -> ResponseEntity.ok()
-                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_PLAIN_VALUE)
-                        .body(defaultCss));
-    }
-
     // ==================== Helper Methods ====================
 
     /**
@@ -400,7 +304,7 @@ public class ResumeTemplateController {
      */
     private Mono<ResumeTemplateResponse> verifyOwnership(ResumeTemplateResponse template, Long userId) {
         if (template.getOwnerId() != null && !template.getOwnerId().equals(String.valueOf(userId))) {
-            return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "Not authorized to access this template"));
+            return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN, "error.template_access_denied"));
         }
         return Mono.just(template);
     }
@@ -414,7 +318,7 @@ public class ResumeTemplateController {
         }
         
         // JWT stores email as principal, so look up the user by email to get the ID
-        String email = authentication.getName();
+        String email = PiiMasker.extractEmail(authentication);
         return userService.getUserByEmail(email)
                 .map(user -> Long.valueOf(user.getId()));
     }

@@ -8,8 +8,8 @@ import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.UserRepository;
-import dev.catananti.security.JwtAuthenticationFilter;
 import dev.catananti.util.DigestUtils;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -38,7 +38,7 @@ public class UserService {
     private final CloudflareEmailRoutingService cfEmailRoutingService;
     private final EmailService emailService;
     private final EmailChangeService emailChangeService;
-    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final UserCacheService userCacheService;
     private final RefreshTokenService refreshTokenService;
 
     public Flux<UserResponse> getAllUsers(int page, int size) {
@@ -113,7 +113,7 @@ public class UserService {
                                         .map(UserResponse::fromEntity);
                             });
                 })
-                .doOnSuccess(u -> log.debug("Created new user: {}", u.getEmail()));
+                .doOnSuccess(u -> log.debug("Created new user: {}", PiiMasker.maskEmail(u.getEmail())));
     }
 
     @Transactional
@@ -133,7 +133,7 @@ public class UserService {
                     }
                     return updateUserEntity(existingUser, request);
                 })
-                .doOnSuccess(u -> log.debug("Updated user: {}", u.getEmail()));
+                .doOnSuccess(u -> log.debug("Updated user: {}", PiiMasker.maskEmail(u.getEmail())));
     }
 
     private Mono<UserResponse> updateUserEntity(User user, UserRequest request) {
@@ -358,17 +358,19 @@ public class UserService {
         return cfAction
                 .then(userRepository.save(user))
                 .map(UserResponse::fromEntity)
-                .doOnSuccess(u -> {
-                    log.debug("Updated role for user {}: {} → {}", u.getEmail(), oldRole, u.getRole());
-                    // Send email notification on promotion to DEV/ADMIN
+                .flatMap(u -> {
+                    log.debug("Updated role for user {}: {} → {}", PiiMasker.maskEmail(u.getEmail()), oldRole, u.getRole());
+                    // Send email notification on promotion to DEV/ADMIN (non-critical)
                     if (!wasDevOrAbove && isDevOrAbove && user.getUsername() != null) {
                         String newDevEmail = user.getUsername() + "@catananti.dev";
-                        emailService.sendDevPromotionNotification(user.getEmail(), user.getName(), newDevEmail)
-                                .subscribe(
-                                        unused -> {},
-                                        err -> log.warn("Failed to send DEV promotion email to {}: {}", user.getEmail(), err.getMessage())
-                                );
+                        return emailService.sendDevPromotionNotification(user.getEmail(), u.getName(), newDevEmail)
+                                .onErrorResume(err -> {
+                                    log.warn("Failed to send DEV promotion email to {}: {}", PiiMasker.maskEmail(u.getEmail()), err.getMessage());
+                                    return Mono.empty();
+                                })
+                                .thenReturn(u);
                     }
+                    return Mono.just(u);
                 });
     }
 
@@ -376,7 +378,7 @@ public class UserService {
         return userRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")))
                 .flatMap(user -> {
-                    log.debug("Deleting user: {}", user.getEmail());
+                    log.debug("Deleting user: {}", PiiMasker.maskEmail(user.getEmail()));
                     return userRepository.delete(user);
                 });
     }
@@ -404,7 +406,7 @@ public class UserService {
                                                 if (adminCount <= 1) {
                                                     return Mono.error(new IllegalArgumentException("error.cannot_delete_last_admin"));
                                                 }
-                                                log.debug("Deleting user: {}", targetUser.getEmail());
+                                                log.debug("Deleting user: {}", PiiMasker.maskEmail(targetUser.getEmail()));
                                                 return userRepository.delete(targetUser);
                                             });
                                 }
@@ -432,11 +434,12 @@ public class UserService {
                     return userRepository.save(user);
                 })
                 .map(UserResponse::fromEntity)
-                .doOnSuccess(resp -> emailService.sendAccountReactivated(resp.getEmail(), resp.getName())
-                        .subscribe(
-                                unused -> {},
-                                err -> log.warn("Failed to send account reactivation email to {}: {}", resp.getEmail(), err.getMessage())
-                        ));
+                .flatMap(resp -> emailService.sendAccountReactivated(resp.getEmail(), resp.getName())
+                        .onErrorResume(err -> {
+                            log.warn("Failed to send account reactivation email to {}: {}", PiiMasker.maskEmail(resp.getEmail()), err.getMessage());
+                            return Mono.empty();
+                        })
+                        .thenReturn(resp));
     }
 
     public Mono<UserResponse> deactivateUser(Long id, String currentUserEmail) {
@@ -456,13 +459,14 @@ public class UserService {
                 })
                 .map(UserResponse::fromEntity)
                 // F-046: Evict deactivated user from JWT auth cache for immediate lockout
-                .doOnSuccess(resp -> {
-                    jwtAuthenticationFilter.evictUserFromCache(resp.getEmail());
-                    emailService.sendAccountDeactivated(resp.getEmail(), resp.getName())
-                        .subscribe(
-                                unused -> {},
-                                err -> log.warn("Failed to send account deactivation email to {}: {}", resp.getEmail(), err.getMessage())
-                        );
+                .flatMap(resp -> {
+                    userCacheService.evict(resp.getEmail());
+                    return emailService.sendAccountDeactivated(resp.getEmail(), resp.getName())
+                        .onErrorResume(err -> {
+                            log.warn("Failed to send account deactivation email to {}: {}", PiiMasker.maskEmail(resp.getEmail()), err.getMessage());
+                            return Mono.empty();
+                        })
+                        .thenReturn(resp);
                 });
     }
 }

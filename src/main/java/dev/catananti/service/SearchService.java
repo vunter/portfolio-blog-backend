@@ -46,9 +46,16 @@ public class SearchService {
     private final CommentRepository commentRepository;
     private final R2dbcEntityTemplate r2dbcTemplate;
     private final SearchQueryRepository searchQueryRepository;
+    private final IdService idService;
 
     @Value("${app.search.use-fts:false}")
     private boolean useFts;
+
+    @Value("${app.search.max-tags:10}")
+    private int maxTags;
+
+    @Value("${app.search.max-suggestions:5}")
+    private int maxSuggestions;
 
     /**
      * Generates the SQL condition for text search.
@@ -113,10 +120,12 @@ public class SearchService {
                 })
                 .zipWith(countMono)
                 .map(tuple -> buildPageResponse(tuple.getT1(), tuple.getT2(), request.getPage(), request.getSize()))
-                .doOnNext(pageResponse -> {
+                .flatMap(pageResponse -> {
                     if (!query.isEmpty()) {
-                        logSearchQuery(query, (int) pageResponse.getTotalElements(), httpRequest);
+                        return logSearchQuery(query, (int) pageResponse.getTotalElements(), httpRequest)
+                                .thenReturn(pageResponse);
                     }
+                    return Mono.just(pageResponse);
                 });
     }
 
@@ -125,7 +134,7 @@ public class SearchService {
         // Validate and sanitize tags - only allow alphanumeric and hyphens
         List<String> sanitizedTags = tags.stream()
                 .filter(t -> t != null && TAG_PATTERN.matcher(t).matches())
-                .limit(10) // Limit number of tags to prevent abuse
+                .limit(maxTags) // Limit number of tags to prevent abuse
                 .toList();
 
         if (sanitizedTags.isEmpty()) {
@@ -184,7 +193,7 @@ public class SearchService {
         // Validate and sanitize tags
         List<String> sanitizedTags = tags.stream()
                 .filter(t -> t != null && TAG_PATTERN.matcher(t).matches())
-                .limit(10)
+                .limit(maxTags)
                 .toList();
 
         if (sanitizedTags.isEmpty()) {
@@ -457,20 +466,23 @@ public class SearchService {
         return PageResponse.of(content, page, size, total);
     }
 
-    private void logSearchQuery(String query, int resultsCount, ServerHttpRequest httpRequest) {
+    private Mono<Void> logSearchQuery(String query, int resultsCount, ServerHttpRequest httpRequest) {
         String anonymizedIp = httpRequest != null
                 ? IpAddressExtractor.anonymizeIp(IpAddressExtractor.extractClientIp(httpRequest))
                 : null;
-        searchQueryRepository.save(SearchQuery.builder()
+        return searchQueryRepository.save(SearchQuery.builder()
+                .id(idService.nextId())
                 .queryText(query.trim().toLowerCase())
                 .resultsCount(resultsCount)
                 .userIp(anonymizedIp)
                 .createdAt(LocalDateTime.now())
                 .build())
-                .subscribe(
-                        saved -> log.debug("Search query logged: '{}' ({} results)", query, resultsCount),
-                        err -> log.warn("Failed to log search query: {}", err.getMessage())
-                );
+                .doOnSuccess(saved -> log.debug("Search query logged: '{}' ({} results)", query, resultsCount))
+                .onErrorResume(err -> {
+                    log.warn("Failed to log search query: {}", err.getMessage());
+                    return Mono.empty();
+                })
+                .then();
     }
 
     public Flux<String> getSuggestions(String prefix) {
@@ -485,9 +497,9 @@ public class SearchService {
                     WHERE status = 'PUBLISHED'
                     AND LOWER(title) LIKE LOWER($1)
                     ORDER BY views_count DESC
-                    LIMIT 5
-                )
-                """;
+                    LIMIT %d
+                ) AS subq
+                """.formatted(maxSuggestions);
 
         return r2dbcTemplate.getDatabaseClient()
                 .sql(sql)

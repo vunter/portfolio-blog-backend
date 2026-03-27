@@ -78,10 +78,11 @@ public class CommentService {
                         case "oldest" -> commentRepository.findApprovedByArticleIdSortedByOldest(article.getId(), size, offset);
                         default -> commentRepository.findApprovedByArticleIdPaginated(article.getId(), size, offset);
                     };
+                    // Q9.1: Batch-load replies for all root comments to avoid N+1
                     return commentsFlux
-                            .flatMap(this::enrichWithReplies)
-                            .map(this::toPublicResponse)
                             .collectList()
+                            .flatMap(this::batchEnrichWithReplies)
+                            .map(enriched -> enriched.stream().map(this::toPublicResponse).toList())
                             .zipWith(commentRepository.countApprovedByArticleId(article.getId()))
                             .map(tuple -> {
                                 var content = tuple.getT1();
@@ -122,7 +123,7 @@ public class CommentService {
                         parentValidation = commentRepository.findById(request.getParentId())
                                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Parent comment", "id", request.getParentId())))
                                 .filter(parent -> parent.getArticleId().equals(article.getId()))
-                                .switchIfEmpty(Mono.error(new IllegalArgumentException("Parent comment does not belong to this article")))
+                                .switchIfEmpty(Mono.error(new IllegalArgumentException("error.comment_wrong_article")))
                                 .then();
                     }
 
@@ -133,14 +134,17 @@ public class CommentService {
 
                         // F-167: Spam filter check
                         if (isSpam(sanitizedContent)) {
-                            return Mono.error(new IllegalArgumentException("Comment rejected: detected as spam"));
+                            return Mono.error(new IllegalArgumentException("error.comment_spam_detected"));
                         }
 
                         // Content moderation: profanity + auto-approval
-                        ContentModerationService.ModerationResult modResult =
-                                contentModerationService.analyzeContent(sanitizedContent, "en");
+                        // F-ASYNC-05: Offload content moderation from reactive thread
+                        return Mono.fromCallable(() ->
+                                contentModerationService.analyzeContent(sanitizedContent, "en"))
+                                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                                .flatMap(modResult ->
 
-                        return commentRepository.countApprovedByAuthorEmail(request.getAuthorEmail())
+                        commentRepository.countApprovedByAuthorEmail(request.getAuthorEmail())
                                 .defaultIfEmpty(0L)
                                 .flatMap(approvedCount -> {
                                     boolean isTrusted = approvedCount >= TRUSTED_COMMENTER_THRESHOLD;
@@ -190,7 +194,7 @@ public class CommentService {
                                                 blogMetrics.incrementCommentCreated();
                                             })
                                             .map(this::toPublicResponse);
-                                });
+                                }));
                     }));
                 });
     }
@@ -263,17 +267,17 @@ public class CommentService {
 
     @Transactional
     public Flux<CommentResponse> bulkApprove(List<Long> ids) {
-        return Flux.fromIterable(ids).flatMap(this::approveComment);
+        return Flux.fromIterable(ids).flatMap(this::approveComment, 8);
     }
 
     @Transactional
     public Flux<CommentResponse> bulkReject(List<Long> ids) {
-        return Flux.fromIterable(ids).flatMap(this::rejectComment);
+        return Flux.fromIterable(ids).flatMap(this::rejectComment, 8);
     }
 
     @Transactional
     public Flux<CommentResponse> bulkMarkAsSpam(List<Long> ids) {
-        return Flux.fromIterable(ids).flatMap(this::markAsSpam);
+        return Flux.fromIterable(ids).flatMap(this::markAsSpam, 8);
     }
 
     @Transactional
@@ -372,6 +376,7 @@ public class CommentService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Comment", "id", id)))
                 .flatMap(comment -> {
                     comment.setStatus(status);
+                    comment.setUpdatedAt(LocalDateTime.now());
                     return commentRepository.save(comment);
                 })
                 .doOnSuccess(c -> {
@@ -386,8 +391,30 @@ public class CommentService {
     private Mono<Comment> enrichWithReplies(Comment comment) {
         return commentRepository.findApprovedRepliesByParentId(comment.getId())
                 .collectList()
-                .doOnNext(comment::setReplies)
-                .thenReturn(comment);
+                .map(replies -> {
+                    comment.setReplies(replies);
+                    return comment;
+                });
+    }
+
+    /**
+     * Q9.1: Batch-load all replies for a list of root comments in a single query,
+     * eliminating the N+1 problem from the paginated endpoint.
+     */
+    private Mono<List<Comment>> batchEnrichWithReplies(List<Comment> rootComments) {
+        if (rootComments.isEmpty()) {
+            return Mono.just(rootComments);
+        }
+        var parentIds = rootComments.stream().map(Comment::getId).toList();
+        return commentRepository.findApprovedRepliesByParentIds(parentIds)
+                .collectList()
+                .map(allReplies -> {
+                    var repliesByParentId = allReplies.stream()
+                            .collect(java.util.stream.Collectors.groupingBy(Comment::getParentId));
+                    rootComments.forEach(root -> root.setReplies(
+                            repliesByParentId.getOrDefault(root.getId(), Collections.emptyList())));
+                    return rootComments;
+                });
     }
 
     /**
@@ -406,7 +433,7 @@ public class CommentService {
                         comment.getReplies().stream().map(this::toPublicResponse).toList() : 
                         Collections.emptyList())
                 .createdAt(comment.getCreatedAt())
-                .updatedAt(comment.getCreatedAt())
+                .updatedAt(comment.getUpdatedAt() != null ? comment.getUpdatedAt() : comment.getCreatedAt())
                 .build();
     }
 
@@ -428,7 +455,7 @@ public class CommentService {
                         comment.getReplies().stream().map(this::toResponse).toList() : 
                         Collections.emptyList())
                 .createdAt(comment.getCreatedAt())
-                .updatedAt(comment.getCreatedAt()) // Use createdAt as fallback for updatedAt
+                .updatedAt(comment.getUpdatedAt() != null ? comment.getUpdatedAt() : comment.getCreatedAt())
                 .build();
     }
 
@@ -460,7 +487,7 @@ public class CommentService {
     private String determineCommentStatus(ContentModerationService.ModerationResult result, boolean isTrusted) {
         return switch (result.getSeverity()) {
             case HIGH -> CommentStatus.REJECTED.name();
-            case MEDIUM -> CommentStatus.PENDING.name();
+            case MEDIUM -> isTrusted ? CommentStatus.APPROVED.name() : CommentStatus.PENDING.name();
             case LOW, NONE -> CommentStatus.APPROVED.name();
         };
     }

@@ -1,6 +1,7 @@
 package dev.catananti.controller;
 
 import dev.catananti.repository.TranslationRepository;
+import dev.catananti.service.IdService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ public class AdminTranslationController {
 
     private final TranslationRepository translationRepository;
     private final I18nController i18nController;
+    private final IdService idService;
 
     @GetMapping
     @Operation(summary = "List translations", description = "Paginated list with optional search filter")
@@ -56,19 +58,18 @@ public class AdminTranslationController {
             @RequestBody Map<String, String> body) {
         String value = body.get("value");
         if (value == null) {
-            return Mono.just(ResponseEntity.badRequest().body(Map.of("error", "value is required")));
+            throw new IllegalArgumentException("error.invalid_request_data");
         }
         return translationRepository.updateValue(id, value)
-            .doOnSuccess(rows -> {
+            .flatMap(rows -> {
                 if (rows > 0) {
-                    i18nController.invalidateCache()
-                            .subscribe(null, e -> log.warn("Cache invalidation failed after update: {}", e.getMessage()));
                     log.info("Translation {} updated", id);
+                    return i18nController.invalidateCache()
+                            .onErrorResume(e -> { log.warn("Cache invalidation failed after update: {}", e.getMessage()); return Mono.empty(); })
+                            .thenReturn(ResponseEntity.ok(Map.<String, String>of("status", "updated")));
                 }
-            })
-            .map(rows -> rows > 0
-                ? ResponseEntity.ok(Map.of("status", "updated"))
-                : ResponseEntity.notFound().build());
+                return Mono.just(ResponseEntity.<Map<String, String>>notFound().build());
+            });
     }
 
     @PostMapping
@@ -81,32 +82,31 @@ public class AdminTranslationController {
         String visibility = body.getOrDefault("visibility", "public");
 
         if (key == null || locale == null || value == null) {
-            return Mono.just(ResponseEntity.badRequest().body(Map.of("error", (Object) "translationKey, locale, and value are required")));
+            throw new IllegalArgumentException("error.invalid_request_data");
         }
 
-        return translationRepository.insert(key, locale, value, namespace, visibility)
-            .doOnSuccess(id -> {
-                i18nController.invalidateCache()
-                        .subscribe(null, e -> log.warn("Cache invalidation failed after create: {}", e.getMessage()));
+        return translationRepository.insert(idService.nextId(), key, locale, value, namespace, visibility)
+            .flatMap(id -> {
                 log.info("Translation created: {} (locale={}, id={})", key, locale, id);
-            })
-            .map(id -> ResponseEntity.ok(Map.of("id", (Object) id, "status", (Object) "created")));
+                return i18nController.invalidateCache()
+                        .onErrorResume(e -> { log.warn("Cache invalidation failed after create: {}", e.getMessage()); return Mono.empty(); })
+                        .thenReturn(ResponseEntity.ok(Map.of("id", (Object) id, "status", (Object) "created")));
+            });
     }
 
     @DeleteMapping("/{id}")
     @Operation(summary = "Delete translation")
     public Mono<ResponseEntity<Map<String, String>>> deleteTranslation(@PathVariable Long id) {
         return translationRepository.deleteById(id)
-            .doOnSuccess(rows -> {
+            .flatMap(rows -> {
                 if (rows > 0) {
-                    i18nController.invalidateCache()
-                            .subscribe(null, e -> log.warn("Cache invalidation failed after delete: {}", e.getMessage()));
                     log.info("Translation {} deleted", id);
+                    return i18nController.invalidateCache()
+                            .onErrorResume(e -> { log.warn("Cache invalidation failed after delete: {}", e.getMessage()); return Mono.empty(); })
+                            .thenReturn(ResponseEntity.ok(Map.of("status", "deleted")));
                 }
-            })
-            .map(rows -> rows > 0
-                ? ResponseEntity.ok(Map.of("status", "deleted"))
-                : ResponseEntity.notFound().build());
+                return Mono.just(ResponseEntity.<Map<String, String>>notFound().build());
+            });
     }
 
     @PostMapping("/cache/invalidate")

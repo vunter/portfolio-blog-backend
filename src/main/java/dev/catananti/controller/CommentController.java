@@ -17,6 +17,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -91,7 +92,7 @@ public class CommentController {
             @Parameter(description = "Article slug") String slug,
             @Valid @RequestBody CommentRequest request,
             @AuthenticationPrincipal String email) {
-        log.info("Creating comment for slug={} by user={}", slug, email);
+        log.info("Creating comment for slug={} by user={}", slug, PiiMasker.maskEmail(email));
         return userService.getUserByEmail(email)
                 .flatMap(user -> {
                     request.setAuthorName(user.getName() != null ? user.getName() : user.getUsername());

@@ -15,6 +15,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -99,11 +100,25 @@ public class AdminArticleController {
         return articleAdminService.archiveArticle(id);
     }
 
+    private static final Set<String> VALID_STATUSES = Set.of("DRAFT", "PUBLISHED", "ARCHIVED", "SCHEDULED", "REVIEW");
+    @Value("${app.articles.max-bulk-size:100}")
+    private int maxBulkSize;
+
     @PutMapping("/bulk-status")
     public Mono<ResponseEntity<Long>> bulkUpdateStatus(@RequestBody java.util.Map<String, Object> body) {
-        @SuppressWarnings("unchecked")
-        List<Long> ids = ((List<Number>) body.get("ids")).stream().map(Number::longValue).toList();
+        Object idsObj = body.get("ids");
         String status = (String) body.get("status");
+        if (idsObj == null || !(idsObj instanceof List<?>) || status == null || status.isBlank()) {
+            return Mono.just(ResponseEntity.badRequest().build());
+        }
+        if (!VALID_STATUSES.contains(status)) {
+            return Mono.just(ResponseEntity.badRequest().build());
+        }
+        @SuppressWarnings("unchecked")
+        List<Long> ids = ((List<Number>) idsObj).stream().map(Number::longValue).limit(maxBulkSize).toList();
+        if (ids.isEmpty()) {
+            return Mono.just(ResponseEntity.badRequest().build());
+        }
         log.info("Bulk status update: {} articles → {}", ids.size(), status);
         return articleAdminService.bulkUpdateStatus(ids, status)
                 .map(ResponseEntity::ok);

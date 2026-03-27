@@ -15,6 +15,10 @@ import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.factory.annotation.Value;
 
 @RestController
 @RequestMapping("/api/v1/newsletter/track")
@@ -23,6 +27,9 @@ import java.time.Duration;
 public class NewsletterTrackingController {
 
     private final NewsletterTrackingService trackingService;
+
+    @Value("${cors.allowed-origins:}")
+    private String allowedOrigins;
 
     // 1x1 transparent GIF (43 bytes)
     private static final byte[] TRACKING_PIXEL = new byte[]{
@@ -78,7 +85,23 @@ public class NewsletterTrackingController {
         try {
             URI uri = URI.create(url);
             String scheme = uri.getScheme();
-            return "http".equals(scheme) || "https".equals(scheme);
+            if (!"http".equals(scheme) && !"https".equals(scheme)) return false;
+            String host = uri.getHost();
+            if (host == null || host.isBlank()) return false;
+            // Reject URLs with embedded credentials (phishing vector)
+            if (uri.getUserInfo() != null) return false;
+            // Validate against allowed origins to prevent open redirect
+            if (allowedOrigins != null && !allowedOrigins.isBlank()) {
+                Set<String> allowedHosts = Set.of(allowedOrigins.split(",")).stream()
+                        .map(origin -> {
+                            try { return URI.create(origin.trim()).getHost(); }
+                            catch (Exception e) { return null; }
+                        })
+                        .filter(h -> h != null)
+                        .collect(Collectors.toSet());
+                return allowedHosts.contains(host);
+            }
+            return true;
         } catch (Exception e) {
             return false;
         }

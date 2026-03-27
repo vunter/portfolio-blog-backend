@@ -194,7 +194,7 @@ public class TagService {
     @Transactional
     public Mono<TagResponse> mergeTags(Long sourceTagId, Long targetTagId) {
         if (sourceTagId.equals(targetTagId)) {
-            return Mono.error(new IllegalArgumentException("Source and target tags must be different"));
+            return Mono.error(new IllegalArgumentException("error.tags_must_differ"));
         }
         return Mono.zip(
                 tagRepository.findById(sourceTagId)

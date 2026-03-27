@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -36,7 +37,7 @@ public class ReadingHistoryController {
             @AuthenticationPrincipal String email,
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
-        log.debug("Fetching reading history for user: {}", email);
+        log.debug("Fetching reading history for user: {}", PiiMasker.maskEmail(email));
         return readingHistoryService.getReadingHistory(email, page, size);
     }
 
@@ -44,7 +45,7 @@ public class ReadingHistoryController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @Operation(summary = "Clear reading history", description = "Delete all reading history for the authenticated user")
     public Mono<Void> clearHistory(@AuthenticationPrincipal String email) {
-        log.info("Clearing reading history for user: {}", email);
+        log.info("Clearing reading history for user: {}", PiiMasker.maskEmail(email));
         return readingHistoryService.clearHistory(email);
     }
 }

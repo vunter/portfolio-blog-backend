@@ -6,10 +6,13 @@ import dev.catananti.dto.SubscriberResponse;
 import dev.catananti.entity.Subscriber;
 import dev.catananti.entity.SubscriberStatus;
 import dev.catananti.exception.DuplicateResourceException;
+import org.springframework.dao.DuplicateKeyException;
 import dev.catananti.exception.ResourceNotFoundException;
+import org.springframework.transaction.annotation.Transactional;
 import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.util.DigestUtils;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,6 +44,7 @@ public class NewsletterService {
     @Value("${newsletter.confirmation-expiration-hours:48}")
     private int confirmationExpirationHours;
 
+    @Transactional
     public Mono<Map<String, String>> subscribe(SubscribeRequest request) {
         return subscriberRepository.findByEmail(request.getEmail())
                 .flatMap(existing -> {
@@ -75,7 +79,7 @@ public class NewsletterService {
                                 request.getName(),
                                 token
                         ).onErrorResume(e -> {
-                            log.warn("Failed to send confirmation email to {}: {}", request.getEmail(), e.getMessage());
+                            log.warn("Failed to send confirmation email to {}: {}", PiiMasker.maskEmail(request.getEmail()), e.getMessage());
                             return Mono.empty();
                         }).thenReturn(Map.of("message", response.get("message")));
                     }
@@ -106,7 +110,11 @@ public class NewsletterService {
 
         return subscriberRepository.save(subscriber)
                 .map(this::createConfirmationResponse)
-                .doOnSuccess(s -> log.debug("New subscriber: {}", request.getEmail()));
+                .doOnSuccess(s -> log.debug("New subscriber: {}", PiiMasker.maskEmail(request.getEmail())))
+                .onErrorResume(DuplicateKeyException.class, e -> {
+                    log.debug("Concurrent subscription for {}: {}", PiiMasker.maskEmail(request.getEmail()), e.getMessage());
+                    return Mono.error(new DuplicateResourceException("error.email_already_subscribed"));
+                });
     }
 
     private Map<String, String> createConfirmationResponse(Subscriber subscriber) {
@@ -117,6 +125,7 @@ public class NewsletterService {
         );
     }
 
+    @Transactional
     public Mono<Map<String, String>> confirmSubscription(String token) {
         return subscriberRepository.findByConfirmationToken(token)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Subscription", "token", token)))
@@ -144,13 +153,13 @@ public class NewsletterService {
                                 // Send welcome email after confirmation
                                 return emailService.sendNewsletterWelcome(s.getEmail(), s.getName(), s.getUnsubscribeToken())
                                         .onErrorResume(e -> {
-                                            log.warn("Failed to send welcome email to {}: {}", s.getEmail(), e.getMessage());
+                                            log.warn("Failed to send welcome email to {}: {}", PiiMasker.maskEmail(s.getEmail()), e.getMessage());
                                             return Mono.empty();
                                         })
                                         .thenReturn(Map.of("message", "success.newsletter_confirmed"));
                             })
                             .doOnSuccess(m -> {
-                                log.info("Subscriber confirmed: {}", subscriber.getEmail());
+                                log.info("Subscriber confirmed: {}", PiiMasker.maskEmail(subscriber.getEmail()));
                                 notificationEventService.subscriberJoined(subscriber.getEmail());
                                 blogMetrics.incrementSubscription();
                             });
@@ -167,7 +176,7 @@ public class NewsletterService {
                     return subscriberRepository.save(subscriber)
                             .map(s -> Map.of("message", "success.newsletter_unsubscribed"))
                             .doOnSuccess(m -> {
-                                log.debug("Subscriber unsubscribed: {}", email);
+                                log.debug("Subscriber unsubscribed: {}", PiiMasker.maskEmail(email));
                                 blogMetrics.incrementUnsubscription();
                             });
                 });
@@ -258,24 +267,24 @@ public class NewsletterService {
     /**
      * Cleanup expired pending subscriptions.
      * Runs daily at 3 AM by default.
-     * Uses .subscribe() to avoid blocking the scheduler thread.
      */
     @Scheduled(cron = "${scheduling.newsletter-cleanup-cron:0 0 3 * * *}")
     public void cleanupExpiredPendingSubscriptions() {
-        LocalDateTime expirationDate = LocalDateTime.now().minusHours(confirmationExpirationHours);
+        try {
+            LocalDateTime expirationDate = LocalDateTime.now().minusHours(confirmationExpirationHours);
 
-        subscriberRepository.countExpiredPendingSubscriptions(expirationDate)
-                .flatMap(count -> {
-                    if (count > 0) {
-                        log.info("Cleaning up {} expired pending subscriptions", count);
-                        return subscriberRepository.deleteExpiredPendingSubscriptions(expirationDate)
-                                .doOnSuccess(deleted -> log.info("Deleted {} expired pending subscriptions", deleted));
-                    }
-                    return Mono.just(0);
-                })
-                .subscribe(
-                        result -> log.debug("Newsletter cleanup completed"),
-                        error -> log.error("Error cleaning up expired subscriptions: {}", error.getMessage(), error)
-                );
+            subscriberRepository.countExpiredPendingSubscriptions(expirationDate)
+                    .flatMap(count -> {
+                        if (count > 0) {
+                            log.info("Cleaning up {} expired pending subscriptions", count);
+                            return subscriberRepository.deleteExpiredPendingSubscriptions(expirationDate)
+                                    .doOnSuccess(deleted -> log.info("Deleted {} expired pending subscriptions", deleted));
+                        }
+                        return Mono.just(0);
+                    })
+                    .block();
+        } catch (Exception e) {
+            log.error("Error cleaning up expired subscriptions: {}", e.getMessage(), e);
+        }
     }
 }

@@ -8,6 +8,7 @@ import dev.catananti.entity.UserRole;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.RoleUpgradeRequestRepository;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -66,12 +67,13 @@ public class RoleUpgradeRequestService {
                                 return roleUpgradeRequestRepository.save(request)
                                         .map(saved -> RoleUpgradeRequestResponse.fromEntityWithUser(
                                                 saved, user.getName(), user.getEmail(), user.getRole()))
-                                        .doOnSuccess(resp -> {
+                                        .doOnSuccess(resp ->
                                             log.info("Role upgrade request submitted by {} for role {}",
-                                                    userEmail, dto.requestedRole());
-                                            // Notify admin(s) via email
-                                            notifyAdminsOfRequest(user.getName(), user.getEmail(), dto.requestedRole(), dto.reason());
-                                        });
+                                                    userEmail, dto.requestedRole()))
+                                        .flatMap(resp ->
+                                            // Notify admin(s) via email (non-critical)
+                                            notifyAdminsOfRequest(user.getName(), user.getEmail(), dto.requestedRole(), dto.reason())
+                                                    .thenReturn(resp));
                             }));
                 });
     }
@@ -137,19 +139,19 @@ public class RoleUpgradeRequestService {
                                     .then(userRepository.findById(request.getUserId()))
                                     .map(user -> RoleUpgradeRequestResponse.fromEntityWithUser(
                                             request, user.getName(), user.getEmail(), user.getRole()))
-                                    .doOnSuccess(resp -> {
+                                    .doOnSuccess(resp ->
                                             log.info(
                                                     "Role upgrade request {} approved by {} — user {} promoted to {}",
-                                                    requestId, adminEmail, resp.getUserEmail(), resp.getRequestedRole());
-                                            // Notify the user about the approval
+                                                    requestId, PiiMasker.maskEmail(adminEmail), PiiMasker.maskEmail(resp.getUserEmail()), resp.getRequestedRole()))
+                                    .flatMap(resp ->
+                                            // Notify the user about the approval (non-critical)
                                             emailService.sendRoleRequestApproved(
                                                     resp.getUserEmail(), resp.getUserName(),
                                                     resp.getCurrentRole(), resp.getRequestedRole()
-                                            ).subscribe(
-                                                    unused -> {},
-                                                    err -> log.warn("Failed to send role approval email to {}: {}", resp.getUserEmail(), err.getMessage())
-                                            );
-                                    });
+                                            ).onErrorResume(err -> {
+                                                log.warn("Failed to send role approval email to {}: {}", PiiMasker.maskEmail(resp.getUserEmail()), err.getMessage());
+                                                return Mono.empty();
+                                            }).thenReturn(resp));
                         }));
     }
 
@@ -178,31 +180,34 @@ public class RoleUpgradeRequestService {
                                             .map(user -> RoleUpgradeRequestResponse.fromEntityWithUser(
                                                     saved, user.getName(), user.getEmail(), user.getRole()))
                                             .switchIfEmpty(Mono.just(RoleUpgradeRequestResponse.fromEntity(saved))))
-                                    .doOnSuccess(resp -> {
+                                    .doOnSuccess(resp ->
                                             log.info(
                                                     "Role upgrade request {} rejected by {}",
-                                                    requestId, adminEmail);
-                                            // Notify the user about the rejection
+                                                    requestId, PiiMasker.maskEmail(adminEmail)))
+                                    .flatMap(resp -> {
+                                            // Notify the user about the rejection (non-critical)
                                             if (resp.getUserEmail() != null) {
-                                                emailService.sendRoleRequestRejected(
+                                                return emailService.sendRoleRequestRejected(
                                                         resp.getUserEmail(), resp.getUserName(),
                                                         resp.getRequestedRole(), resp.getCurrentRole()
-                                                ).subscribe(
-                                                        unused -> {},
-                                                        err -> log.warn("Failed to send role rejection email to {}: {}", resp.getUserEmail(), err.getMessage())
-                                                );
+                                                ).onErrorResume(err -> {
+                                                    log.warn("Failed to send role rejection email to {}: {}", PiiMasker.maskEmail(resp.getUserEmail()), err.getMessage());
+                                                    return Mono.empty();
+                                                }).thenReturn(resp);
                                             }
+                                            return Mono.just(resp);
                                     });
                         }));
     }
 
-    private void notifyAdminsOfRequest(String userName, String userEmail, String requestedRole, String reason) {
-        userRepository.findByRole(UserRole.ADMIN.name())
+    private Mono<Void> notifyAdminsOfRequest(String userName, String userEmail, String requestedRole, String reason) {
+        return userRepository.findByRole(UserRole.ADMIN.name())
                 .flatMap(admin -> emailService.sendRoleUpgradeNotification(
                         admin.getEmail(), userName, userEmail, requestedRole, reason))
-                .subscribe(
-                        unused -> {},
-                        err -> log.warn("Failed to send role upgrade notification: {}", err.getMessage())
-                );
+                .onErrorResume(err -> {
+                    log.warn("Failed to send role upgrade notification: {}", err.getMessage());
+                    return Mono.empty();
+                })
+                .then();
     }
 }

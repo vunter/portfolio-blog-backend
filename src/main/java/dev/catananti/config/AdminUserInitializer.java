@@ -11,6 +11,8 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
 
@@ -52,28 +54,29 @@ public class AdminUserInitializer {
                 .flatMap(exists -> {
                     if (exists) {
                         log.debug("Admin user already exists: {}", maskEmail(adminEmail));
-                        return reactor.core.publisher.Mono.empty();
+                        return Mono.empty();
                     }
 
-                    User admin = User.builder()
-                            .id(idService.nextId())
-                            .email(adminEmail)
-                            .passwordHash(passwordEncoder.encode(adminPassword))
-                            .name(adminName)
-                            .role("ADMIN")
-                            .createdAt(LocalDateTime.now())
-                            .updatedAt(LocalDateTime.now())
-                            .build();
+                    return Mono.fromCallable(() -> passwordEncoder.encode(adminPassword))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .flatMap(encodedPassword -> {
+                                User admin = User.builder()
+                                        .id(idService.nextId())
+                                        .email(adminEmail)
+                                        .passwordHash(encodedPassword)
+                                        .name(adminName)
+                                        .role("ADMIN")
+                                        .createdAt(LocalDateTime.now())
+                                        .updatedAt(LocalDateTime.now())
+                                        .build();
 
-                    return userRepository.save(admin)
-                            .doOnSuccess(u -> {
-                                String email = u.getEmail();
-                                log.debug("Admin user created successfully: {}", maskEmail(email));
+                                return userRepository.save(admin)
+                                        .doOnSuccess(u -> log.debug("Admin user created successfully: {}", maskEmail(u.getEmail())));
                             });
                 })
                 .subscribe(
                         result -> {},
-                        error -> log.error("Failed to initialize admin user: {}", error.getMessage(), error)
+                        e -> log.error("Failed to initialize admin user: {}", e.getMessage(), e)
                 );
     }
 

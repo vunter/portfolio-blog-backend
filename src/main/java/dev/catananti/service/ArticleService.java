@@ -14,6 +14,7 @@ import dev.catananti.util.DigestUtils;
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
@@ -99,7 +100,8 @@ public class ArticleService {
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
-                .timeout(resilience.getDatabaseTimeout());
+                .timeout(resilience.getDatabaseTimeout())
+                .transformDeferred(CircuitBreakerOperator.of(resilience.getDatabaseCircuitBreaker()));
     }
 
     public Mono<ArticleResponse> getPublishedArticleBySlug(String slug) {
@@ -112,7 +114,8 @@ public class ArticleService {
                 .flatMap(article -> applyLocale(article, locale))
                 .flatMap(this::enrichArticleWithMetadata)
                 .map(this::mapToResponse)
-                .timeout(resilience.getDatabaseTimeout());
+                .timeout(resilience.getDatabaseTimeout())
+                .transformDeferred(CircuitBreakerOperator.of(resilience.getDatabaseCircuitBreaker()));
     }
 
     @Transactional
@@ -166,7 +169,8 @@ public class ArticleService {
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
-                .timeout(resilience.getDatabaseTimeout());
+                .timeout(resilience.getDatabaseTimeout())
+                .transformDeferred(CircuitBreakerOperator.of(resilience.getDatabaseCircuitBreaker()));
     }
 
     public Mono<PageResponse<ArticleResponse>> getArticlesByTag(String tagSlug, int page, int size) {
@@ -186,7 +190,8 @@ public class ArticleService {
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
-                .timeout(resilience.getDatabaseTimeout());
+                .timeout(resilience.getDatabaseTimeout())
+                .transformDeferred(CircuitBreakerOperator.of(resilience.getDatabaseCircuitBreaker()));
     }
 
     /**

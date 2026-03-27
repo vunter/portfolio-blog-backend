@@ -9,6 +9,7 @@ import org.springframework.context.support.ReloadableResourceBundleMessageSource
 
 import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,6 +29,7 @@ public class DbMessageSource implements MessageSource {
     private final ConcurrentHashMap<String, Map<String, String>> cache = new ConcurrentHashMap<>();
     private volatile long lastLoadTime = 0;
     private static final long CACHE_TTL_MS = 3600_000; // 1 hour
+    private static final List<String> SUPPORTED_LOCALES = List.of("en", "pt", "es", "it");
 
     public DbMessageSource(TranslationRepository translationRepository) {
         this.translationRepository = translationRepository;
@@ -35,6 +37,8 @@ public class DbMessageSource implements MessageSource {
         this.fallback.setBasename("classpath:messages");
         this.fallback.setDefaultEncoding(StandardCharsets.UTF_8.name());
         this.fallback.setUseCodeAsDefaultMessage(true);
+        // Eagerly pre-load translations on construction so no request ever blocks
+        preloadCache();
     }
 
     @Override
@@ -82,27 +86,63 @@ public class DbMessageSource implements MessageSource {
         cache.clear();
         lastLoadTime = 0;
         log.info("DbMessageSource cache invalidated");
+        // Re-populate asynchronously so next request doesn't block
+        reactor.core.publisher.Flux.fromIterable(SUPPORTED_LOCALES)
+            .flatMap(this::loadLocaleAsync)
+            .subscribe(
+                    null,
+                    error -> log.error("Failed to reload translations after cache invalidation: {}", error.getMessage(), error)
+            );
+    }
+
+    /**
+     * Eagerly pre-load all supported locales into cache (non-blocking).
+     * Falls back to properties files until async load completes.
+     */
+    private void preloadCache() {
+        lastLoadTime = System.currentTimeMillis();
+        reactor.core.publisher.Flux.fromIterable(SUPPORTED_LOCALES)
+                .flatMap(this::loadLocaleAsync)
+                .subscribe(
+                        null,
+                        e -> log.warn("Failed to pre-load translations from DB, will use fallback", e),
+                        () -> log.info("Pre-loaded backend translations for {} locales", SUPPORTED_LOCALES.size())
+                );
+    }
+
+    /**
+     * Asynchronously reload a single locale into cache (non-blocking).
+     */
+    private reactor.core.publisher.Mono<Void> loadLocaleAsync(String locale) {
+        return translationRepository.findBackendByLocale(locale)
+            .collectList()
+            .doOnNext(rows -> {
+                Map<String, String> result = new ConcurrentHashMap<>();
+                for (var row : rows) {
+                    result.put(row.get("key"), row.get("value"));
+                }
+                cache.put(locale, result);
+                log.debug("Async-loaded {} backend translations for locale {}", result.size(), locale);
+            })
+            .doOnError(e -> log.warn("Failed to async-load translations for locale {}", locale, e))
+            .onErrorComplete()
+            .then();
     }
 
     private Map<String, String> getTranslationsForLocale(String locale) {
         if (System.currentTimeMillis() - lastLoadTime > CACHE_TTL_MS) {
-            cache.clear();
+            // TTL expired — trigger async refresh, return stale cache (never block a request)
             lastLoadTime = System.currentTimeMillis();
+            reactor.core.publisher.Flux.fromIterable(SUPPORTED_LOCALES)
+                .flatMap(this::loadLocaleAsync)
+                .subscribe(
+                        null,
+                        error -> log.error("Failed to refresh translation cache: {}", error.getMessage(), error)
+                );
         }
 
-        return cache.computeIfAbsent(locale, loc -> {
-            try {
-                Map<String, String> result = new ConcurrentHashMap<>();
-                translationRepository.findBackendByLocale(loc)
-                    .doOnNext(row -> result.put(row.get("key"), row.get("value")))
-                    .blockLast(java.time.Duration.ofSeconds(10));
-                log.debug("Loaded {} backend translations for locale {}", result.size(), loc);
-                return result;
-            } catch (Exception e) {
-                log.warn("Failed to load translations from DB for locale {}, using fallback", loc, e);
-                return Map.of();
-            }
-        });
+        // Return from cache — always non-blocking. Empty map if not yet loaded.
+        return cache.getOrDefault(locale, Map.of());
     }
 
     private String resolveLocaleString(Locale locale) {

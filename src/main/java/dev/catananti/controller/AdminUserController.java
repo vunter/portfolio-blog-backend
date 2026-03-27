@@ -16,6 +16,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -91,7 +92,7 @@ public class AdminUserController {
     @Operation(summary = "Get current user", description = "Get the currently authenticated user's information")
     public Mono<ResponseEntity<UserResponse>> getCurrentUser(Authentication authentication) {
         log.debug("Fetching current user profile");
-        return userService.getUserByEmail(authentication.getName())
+        return userService.getUserByEmail(PiiMasker.extractEmail(authentication))
                 .map(ResponseEntity::ok);
     }
 
@@ -102,7 +103,7 @@ public class AdminUserController {
             @Valid @RequestBody ProfileUpdateRequest request,
             Authentication authentication) {
         log.info("Updating current user profile");
-        String currentEmail = authentication.getName();
+        String currentEmail = PiiMasker.extractEmail(authentication);
         boolean emailChanging = request.email() != null && !request.email().isBlank()
                 && !request.email().equalsIgnoreCase(currentEmail);
         return userService.updateProfile(currentEmail, request)
@@ -129,35 +130,9 @@ public class AdminUserController {
     @Operation(summary = "Get user by email", description = "Get user information by email address")
     public Mono<ResponseEntity<UserResponse>> getUserByEmail(
             @PathVariable String email) {
-        log.debug("Admin fetching user by email: {}", email);
+        log.debug("Admin fetching user by email: {}", PiiMasker.maskEmail(email));
         return userService.getUserByEmail(email)
                 .map(ResponseEntity::ok);
-    }
-
-    @GetMapping("/role/{role}")
-    @Operation(summary = "Get users by role", description = "Get all users with a specific role")
-    public Mono<ResponseEntity<PageResponse<UserResponse>>> getUsersByRole(
-            @PathVariable String role) {
-        log.debug("Admin fetching users by role: {}", role);
-        return userService.getUsersByRole(role.toUpperCase())
-                .collectList()
-                .zipWith(userService.countUsersByRole(role.toUpperCase()))
-                .map(tuple -> {
-                    var users = tuple.getT1();
-                    var count = tuple.getT2();
-                    
-                    var response = PageResponse.<UserResponse>builder()
-                            .content(users)
-                            .page(0)
-                            .size(users.size())
-                            .totalElements(count)
-                            .totalPages(1)
-                            .first(true)
-                            .last(true)
-                            .build();
-                    
-                    return ResponseEntity.ok(response);
-                });
     }
 
     @PostMapping
@@ -186,7 +161,7 @@ public class AdminUserController {
             @Valid @RequestBody RoleUpdateRequest request,
             Authentication authentication) {
         log.info("Updating role for user: id={}", id);
-        return userService.updateUserRoleSafe(id, request, authentication.getName())
+        return userService.updateUserRoleSafe(id, request, PiiMasker.extractEmail(authentication))
                 .map(ResponseEntity::ok);
     }
 
@@ -196,7 +171,7 @@ public class AdminUserController {
             @PathVariable Long id,
             Authentication authentication) {
         log.info("Soft-deleting (deactivating) user: id={}", id);
-        return userService.deactivateUser(id, authentication.getName())
+        return userService.deactivateUser(id, PiiMasker.extractEmail(authentication))
                 .map(ResponseEntity::ok);
     }
 
@@ -234,7 +209,7 @@ public class AdminUserController {
             @PathVariable Long id,
             Authentication authentication) {
         log.info("Deactivating user: id={}", id);
-        return userService.deactivateUser(id, authentication.getName())
+        return userService.deactivateUser(id, PiiMasker.extractEmail(authentication))
                 .map(ResponseEntity::ok);
     }
 
@@ -270,8 +245,8 @@ public class AdminUserController {
     public Mono<ResponseEntity<RoleUpgradeRequestResponse>> submitRoleUpgradeRequest(
             @Valid @RequestBody RoleUpgradeRequestDto request,
             Authentication authentication) {
-        log.info("Role upgrade request submitted by {}", authentication.getName());
-        return roleUpgradeRequestService.submitRequest(authentication.getName(), request)
+        log.info("Role upgrade request submitted by {}", PiiMasker.maskEmail(authentication.getName()));
+        return roleUpgradeRequestService.submitRequest(PiiMasker.extractEmail(authentication), request)
                 .map(resp -> ResponseEntity.status(HttpStatus.CREATED).body(resp));
     }
 
@@ -280,7 +255,7 @@ public class AdminUserController {
     @Operation(summary = "Get my latest role upgrade request", description = "Get the current user's latest role upgrade request status")
     public Mono<ResponseEntity<RoleUpgradeRequestResponse>> getMyRoleUpgradeRequest(
             Authentication authentication) {
-        return roleUpgradeRequestService.getMyLatestRequest(authentication.getName())
+        return roleUpgradeRequestService.getMyLatestRequest(PiiMasker.extractEmail(authentication))
                 .map(ResponseEntity::ok)
                 .defaultIfEmpty(ResponseEntity.noContent().build());
     }
@@ -299,7 +274,7 @@ public class AdminUserController {
             @PathVariable Long id,
             Authentication authentication) {
         log.info("Approving role upgrade request: id={}", id);
-        return roleUpgradeRequestService.approveRequest(id, authentication.getName())
+        return roleUpgradeRequestService.approveRequest(id, PiiMasker.extractEmail(authentication))
                 .map(ResponseEntity::ok);
     }
 
@@ -309,7 +284,7 @@ public class AdminUserController {
             @PathVariable Long id,
             Authentication authentication) {
         log.info("Rejecting role upgrade request: id={}", id);
-        return roleUpgradeRequestService.rejectRequest(id, authentication.getName())
+        return roleUpgradeRequestService.rejectRequest(id, PiiMasker.extractEmail(authentication))
                 .map(ResponseEntity::ok);
     }
 }

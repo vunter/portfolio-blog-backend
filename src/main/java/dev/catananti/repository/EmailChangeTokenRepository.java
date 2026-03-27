@@ -25,4 +25,7 @@ public interface EmailChangeTokenRepository extends ReactiveCrudRepository<Email
 
     @Query("SELECT COUNT(*) FROM email_change_tokens WHERE user_id = :userId AND created_at > :since")
     Mono<Long> countRecentTokensByUserId(Long userId, LocalDateTime since);
+
+    @Query("SELECT COUNT(*) FROM email_change_tokens WHERE new_email = :newEmail AND created_at > :since")
+    Mono<Long> countRecentTokensByNewEmail(String newEmail, LocalDateTime since);
 }
