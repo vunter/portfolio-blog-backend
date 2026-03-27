@@ -24,7 +24,7 @@ public class LanguagesController {
     @Operation(summary = "Get supported languages", description = "Returns all enabled languages for i18n")
     public Mono<List<Map<String, Object>>> getSupportedLanguages() {
         return r2dbcTemplate.getDatabaseClient()
-            .sql("SELECT code, name, native_name, sort_order FROM supported_languages WHERE enabled = true ORDER BY sort_order")
+            .sql("SELECT code, name, native_name, sort_order FROM languages WHERE is_active = true ORDER BY sort_order")
             .map((row, meta) -> {
                 Map<String, Object> lang = new java.util.LinkedHashMap<>();
                 lang.put("code", row.get("code", String.class));
