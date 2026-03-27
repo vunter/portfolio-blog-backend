@@ -115,7 +115,7 @@ class ImageUploadServiceTest {
 
             StepVerifier.create(imageUploadService.uploadImage(filePart))
                     .expectErrorMatches(e -> e instanceof IllegalArgumentException
-                            && e.getMessage().contains("Invalid filename"))
+                            && e.getMessage().contains("error.invalid_filename"))
                     .verify();
         }
 
@@ -126,7 +126,7 @@ class ImageUploadServiceTest {
 
             StepVerifier.create(imageUploadService.uploadImage(filePart))
                     .expectErrorMatches(e -> e instanceof IllegalArgumentException
-                            && e.getMessage().contains("Invalid filename"))
+                            && e.getMessage().contains("error.invalid_filename"))
                     .verify();
         }
 
@@ -137,7 +137,7 @@ class ImageUploadServiceTest {
 
             StepVerifier.create(imageUploadService.uploadImage(filePart))
                     .expectErrorMatches(e -> e instanceof IllegalArgumentException
-                            && e.getMessage().contains("Invalid filename"))
+                            && e.getMessage().contains("error.invalid_filename"))
                     .verify();
         }
 
@@ -148,7 +148,7 @@ class ImageUploadServiceTest {
 
             StepVerifier.create(imageUploadService.uploadImage(filePart))
                     .expectErrorMatches(e -> e instanceof IllegalArgumentException
-                            && e.getMessage().contains("Invalid filename"))
+                            && e.getMessage().contains("error.invalid_filename"))
                     .verify();
         }
 
@@ -159,7 +159,7 @@ class ImageUploadServiceTest {
 
             StepVerifier.create(imageUploadService.uploadImage(filePart))
                     .expectErrorMatches(e -> e instanceof IllegalArgumentException
-                            && e.getMessage().contains("Invalid filename"))
+                            && e.getMessage().contains("error.invalid_filename"))
                     .verify();
         }
 

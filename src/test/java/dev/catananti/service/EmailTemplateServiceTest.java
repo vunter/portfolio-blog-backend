@@ -27,7 +27,7 @@ class EmailTemplateServiceTest {
 
  @BeforeAll
  static void setUp() {
- service = new EmailTemplateService(null);
+ service = new EmailTemplateService(null, null);
  }
 
  // ── Shared variable builders ──────────────────────────────────────────────

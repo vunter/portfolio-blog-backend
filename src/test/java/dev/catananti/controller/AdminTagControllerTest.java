@@ -2,8 +2,9 @@ package dev.catananti.controller;
 
 import dev.catananti.dto.TagRequest;
 import dev.catananti.dto.TagResponse;
-import dev.catananti.repository.UserRepository;
+import dev.catananti.dto.UserResponse;
 import dev.catananti.service.TagService;
+import dev.catananti.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -34,15 +35,15 @@ class AdminTagControllerTest {
     private TagService tagService;
 
     @Mock
-    private UserRepository userRepository;
+    private UserService userService;
 
     @InjectMocks
     private AdminTagController controller;
 
     private <T> Mono<T> withAdminAuth(Mono<T> mono) {
-        lenient().when(userRepository.findByEmail("admin@test.com"))
-                .thenReturn(Mono.just(dev.catananti.entity.User.builder()
-                        .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+        lenient().when(userService.getUserByEmail("admin@test.com"))
+                .thenReturn(Mono.just(UserResponse.builder()
+                        .id("1").email("admin@test.com").name("Admin").role("ADMIN").build()));
         var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
                 List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
         return mono.contextWrite(ReactiveSecurityContextHolder.withSecurityContext(

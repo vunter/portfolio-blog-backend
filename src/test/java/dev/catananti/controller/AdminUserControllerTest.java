@@ -241,60 +241,6 @@ class AdminUserControllerTest {
     }
 
     @Nested
-    @DisplayName("GET /api/v1/admin/users/role/{role} - Get by Role")
-    class GetUsersByRole {
-
-        @Test
-        @DisplayName("Should return users filtered by ADMIN role")
-        void shouldReturnAdminUsers() {
-            when(userService.getUsersByRole("ADMIN")).thenReturn(Flux.just(adminUser));
-            when(userService.countUsersByRole("ADMIN")).thenReturn(Mono.just(1L));
-
-            StepVerifier.create(controller.getUsersByRole("admin"))
-                    .assertNext(response -> {
-                        var body = response.getBody();
-                        assertThat(body).isNotNull();
-                        assertThat(body.getContent()).hasSize(1);
-                        assertThat(body.getContent().getFirst().getRole()).isEqualTo("ADMIN");
-                    })
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("Should return users filtered by DEV role")
-        void shouldReturnDevUsers() {
-            when(userService.getUsersByRole("DEV")).thenReturn(Flux.just(devUser));
-            when(userService.countUsersByRole("DEV")).thenReturn(Mono.just(1L));
-
-            StepVerifier.create(controller.getUsersByRole("dev"))
-                    .assertNext(response -> {
-                        var body = response.getBody();
-                        assertThat(body).isNotNull();
-                        assertThat(body.getContent()).hasSize(1);
-                        assertThat(body.getContent().getFirst().getRole()).isEqualTo("DEV");
-                    })
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("Should convert role parameter to uppercase")
-        void shouldConvertRoleToUppercase() {
-            when(userService.getUsersByRole("VIEWER")).thenReturn(Flux.just(viewerUser));
-            when(userService.countUsersByRole("VIEWER")).thenReturn(Mono.just(1L));
-
-            StepVerifier.create(controller.getUsersByRole("viewer"))
-                    .assertNext(response -> {
-                        var body = response.getBody();
-                        assertThat(body).isNotNull();
-                        assertThat(body.getContent()).hasSize(1);
-                    })
-                    .verifyComplete();
-
-            verify(userService).getUsersByRole("VIEWER");
-        }
-    }
-
-    @Nested
     @DisplayName("POST /api/v1/admin/users - Create User")
     class CreateUser {
 

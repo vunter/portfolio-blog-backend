@@ -14,6 +14,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -54,6 +55,10 @@ class PasswordResetServiceTest {
 
     @BeforeEach
     void setUp() {
+        ReflectionTestUtils.setField(passwordResetService, "appUrl", "http://localhost:8080");
+        ReflectionTestUtils.setField(passwordResetService, "tokenValidityHours", 1);
+        ReflectionTestUtils.setField(passwordResetService, "maxTokensPerHour", 3);
+
         testUser = User.builder()
                 .id(1234567890123456789L)
                 .email("user@example.com")
@@ -214,7 +219,7 @@ class PasswordResetServiceTest {
             when(userRepository.findById(testUser.getId())).thenReturn(Mono.just(testUser));
             when(passwordEncoder.encode("StrongP@ss123!")).thenReturn("$2a$10$newhash");
             when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-            when(tokenRepository.markAsUsed(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.empty());
+            when(tokenRepository.markAsUsedConditionally(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(auditService.logPasswordReset(testUser.getId(), testUser.getEmail())).thenReturn(Mono.empty());
             when(emailService.sendPasswordChangedNotification("user@example.com", "Test User"))
                     .thenReturn(Mono.empty());
@@ -225,7 +230,7 @@ class PasswordResetServiceTest {
 
             verify(passwordEncoder).encode("StrongP@ss123!");
             verify(userRepository).save(argThat(user -> "$2a$10$newhash".equals(user.getPasswordHash())));
-            verify(tokenRepository).markAsUsed(eq(100L), any(LocalDateTime.class));
+            verify(tokenRepository).markAsUsedConditionally(eq(100L), any(LocalDateTime.class));
             verify(auditService).logPasswordReset(testUser.getId(), testUser.getEmail());
             verify(emailService).sendPasswordChangedNotification("user@example.com", "Test User");
         }
@@ -312,6 +317,7 @@ class PasswordResetServiceTest {
                     .build();
 
             when(tokenRepository.findByTokenAndUsedFalse(anyString())).thenReturn(Mono.just(validToken));
+            when(tokenRepository.markAsUsedConditionally(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(userRepository.findById(99999L)).thenReturn(Mono.empty());
 
             StepVerifier.create(passwordResetService.resetPassword("valid-token", "StrongP@ss123!"))
@@ -335,7 +341,7 @@ class PasswordResetServiceTest {
             when(userRepository.findById(testUser.getId())).thenReturn(Mono.just(testUser));
             when(passwordEncoder.encode("StrongP@ss123!")).thenReturn("$2a$10$newhash");
             when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-            when(tokenRepository.markAsUsed(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.empty());
+            when(tokenRepository.markAsUsedConditionally(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(auditService.logPasswordReset(testUser.getId(), testUser.getEmail())).thenReturn(Mono.empty());
             when(emailService.sendPasswordChangedNotification(anyString(), anyString()))
                     .thenReturn(Mono.error(new RuntimeException("SMTP failure")));

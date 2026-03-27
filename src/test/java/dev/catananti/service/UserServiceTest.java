@@ -7,7 +7,6 @@ import dev.catananti.dto.UserResponse;
 import dev.catananti.entity.User;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.UserRepository;
-import dev.catananti.security.JwtAuthenticationFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -51,7 +50,7 @@ class UserServiceTest {
     private EmailService emailService;
 
     @Mock
-    private JwtAuthenticationFilter jwtAuthenticationFilter;
+    private UserCacheService userCacheService;
 
     @Mock
     private EmailChangeService emailChangeService;

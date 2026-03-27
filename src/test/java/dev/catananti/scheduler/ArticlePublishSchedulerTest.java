@@ -55,6 +55,7 @@ class ArticlePublishSchedulerTest {
     void setUp() {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
         lenient().when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+        lenient().when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
         scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService, redisTemplate);
     }
 

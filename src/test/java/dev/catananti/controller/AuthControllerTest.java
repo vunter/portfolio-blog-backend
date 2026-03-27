@@ -3,8 +3,11 @@ package dev.catananti.controller;
 import dev.catananti.dto.AuthResponse;
 import dev.catananti.dto.LoginRequest;
 import dev.catananti.dto.TokenResponse;
+import dev.catananti.metrics.BlogMetrics;
+import dev.catananti.repository.UserRepository;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.RecaptchaService;
+import dev.catananti.service.RefreshTokenService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -19,6 +22,8 @@ import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.web.server.csrf.CsrfToken;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRepository;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import reactor.core.publisher.Mono;
@@ -47,10 +52,25 @@ class AuthControllerTest {
     private dev.catananti.service.EmailChangeService emailChangeService;
 
     @Mock
+    private RefreshTokenService refreshTokenService;
+
+    @Mock
+    private UserRepository userRepository;
+
+    @Mock
+    private ServerCsrfTokenRepository csrfTokenRepository;
+
+    @Mock
+    private BlogMetrics blogMetrics;
+
+    @Mock
     private ServerHttpRequest mockRequest;
 
     @Mock
     private ServerHttpResponse mockResponse;
+
+    @Mock
+    private org.springframework.web.server.ServerWebExchange mockExchange;
 
     @InjectMocks
     private AuthController authController;
@@ -65,6 +85,11 @@ class AuthControllerTest {
 
         MultiValueMap<String, HttpCookie> cookies = new LinkedMultiValueMap<>();
         lenient().when(mockRequest.getCookies()).thenReturn(cookies);
+
+        // Mock CSRF token rotation used in login/logout
+        CsrfToken mockCsrfToken = mock(CsrfToken.class);
+        lenient().when(csrfTokenRepository.generateToken(any())).thenReturn(Mono.just(mockCsrfToken));
+        lenient().when(csrfTokenRepository.saveToken(any(), any())).thenReturn(Mono.empty());
     }
 
     @Nested
@@ -72,32 +97,34 @@ class AuthControllerTest {
     class Login {
 
         @Test
-        @DisplayName("Should return auth response on valid login")
+        @DisplayName("Should return token response on valid login")
         void shouldReturnAuthResponse_WhenLoginValid() {
             // Given
             LoginRequest loginRequest = new LoginRequest("admin@test.com", "password123", false, null);
 
-            AuthResponse response = AuthResponse.builder()
-                    .token("jwt-token")
-                    .type("Bearer")
+            TokenResponse response = TokenResponse.builder()
+                    .accessToken("jwt-token")
+                    .refreshToken("refresh-token")
+                    .tokenType("Bearer")
                     .email("admin@test.com")
                     .name("Admin")
+                    .expiresIn(3600)
                     .build();
 
-            when(authService.login(any(LoginRequest.class), anyString()))
+            when(authService.loginWithRefreshToken(any(LoginRequest.class), anyString(), any()))
                     .thenReturn(Mono.just(response));
 
             // When & Then
-            StepVerifier.create(authController.login(loginRequest, mockRequest, mockResponse))
-                    .assertNext(authResponse -> {
-                        assertThat(authResponse.getToken()).isEqualTo("jwt-token");
-                        assertThat(authResponse.getType()).isEqualTo("Bearer");
-                        assertThat(authResponse.getEmail()).isEqualTo("admin@test.com");
-                        assertThat(authResponse.getName()).isEqualTo("Admin");
+            StepVerifier.create(authController.login(loginRequest, mockRequest, mockResponse, mockExchange))
+                    .assertNext(tokenResponse -> {
+                        assertThat(tokenResponse.getAccessToken()).isEqualTo("jwt-token");
+                        assertThat(tokenResponse.getTokenType()).isEqualTo("Bearer");
+                        assertThat(tokenResponse.getEmail()).isEqualTo("admin@test.com");
+                        assertThat(tokenResponse.getName()).isEqualTo("Admin");
                     })
                     .verifyComplete();
 
-            verify(authService).login(any(LoginRequest.class), eq("127.0.0.1"));
+            verify(authService).loginWithRefreshToken(any(LoginRequest.class), eq("127.0.0.1"), any());
         }
     }
 
@@ -111,7 +138,7 @@ class AuthControllerTest {
             // Given - no cookies set (setUp leaves empty cookie map)
 
             // When & Then
-            StepVerifier.create(authController.logout(mockRequest, mockResponse))
+            StepVerifier.create(authController.logout(mockRequest, mockResponse, mockExchange))
                     .verifyComplete();
 
             verify(authService, never()).logout(anyString(), anyString());
@@ -128,7 +155,7 @@ class AuthControllerTest {
             when(authService.logout(eq("refresh-token-123"), any())).thenReturn(Mono.empty());
 
             // When & Then
-            StepVerifier.create(authController.logout(mockRequest, mockResponse))
+            StepVerifier.create(authController.logout(mockRequest, mockResponse, mockExchange))
                     .verifyComplete();
 
             verify(authService).logout(eq("refresh-token-123"), any());

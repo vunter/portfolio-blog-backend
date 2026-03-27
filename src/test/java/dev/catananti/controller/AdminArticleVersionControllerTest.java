@@ -3,6 +3,7 @@ package dev.catananti.controller;
 import dev.catananti.dto.ArticleVersionResponse;
 import dev.catananti.entity.Article;
 import dev.catananti.entity.User;
+import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.ArticleVersionService;
 import dev.catananti.service.ArticleVersionService.VersionDiff;
@@ -32,6 +33,9 @@ class AdminArticleVersionControllerTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private ArticleRepository articleRepository;
 
     @InjectMocks
     private AdminArticleVersionController controller;
@@ -146,6 +150,13 @@ class AdminArticleVersionControllerTest {
             user.setId(1L);
             user.setName("Admin");
             user.setEmail("admin@test.com");
+            user.setRole("ADMIN");
+
+            Article existingArticle = Article.builder()
+                    .id(10L)
+                    .slug("test-article")
+                    .authorId(1L)
+                    .build();
 
             Article restoredArticle = Article.builder()
                     .id(10L)
@@ -153,6 +164,7 @@ class AdminArticleVersionControllerTest {
                     .build();
 
             when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(user));
+            when(articleRepository.findById(10L)).thenReturn(Mono.just(existingArticle));
             when(versionService.restoreVersion(10L, 2, 1L, "Admin")).thenReturn(Mono.just(restoredArticle));
 
             StepVerifier.create(controller.restoreVersion(10L, 2, "Manual restore", auth))

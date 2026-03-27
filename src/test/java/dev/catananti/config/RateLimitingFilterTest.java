@@ -1,6 +1,5 @@
 package dev.catananti.config;
 
-import dev.catananti.security.JwtTokenProvider;
 import dev.catananti.util.IpAddressExtractor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,9 +41,6 @@ class RateLimitingFilterTest {
     private ReactiveZSetOperations<String, String> zSetOperations;
 
     @Mock
-    private JwtTokenProvider tokenProvider;
-
-    @Mock
     private WebFilterChain chain;
 
     private RateLimitingFilter filter;
@@ -59,7 +55,6 @@ class RateLimitingFilterTest {
     void setUp() {
         filter = new RateLimitingFilter(
                 redisTemplate,
-                tokenProvider,
                 MAX_AUTHENTICATED,
                 MAX_ANONYMOUS,
                 MAX_LOGIN,
@@ -524,7 +519,7 @@ class RateLimitingFilterTest {
         void shouldRemoveExpiredEntries() {
             // Build a filter with a very short window so entries expire quickly
             RateLimitingFilter shortWindowFilter = new RateLimitingFilter(
-                    redisTemplate, tokenProvider,
+                    redisTemplate,
                     MAX_AUTHENTICATED, MAX_ANONYMOUS, MAX_LOGIN,
                     1 // 1-second window
             );

@@ -11,6 +11,7 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -87,6 +88,7 @@ class ArticleServiceTest {
 
         // Mock resilience config
         lenient().when(resilience.getDatabaseTimeout()).thenReturn(java.time.Duration.ofSeconds(10));
+        lenient().when(resilience.getDatabaseCircuitBreaker()).thenReturn(CircuitBreaker.ofDefaults("test"));
 
         // Mock CommentRepository
         lenient().when(commentRepository.countApprovedByArticleId(anyLong())).thenReturn(Mono.just(0L));
