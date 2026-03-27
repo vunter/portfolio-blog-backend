@@ -27,4 +27,9 @@ public record RegisterRequest(
     Boolean termsAccepted,
 
     String recaptchaToken
-) {}
+) {
+    /** Q7.10: Normalize email to lowercase to prevent case-sensitive duplicates */
+    public RegisterRequest {
+        if (email != null) email = email.toLowerCase().trim();
+    }
+}

@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 
@@ -71,14 +72,15 @@ public class RefreshTokenService {
         return refreshTokenRepository.findByTokenAndRevokedFalse(hashToken(token));
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<RefreshToken> verifyAndRotate(String token) {
         return verifyAndRotate(token, null, null);
     }
 
-    private static final int ROTATION_GRACE_PERIOD_SECONDS = 30;
+    @Value("${jwt.refresh-rotation-grace-seconds:10}")
+    private int rotationGracePeriodSeconds;
 
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<RefreshToken> verifyAndRotate(String token, String ipAddress, String userAgent) {
         String hashedToken = hashToken(token);
         String hashPrefix = hashedToken.substring(0, Math.min(12, hashedToken.length()));
@@ -113,7 +115,7 @@ public class RefreshTokenService {
                 .next()
                 .flatMap(latestActive -> {
                     boolean withinGrace = latestActive.getCreatedAt()
-                            .plusSeconds(ROTATION_GRACE_PERIOD_SECONDS)
+                            .plusSeconds(rotationGracePeriodSeconds)
                             .isAfter(LocalDateTime.now());
 
                     if (withinGrace) {
@@ -204,14 +206,11 @@ public class RefreshTokenService {
         return refreshTokenRepository.revokeAllByUserIdExcept(userId, currentHash);
     }
 
-    // F-207: Use .block() instead of fire-and-forget .subscribe() —
-    // @Scheduled runs on its own thread pool, so blocking is safe
     @Scheduled(fixedRateString = "${scheduling.refresh-token-cleanup-ms:3600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public void cleanupExpiredTokens() {
         try {
-            refreshTokenRepository.deleteExpired(LocalDateTime.now())
-                    .doOnSuccess(result -> log.info("Expired refresh tokens cleaned up"))
-                    .block();
+            refreshTokenRepository.deleteExpired(LocalDateTime.now()).block();
+            log.info("Expired refresh tokens cleaned up");
         } catch (Exception e) {
             log.error("Failed to cleanup expired refresh tokens", e);
         }

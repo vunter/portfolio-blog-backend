@@ -29,4 +29,9 @@ public class CommentRequest {
     private Long parentId; // For replies
 
     private String recaptchaToken;
+
+    /** Q7.10: Normalize email to lowercase to prevent case-sensitive duplicates */
+    public void setAuthorEmail(String authorEmail) {
+        this.authorEmail = authorEmail != null ? authorEmail.toLowerCase().trim() : null;
+    }
 }

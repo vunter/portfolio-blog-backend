@@ -33,4 +33,9 @@ public class UserRequest {
     @Pattern(regexp = "ADMIN|DEV|VIEWER", message = "Role must be ADMIN, DEV, or VIEWER")
     @Builder.Default
     private String role = "DEV";
+
+    /** Q7.10: Normalize email to lowercase to prevent case-sensitive duplicates */
+    public void setEmail(String email) {
+        this.email = email != null ? email.toLowerCase().trim() : null;
+    }
 }

@@ -1,5 +1,6 @@
 package dev.catananti.security;
 
+import dev.catananti.util.PiiMasker;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
@@ -51,7 +52,7 @@ public class JwtTokenProvider {
     }
 
     public String generateToken(String email, String role) {
-        log.debug("Generated JWT token for user: {}", email);
+        log.debug("Generated JWT token for user: {}", PiiMasker.maskEmail(email));
         var now = Instant.now();
         var expiryDate = now.plusMillis(expiration);
 

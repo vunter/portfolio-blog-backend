@@ -15,7 +15,9 @@ import dev.catananti.repository.UserRepository;
 import dev.catananti.security.AesEncryptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -49,8 +51,10 @@ public class MfaService {
     private final MfaBackupCodeRepository backupCodeRepository;
     private final UserRepository userRepository;
     private final AesEncryptor aesEncryptor;
+    private final PasswordEncoder passwordEncoder;
     private final IdService idService;
     private final EmailOtpService emailOtpService;
+    private final AuditService auditService;
     private final ReactiveStringRedisTemplate redisTemplate;
 
     private final String issuer;
@@ -60,29 +64,37 @@ public class MfaService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final String TOTP_USED_PREFIX = "mfa:totp-used:";
     private static final String TOTP_ATTEMPTS_PREFIX = "mfa:totp-attempts:";
-    private static final int MAX_TOTP_ATTEMPTS = 5;
-    private static final Duration TOTP_ATTEMPTS_WINDOW = Duration.ofMinutes(5);
+    private final int maxTotpAttempts;
+    private final Duration totpAttemptsWindow;
 
     public MfaService(UserMfaConfigRepository mfaConfigRepository,
                       MfaBackupCodeRepository backupCodeRepository,
                       UserRepository userRepository,
                       AesEncryptor aesEncryptor,
+                      PasswordEncoder passwordEncoder,
                       IdService idService,
                       EmailOtpService emailOtpService,
+                      AuditService auditService,
                       ReactiveStringRedisTemplate redisTemplate,
                       @Value("${mfa.totp.issuer:Catananti Portfolio}") String issuer,
                       @Value("${mfa.totp.digits:6}") int digits,
-                      @Value("${mfa.totp.period-seconds:30}") int periodSeconds) {
+                      @Value("${mfa.totp.period-seconds:30}") int periodSeconds,
+                      @Value("${mfa.totp.max-attempts:5}") int maxTotpAttempts,
+                      @Value("${mfa.totp.attempts-window-minutes:5}") int totpAttemptsWindowMinutes) {
         this.mfaConfigRepository = mfaConfigRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.userRepository = userRepository;
         this.aesEncryptor = aesEncryptor;
+        this.passwordEncoder = passwordEncoder;
         this.idService = idService;
         this.emailOtpService = emailOtpService;
+        this.auditService = auditService;
         this.redisTemplate = redisTemplate;
         this.issuer = issuer;
         this.digits = digits;
         this.periodSeconds = periodSeconds;
+        this.maxTotpAttempts = maxTotpAttempts;
+        this.totpAttemptsWindow = Duration.ofMinutes(totpAttemptsWindowMinutes);
     }
 
     /**
@@ -139,6 +151,7 @@ public class MfaService {
      * If valid, mark the config as verified, enable MFA, and generate backup codes.
      * Returns the plain-text backup codes on success, or empty list on failure.
      */
+    @Transactional
     public Mono<List<String>> verifySetup(Long userId, String code) {
         return mfaConfigRepository.findByUserIdAndMethod(userId, "TOTP")
                 .flatMap(config -> {
@@ -171,12 +184,12 @@ public class MfaService {
         return redisTemplate.opsForValue().increment(attemptsKey)
                 .flatMap(attempts -> {
                     if (attempts == 1) {
-                        return redisTemplate.expire(attemptsKey, TOTP_ATTEMPTS_WINDOW).thenReturn(attempts);
+                        return redisTemplate.expire(attemptsKey, totpAttemptsWindow).thenReturn(attempts);
                     }
                     return Mono.just(attempts);
                 })
                 .flatMap(attempts -> {
-                    if (attempts > MAX_TOTP_ATTEMPTS) {
+                    if (attempts > maxTotpAttempts) {
                         log.warn("TOTP brute force limit reached for userId={}", userId);
                         return Mono.just(false);
                     }
@@ -217,6 +230,7 @@ public class MfaService {
     /**
      * Disable MFA for a user: remove all MFA configs and update the user entity.
      */
+    @Transactional
     public Mono<Void> disableMfa(Long userId) {
         return mfaConfigRepository.deleteByUserId(userId)
                 .then(backupCodeRepository.deleteByUserId(userId))
@@ -226,7 +240,9 @@ public class MfaService {
                     user.setMfaPreferredMethod(null);
                     user.setUpdatedAt(LocalDateTime.now());
                     user.setNewRecord(false);
-                    return userRepository.save(user);
+                    return userRepository.save(user)
+                            .flatMap(saved -> auditService.logMfaDisabled(userId, saved.getEmail())
+                                    .thenReturn(saved));
                 })
                 .doOnSuccess(_ -> log.info("MFA disabled for user {}", userId))
                 .then();
@@ -236,6 +252,7 @@ public class MfaService {
      * Disable a single MFA method for a user after OTP verification.
      * If no methods remain, fully disables MFA and deletes backup codes.
      */
+    @Transactional
     public Mono<Void> disableMethod(Long userId, String methodToDisable) {
         return mfaConfigRepository.deleteByUserIdAndMethod(userId, methodToDisable)
                 .then(mfaConfigRepository.findByUserId(userId)
@@ -250,7 +267,9 @@ public class MfaService {
                                     user.setMfaPreferredMethod(null);
                                     user.setUpdatedAt(LocalDateTime.now());
                                     user.setNewRecord(false);
-                                    return userRepository.save(user);
+                                    return userRepository.save(user)
+                                            .flatMap(saved -> auditService.logMfaMethodDisabled(userId, saved.getEmail(), methodToDisable)
+                                                    .thenReturn(saved));
                                 })
                                 .then();
                     }
@@ -264,6 +283,8 @@ public class MfaService {
                                 }
                                 return Mono.just(user);
                             })
+                            .flatMap(user -> auditService.logMfaMethodDisabled(userId, user.getEmail(), methodToDisable)
+                                    .thenReturn(user))
                             .then();
                 })
                 .doOnSuccess(_ -> log.info("MFA method {} disabled for user {}", methodToDisable, userId));
@@ -281,9 +302,11 @@ public class MfaService {
                     Mono<Boolean> result = Mono.just(false);
                     for (UserMfaConfig config : configs) {
                         if ("TOTP".equals(config.getMethod()) && config.getSecretEncrypted() != null) {
-                            String decryptedSecret = aesEncryptor.decrypt(config.getSecretEncrypted());
+                            // F-ASYNC-06: Offload AES decrypt from reactive thread
                             result = result.flatMap(valid -> valid ? Mono.just(true)
-                                    : verifyTotpCode(decryptedSecret, code));
+                                    : Mono.fromCallable(() -> aesEncryptor.decrypt(config.getSecretEncrypted()))
+                                            .subscribeOn(Schedulers.boundedElastic())
+                                            .flatMap(decryptedSecret -> verifyTotpCode(decryptedSecret, code)));
                         }
                     }
                     // Also try EMAIL OTP via Redis
@@ -327,6 +350,7 @@ public class MfaService {
      * Generate a new set of backup codes for a user (replaces any existing ones).
      * Returns the plain-text codes (shown once to the user).
      */
+    @Transactional
     public Mono<List<String>> generateBackupCodes(Long userId) {
         return backupCodeRepository.deleteByUserId(userId)
                 .then(Mono.fromCallable(() -> {
@@ -356,19 +380,29 @@ public class MfaService {
 
     /**
      * Verify a backup code during MFA login. Marks the code as used if valid.
+     * SEC: Uses BCrypt (PasswordEncoder) for constant-time comparison instead of SHA-256.
      */
     public Mono<Boolean> verifyBackupCode(Long userId, String code) {
-        String hash = hashCode(code.trim().replace("-", "").replace(" ", ""));
+        String normalizedCode = code.toLowerCase().trim().replace("-", "").replace(" ", "");
         return backupCodeRepository.findByUserIdAndUsedFalse(userId)
-                .filter(bc -> bc.getCodeHash().equals(hash))
-                .next()
-                .flatMap(bc -> {
-                    bc.setUsed(true);
-                    bc.setUsedAt(LocalDateTime.now());
-                    bc.setNewRecord(false);
-                    return backupCodeRepository.save(bc).thenReturn(true);
-                })
-                .defaultIfEmpty(false);
+                .collectList()
+                .flatMap(codes -> Mono.fromCallable(() -> {
+                            // Offload BCrypt matching to boundedElastic — checks each stored hash
+                            for (MfaBackupCode bc : codes) {
+                                if (passwordEncoder.matches(normalizedCode, bc.getCodeHash())) {
+                                    return bc;
+                                }
+                            }
+                            return null;
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .flatMap(bc -> {
+                            if (bc == null) return Mono.just(false);
+                            bc.setUsed(true);
+                            bc.setUsedAt(LocalDateTime.now());
+                            bc.setNewRecord(false);
+                            return backupCodeRepository.save(bc).thenReturn(true);
+                        }));
     }
 
     /**
@@ -388,18 +422,12 @@ public class MfaService {
         return sb.substring(0, 4) + "-" + sb.substring(4, 8);
     }
 
-    private static String hashCode(String code) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(code.toLowerCase().getBytes(StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder();
-            for (byte b : hash) {
-                hex.append(String.format("%02x", b));
-            }
-            return hex.toString();
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to hash backup code", e);
-        }
+    /**
+     * SEC: Hash backup code using BCrypt (via PasswordEncoder) for constant-time
+     * comparison resistance. Must match the verification in verifyBackupCode().
+     */
+    private String hashCode(String code) {
+        return passwordEncoder.encode(code.toLowerCase().trim().replace("-", "").replace(" ", ""));
     }
 
     // ==================== Private Helpers ====================
@@ -411,7 +439,9 @@ public class MfaService {
                     user.setMfaPreferredMethod(method);
                     user.setUpdatedAt(LocalDateTime.now());
                     user.setNewRecord(false);
-                    return userRepository.save(user);
+                    return userRepository.save(user)
+                            .flatMap(saved -> auditService.logMfaEnabled(userId, saved.getEmail(), method)
+                                    .thenReturn(saved));
                 })
                 .doOnSuccess(_ -> log.info("MFA enabled for user {} with method {}", userId, method))
                 .then();

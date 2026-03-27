@@ -2,6 +2,7 @@ package dev.catananti.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dev.catananti.dto.ArticleExportData;
 import dev.catananti.dto.BlogExport;
@@ -16,6 +17,7 @@ import dev.catananti.repository.TagRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -199,10 +201,8 @@ public class ExportImportService {
                 });
     }
 
-    /**
-     * Maximum allowed import JSON size (2 MB) — aligned with AdminExportController.
-     */
-    private static final int MAX_IMPORT_SIZE = 2 * 1024 * 1024;
+    @Value("${app.export.max-import-size-bytes:2097152}")
+    private int maxImportSize;
 
     /**
      * Import blog data from JSON.
@@ -212,11 +212,11 @@ public class ExportImportService {
     @Transactional
     public Mono<ImportResult> importFromJson(String json, boolean overwrite) {
         if (json == null || json.isBlank()) {
-            return Mono.error(new IllegalArgumentException("Import data cannot be empty"));
+            return Mono.error(new IllegalArgumentException("error.import_data_empty"));
         }
-        if (json.length() > MAX_IMPORT_SIZE) {
+        if (json.length() > maxImportSize) {
             return Mono.error(new IllegalArgumentException(
-                    "Import data exceeds maximum allowed size of " + (MAX_IMPORT_SIZE / 1024 / 1024) + " MB"));
+                    "Import data exceeds maximum allowed size of " + (maxImportSize / 1024 / 1024) + " MB"));
         }
         // F-174: Offload blocking JSON parse to boundedElastic to avoid blocking event loop
         return Mono.fromCallable(() -> objectMapper.readValue(json, BlogExport.class))
@@ -228,7 +228,7 @@ public class ExportImportService {
     /**
      * Import blog data.
      */
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<ImportResult> importData(BlogExport export, boolean overwrite) {
         int totalTags = export.getTags() != null ? export.getTags().size() : 0;
         int totalArticles = export.getArticles() != null ? export.getArticles().size() : 0;
@@ -244,6 +244,7 @@ public class ExportImportService {
     private Mono<Void> importTags(List<TagExportData> tags, boolean overwrite) {
         return Flux.fromIterable(tags)
                 .flatMap(tagData -> {
+
                     return tagRepository.findBySlug(tagData.getSlug())
                             .flatMap(existingTag -> {
                                 if (overwrite) {
@@ -267,7 +268,7 @@ public class ExportImportService {
                                         .build();
                                 return tagRepository.save(newTag);
                             }));
-                })
+                }, 8)
                 .then();
     }
 
@@ -290,7 +291,7 @@ public class ExportImportService {
                                         .flatMap(saved -> reconnectTags(saved.getId(), articleData.getTagSlugs()))
                                         .thenReturn(1);
                             }));
-                })
+                }, 8)
                 .reduce(0, Integer::sum)
                 .map(count -> {
                     long tagCount = articles.stream()
@@ -312,7 +313,7 @@ public class ExportImportService {
         return articleTagRepository.deleteByArticleId(articleId)
                 .then(Flux.fromIterable(tagSlugs)
                         .flatMap(slug -> tagRepository.findBySlug(slug)
-                                .flatMap(tag -> articleTagRepository.insertArticleTag(articleId, tag.getId())))
+                                .flatMap(tag -> articleTagRepository.insertArticleTag(articleId, tag.getId())), 4)
                         .then());
     }
 

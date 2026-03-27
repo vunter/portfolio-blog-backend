@@ -1,12 +1,11 @@
 package dev.catananti.security;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import dev.catananti.entity.User;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.TokenBlacklistService;
+import dev.catananti.service.UserCacheService;
+import dev.catananti.util.PiiMasker;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Collections;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +24,7 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @Component
 @Slf4j
@@ -33,15 +33,7 @@ public class JwtAuthenticationFilter implements WebFilter {
     private final JwtTokenProvider tokenProvider;
     private final UserRepository userRepository;
     private final TokenBlacklistService tokenBlacklistService;
-
-    /**
-     * Short-lived Caffeine cache to avoid DB lookup on every authenticated request.
-     * F-046: 60s TTL is a security/performance tradeoff — deactivated users locked out within 1 minute
-     */
-    private final Cache<String, User> userCache = Caffeine.newBuilder()
-            .maximumSize(1_000)
-            .expireAfterWrite(Duration.ofSeconds(60))
-            .build();
+    private final UserCacheService userCacheService;
 
     private static final String ACCESS_TOKEN_COOKIE = "access_token";
 
@@ -54,10 +46,12 @@ public class JwtAuthenticationFilter implements WebFilter {
             "/api/v1/admin/auth/logout"
     );
 
-    public JwtAuthenticationFilter(JwtTokenProvider tokenProvider, UserRepository userRepository, TokenBlacklistService tokenBlacklistService) {
+    public JwtAuthenticationFilter(JwtTokenProvider tokenProvider, UserRepository userRepository,
+                                   TokenBlacklistService tokenBlacklistService, UserCacheService userCacheService) {
         this.tokenProvider = tokenProvider;
         this.userRepository = userRepository;
         this.tokenBlacklistService = tokenBlacklistService;
+        this.userCacheService = userCacheService;
     }
 
     private String getJwtFromRequest(ServerWebExchange exchange) {
@@ -89,17 +83,11 @@ public class JwtAuthenticationFilter implements WebFilter {
                         .build());
     }
 
-    /** Build a 401 Unauthorized JSON response (F-043: proper JSON escaping to prevent injection) */
-    private Mono<Void> unauthorizedResponse(ServerWebExchange exchange, String message) {
+    /** Build a 401 Unauthorized JSON response with generic message (Q3.12: no detail leakage) */
+    private Mono<Void> unauthorizedResponse(ServerWebExchange exchange, String reason) {
         exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
         exchange.getResponse().getHeaders().setContentType(MediaType.APPLICATION_JSON);
-        // Escape JSON special characters to prevent injection
-        String safeMessage = message.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-        String body = "{\"error\":\"Unauthorized\",\"message\":\"" + safeMessage + "\"}";
+        String body = "{\"error\":\"Unauthorized\",\"message\":\"Authentication failed\"}";
         DataBuffer buffer = exchange.getResponse().bufferFactory()
                 .wrap(body.getBytes(StandardCharsets.UTF_8));
         return exchange.getResponse().writeWith(Mono.just(buffer));
@@ -109,12 +97,11 @@ public class JwtAuthenticationFilter implements WebFilter {
 
     /**
      * F-046: Proactively evict a user from the authentication cache.
-     * Called by UserService when a user is deactivated or role-changed,
-     * so that the next request forces a fresh DB lookup.
+     * @deprecated Use {@link UserCacheService#evict(String)} directly instead.
      */
+    @Deprecated
     public void evictUserFromCache(String email) {
-        userCache.invalidate(email);
-        log.debug("Evicted user from auth cache: {}", email);
+        userCacheService.evict(email);
     }
 
     @Override
@@ -125,7 +112,11 @@ public class JwtAuthenticationFilter implements WebFilter {
         }
 
         String path = exchange.getRequest().getPath().value();
-        var validation = tokenProvider.validateAndParseClaims(jwt);
+
+        // F-ASYNC-01: Offload JWT crypto (HMAC-SHA512) from Netty event loop
+        return Mono.fromCallable(() -> tokenProvider.validateAndParseClaims(jwt))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(validation -> {
 
         if (!validation.valid()) {
             // Clear the invalid/expired cookie so the browser stops sending it
@@ -164,6 +155,7 @@ public class JwtAuthenticationFilter implements WebFilter {
         }
 
         return authenticateUser(exchange, chain, email, role);
+        }); // end Mono.fromCallable().flatMap()
     }
 
     /** F-044: Allowed roles whitelist to prevent arbitrary role injection */
@@ -172,16 +164,16 @@ public class JwtAuthenticationFilter implements WebFilter {
     private Mono<Void> authenticateUser(ServerWebExchange exchange, WebFilterChain chain, String email, String role) {
         // F-044: Validate role against whitelist
         if (role == null || !ALLOWED_ROLES.contains(role)) {
-            log.warn("Access denied — invalid role '{}' for user: {}", role, email);
+            log.warn("Access denied — invalid role '{}' for user: {}", role, PiiMasker.maskEmail(email));
             return unauthorizedResponse(exchange, "Invalid role");
         }
 
         // Try Caffeine cache first, fall back to DB
-        User cached = userCache.getIfPresent(email);
+        User cached = userCacheService.getIfPresent(email);
         Mono<User> userMono = cached != null
                 ? Mono.just(cached)
                 : userRepository.findByEmail(email)
-                        .doOnNext(u -> userCache.put(email, u));
+                        .doOnNext(u -> userCacheService.put(email, u));
 
         return userMono
                 .filter(user -> Boolean.TRUE.equals(user.getActive()))
@@ -189,12 +181,12 @@ public class JwtAuthenticationFilter implements WebFilter {
                 // because chain.filter() returns Mono<Void> which completes empty by design,
                 // and switchIfEmpty after flatMap would always trigger on Mono<Void> completion)
                 .switchIfEmpty(Mono.defer(() -> {
-                    log.warn("Access denied — user not found or inactive: {}", email);
+                    log.warn("Access denied — user not found or inactive: {}", PiiMasker.maskEmail(email));
                     return unauthorizedResponse(exchange, "User not found or inactive")
                             .then(Mono.empty());
                 }))
                 .flatMap(user -> {
-                    log.debug("Authentication successful for user: {}", email);
+                    log.debug("Authentication successful for user: {}", PiiMasker.maskEmail(email));
                     exchange.getAttributes().put(AUTHENTICATED_USER_ATTR, user);
                     var auth = new UsernamePasswordAuthenticationToken(
                             email, null,

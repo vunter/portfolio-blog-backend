@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 
+import org.springframework.core.env.Environment;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -39,6 +40,7 @@ import reactor.core.publisher.Mono;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final Environment environment;
 
     @Value("${cors.allowed-origins:http://localhost:3000,http://127.0.0.1:3000}")
     private String allowedOrigins;
@@ -73,15 +75,20 @@ public class SecurityConfig {
     );
 
     @Bean
-    public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
+    public CookieServerCsrfTokenRepository csrfTokenRepository() {
+        return CookieServerCsrfTokenRepository.withHttpOnlyFalse();
+    }
+
+    @Bean
+    public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http,
+                                                          CookieServerCsrfTokenRepository csrfTokenRepository) {
         log.info("Configuring security filter chain");
         return http
                 .csrf(csrf -> {
                     if (csrfEnabled) {
                         // Double-submit cookie pattern: XSRF-TOKEN cookie + X-XSRF-TOKEN header
-                        CookieServerCsrfTokenRepository tokenRepository = CookieServerCsrfTokenRepository.withHttpOnlyFalse();
                         ServerCsrfTokenRequestAttributeHandler handler = new ServerCsrfTokenRequestAttributeHandler();
-                        csrf.csrfTokenRepository(tokenRepository)
+                        csrf.csrfTokenRepository(csrfTokenRepository)
                             .csrfTokenRequestHandler(handler)
                             // Exempt public API endpoints (reads, auth, newsletter, contact)
                             .requireCsrfProtectionMatcher(exchange -> {
@@ -91,10 +98,12 @@ public class SecurityConfig {
                                 if ("GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
                                 }
-                                // Exempt public endpoints that are protected by rate limiting or consent headers
+                                // Exempt public endpoints protected by dedicated rate limiting and security layers
                                 if (path.startsWith("/api/v1/articles/") || path.startsWith("/api/v1/newsletter/")
                                     || path.startsWith("/api/v1/contact") || path.startsWith("/api/v1/search/")
-                                    || path.startsWith("/api/v1/analytics/")) {
+                                    || "/api/v1/analytics/event".equals(path)
+                                    || path.startsWith("/api/v1/analytics/view/")
+                                    || "/api/v1/csp-report".equals(path)) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
                                 }
                                 // F-016: Extracted to shared constant PUBLIC_AUTH_PATHS
@@ -130,11 +139,15 @@ public class SecurityConfig {
                         .frameOptions(frame -> frame.mode(XFrameOptionsServerHttpHeadersWriter.Mode.DENY))
                         // SEC-07: Static CSP removed — CspNonceFilter provides nonce-based CSP dynamically
                         // HSTS - Enable for production (HTTPS)
-                        .hsts(hsts -> hsts
-                                .includeSubdomains(true)
-                                .maxAge(java.time.Duration.ofDays(365))
-                                .preload(true)
-                        )
+                        .hsts(hsts -> {
+                            if (hstsEnabled) {
+                                hsts.includeSubdomains(true)
+                                    .maxAge(java.time.Duration.ofDays(365))
+                                    .preload(true);
+                            } else {
+                                hsts.disable();
+                            }
+                        })
                         // Referrer Policy - Prevent URL leakage
                         .referrerPolicy(referrer -> referrer
                                 .policy(ReferrerPolicyServerHttpHeadersWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN)
@@ -176,6 +189,8 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/analytics/**").permitAll()
                         // Contact form (public)
                         .pathMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
+                        // CSP violation reports (public, sent by browsers automatically)
+                        .pathMatchers(HttpMethod.POST, "/api/v1/csp-report").permitAll()
                         // Actuator - health/info/prometheus public (prometheus protected by nginx basic auth externally)
                         .pathMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         .pathMatchers("/actuator/prometheus").hasRole("ADMIN")
@@ -206,7 +221,6 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/admin/articles/**").hasAnyRole("ADMIN", "DEV")
                         .pathMatchers("/api/v1/admin/tags/**").hasAnyRole("ADMIN", "DEV")
                         .pathMatchers("/api/v1/admin/comments/**").hasAnyRole("ADMIN", "DEV")
-                        .pathMatchers("/api/v1/admin/images/**").hasAnyRole("ADMIN", "DEV")
                         .pathMatchers("/api/v1/admin/media/upload").authenticated()
                         .pathMatchers("/api/v1/admin/media/**").hasAnyRole("ADMIN", "DEV")
                         // Notifications - all authenticated users
@@ -259,6 +273,12 @@ public class SecurityConfig {
         List<String> origins = List.of(allowedOrigins.split(","));
         for (String origin : origins) {
             if ("*".equals(origin.trim())) {
+                boolean isProduction = environment.matchesProfiles("prod | cloud");
+                if (isProduction) {
+                    throw new IllegalStateException(
+                            "SEC: CORS origin wildcard '*' is forbidden in production profiles (prod, cloud). "
+                            + "Set cors.allowed-origins to specific origins.");
+                }
                 log.warn("SEC: CORS origin wildcard '*' detected — this is insecure for production! "
                         + "Set cors.allowed-origins to specific origins instead.");
             }
@@ -267,9 +287,11 @@ public class SecurityConfig {
         configuration.setAllowedOriginPatterns(origins);
         configuration.setAllowedMethods(List.of(allowedMethods.split(",")));
         // BUG-06: Added X-XSRF-TOKEN to allowed headers for CSRF double-submit cookie pattern
+        // SEC-AH-02: Added X-Analytics-Token for proof-of-visit session tokens
         configuration.setAllowedHeaders(List.of(
                 "Authorization", "Content-Type", "Accept", "Origin",
-                "X-Requested-With", "Cache-Control", "Accept-Language", "X-XSRF-TOKEN", "X-Visitor-Id"
+                "X-Requested-With", "Cache-Control", "Accept-Language", "X-XSRF-TOKEN", "X-Visitor-Id",
+                "X-Analytics-Token", "X-Analytics-Consent", "X-Idempotency-Key"
         ));
         configuration.setExposedHeaders(List.of(
                 "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"

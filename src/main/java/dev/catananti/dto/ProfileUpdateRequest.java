@@ -32,4 +32,9 @@ public record ProfileUpdateRequest(
     String preferredLocale,
 
     Boolean termsAccepted
-) {}
+) {
+    /** Q7.10: Normalize email to lowercase to prevent case-sensitive duplicates */
+    public ProfileUpdateRequest {
+        if (email != null) email = email.toLowerCase().trim();
+    }
+}

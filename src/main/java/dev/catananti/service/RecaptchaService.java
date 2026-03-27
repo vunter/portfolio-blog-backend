@@ -5,7 +5,6 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -49,6 +48,11 @@ public class RecaptchaService {
                 .build();
         this.circuitBreaker = CircuitBreaker.of("recaptcha-verify", cbConfig);
         log.info("reCAPTCHA circuit breaker initialised (failureRate=50%, window=5, waitOpen=60s)");
+
+        if (!enabled) {
+            log.warn("SEC-AH-04: reCAPTCHA is DISABLED — analytics events are protected by 3 layers only (token + PoW + rate limiting). "
+                    + "Set RECAPTCHA_ENABLED=true and provide RECAPTCHA_SECRET_KEY for the 4th layer.");
+        }
     }
 
     /**
@@ -70,12 +74,11 @@ public class RecaptchaService {
         }
 
         return webClient.post()
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                // F-205: Use URLEncoder to prevent URL-encoding injection in token
-                .bodyValue("secret=" + java.net.URLEncoder.encode(secretKey, java.nio.charset.StandardCharsets.UTF_8)
-                        + "&response=" + java.net.URLEncoder.encode(token, java.nio.charset.StandardCharsets.UTF_8))
+                .body(org.springframework.web.reactive.function.BodyInserters.fromFormData("secret", secretKey)
+                        .with("response", token))
                 .retrieve()
                 .bodyToMono(RecaptchaResponse.class)
+                .timeout(Duration.ofSeconds(10))
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .flatMap(response -> {
                     if (!response.success()) {

@@ -4,6 +4,7 @@ import dev.catananti.entity.PasswordResetToken;
 import dev.catananti.repository.PasswordResetTokenRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.util.DigestUtils;
+import dev.catananti.util.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,6 +13,7 @@ import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 
@@ -19,6 +21,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Base64;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Service for handling password reset functionality with security best practices.
@@ -36,14 +39,18 @@ public class PasswordResetService {
     private final RefreshTokenService refreshTokenService;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
 
-    private static final Duration TOKEN_VALIDITY = Duration.ofHours(1);
-    private static final int MAX_TOKENS_PER_HOUR = 3;
     private static final int TOKEN_LENGTH = 32;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final String RATE_LIMIT_PREFIX = "pwd_reset_rate:";
 
     @Value("${app.url:http://localhost:8080}")
     private String appUrl;
+
+    @Value("${app.password-reset.token-validity-hours:1}")
+    private int tokenValidityHours;
+
+    @Value("${app.password-reset.max-tokens-per-hour:3}")
+    private int maxTokensPerHour;
 
     public PasswordResetService(PasswordResetTokenRepository tokenRepository,
                                  UserRepository userRepository,
@@ -74,7 +81,7 @@ public class PasswordResetService {
 
         return rateLimitCheck.flatMap(allowed -> {
             if (!allowed) {
-                log.warn("Password reset rate limit exceeded for email: {}", normalizedEmail);
+                log.warn("Password reset rate limit exceeded for email: {}", PiiMasker.maskEmail(normalizedEmail));
                 return Mono.empty();
             }
             return userRepository.findByEmail(normalizedEmail)
@@ -83,8 +90,8 @@ public class PasswordResetService {
                         LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
                         return tokenRepository.countRecentTokensByUserId(user.getId(), oneHourAgo)
                                 .flatMap(count -> {
-                                    if (count >= MAX_TOKENS_PER_HOUR) {
-                                        log.warn("Password reset rate limit exceeded for: {}", email);
+                                    if (count >= maxTokensPerHour) {
+                                        log.warn("Password reset rate limit exceeded for: {}", PiiMasker.maskEmail(email));
                                         return Mono.empty(); // Silently ignore
                                     }
 
@@ -97,7 +104,7 @@ public class PasswordResetService {
                                             .id(idService.nextId())
                                             .userId(user.getId())
                                             .token(hashedToken)
-                                            .expiresAt(LocalDateTime.now().plus(TOKEN_VALIDITY))
+                                            .expiresAt(LocalDateTime.now().plus(Duration.ofHours(tokenValidityHours)))
                                             .used(false)
                                             .createdAt(LocalDateTime.now())
                                             .build();
@@ -108,12 +115,12 @@ public class PasswordResetService {
                                                     user.getName(),
                                                     plainToken // Send plain token in email
                                             ))
-                                            .doOnSuccess(v -> log.debug("Password reset email sent to: {}", email))
-                                            .doOnError(e -> log.error("Failed to process password reset for {}: {}", email, e.getMessage(), e));
+                                            .doOnSuccess(v -> log.debug("Password reset email sent to: {}", PiiMasker.maskEmail(email)))
+                                            .doOnError(e -> log.error("Failed to process password reset for {}: {}", PiiMasker.maskEmail(email), e.getMessage(), e));
                                 });
                     })
                     .onErrorResume(e -> {
-                        log.warn("Password reset error for {}: {}", email, e.getMessage(), e);
+                        log.warn("Password reset error for {}: {}", PiiMasker.maskEmail(email), e.getMessage(), e);
                         return Mono.empty();
                     })
                     .then();
@@ -134,17 +141,19 @@ public class PasswordResetService {
                     }
                     return Mono.just(count);
                 })
-                .map(count -> count <= MAX_TOKENS_PER_HOUR)
+                .map(count -> count <= maxTokensPerHour)
                 .onErrorReturn(true);
     }
 
     /**
      * Validate a password reset token.
+     * SEC: Artificial random delay prevents timing-based token enumeration.
      */
     public Mono<Boolean> validateToken(String token) {
         // SEC-05: Hash the incoming token before lookup
         return tokenRepository.findByTokenAndUsedFalse(hashToken(token))
                 .map(PasswordResetToken::isValid)
+                .delayElement(Duration.ofMillis(50 + ThreadLocalRandom.current().nextLong(100)))
                 .defaultIfEmpty(false);
     }
 
@@ -156,7 +165,7 @@ public class PasswordResetService {
             "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{12,}$"
     );
 
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<Void> resetPassword(String token, String newPassword) {
         // VAL-04: Validate password strength (aligned with RegisterRequest policy)
         if (newPassword == null || newPassword.length() < 12) {
@@ -169,27 +178,42 @@ public class PasswordResetService {
             return Mono.error(new IllegalArgumentException("error.password_too_weak"));
         }
         // SEC-05: Hash the incoming token before lookup
+        // SEC: Artificial random delay prevents timing-based token enumeration
         return tokenRepository.findByTokenAndUsedFalse(hashToken(token))
                 .filter(PasswordResetToken::isValid)
+                .delayElement(Duration.ofMillis(50 + ThreadLocalRandom.current().nextLong(100)))
                 .switchIfEmpty(Mono.error(new SecurityException("error.invalid_reset_token")))
-                .flatMap(resetToken -> userRepository.findById(resetToken.getUserId())
-                        .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
-                        .flatMap(user -> {
-                            // Update password
-                            user.setPasswordHash(passwordEncoder.encode(newPassword));
-                            user.setUpdatedAt(LocalDateTime.now());
+                // SEC: Atomically mark token as used FIRST to prevent concurrent use
+                .flatMap(resetToken -> tokenRepository.markAsUsedConditionally(resetToken.getId(), LocalDateTime.now())
+                        .flatMap(rowsAffected -> {
+                            if (rowsAffected == 0) {
+                                return Mono.<Void>error(new SecurityException("error.invalid_reset_token"));
+                            }
+                            return userRepository.findById(resetToken.getUserId())
+                                    .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
+                                    .flatMap(user -> {
+                                        // F-ASYNC-04: Offload BCrypt hashing (~200ms) from reactive thread
+                                        return Mono.fromCallable(() -> passwordEncoder.encode(newPassword))
+                                                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                                                .flatMap(encodedPassword -> {
+                                                    user.setPasswordHash(encodedPassword);
+                                                    user.setUpdatedAt(LocalDateTime.now());
 
-                            return userRepository.save(user)
-                                    .then(tokenRepository.markAsUsed(resetToken.getId(), LocalDateTime.now()))
-                                    .then(refreshTokenService.revokeAllUserTokens(user.getId()))
-                                    .then(auditService.logPasswordReset(user.getId(), user.getEmail()))
-                                    .doOnSuccess(v -> log.debug("Password reset completed for: {}", user.getEmail()))
-                                    // Email notification sent outside core transaction — failure doesn't roll back password change
-                                    .then(Mono.defer(() -> emailService.sendPasswordChangedNotification(user.getEmail(), user.getName())
-                                            .onErrorResume(e -> {
-                                                log.warn("Failed to send password changed notification to {}: {}", user.getEmail(), e.getMessage(), e);
-                                                return Mono.empty();
-                                            })));
+                                                    return userRepository.save(user)
+                                                            .then(refreshTokenService.revokeAllUserTokens(user.getId()))
+                                                            .then(auditService.logPasswordReset(user.getId(), user.getEmail()))
+                                                            .doOnSuccess(v -> log.debug("Password reset completed for: {}", PiiMasker.maskEmail(user.getEmail())))
+                                                            // Email notification sent outside core transaction — failure doesn't roll back password change
+                                                            .then(Mono.defer(() -> emailService.sendPasswordChangedNotification(user.getEmail(), user.getName())
+                                                                    .onErrorResume(e -> {
+                                                                        log.warn("Failed to send password changed notification to {}: {}", PiiMasker.maskEmail(user.getEmail()), e.getMessage(), e);
+                                                                        return Mono.empty();
+                                                                    })));
+                                                })
+                                                // SEC: If password change fails, un-mark the token so it can be reused
+                                                .onErrorResume(e -> tokenRepository.unmarkAsUsed(resetToken.getId())
+                                                        .then(Mono.error(e)));
+                                    });
                         }));
     }
 
@@ -211,15 +235,15 @@ public class PasswordResetService {
 
     /**
      * Cleanup expired tokens (runs every 6 hours by default).
-     * Uses .subscribe() to avoid blocking the scheduler thread.
      */
     @Scheduled(fixedRateString = "${scheduling.password-reset-cleanup-ms:21600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public void cleanupExpiredTokens() {
-        LocalDateTime cutoff = LocalDateTime.now().minusDays(1);
-        tokenRepository.deleteExpiredTokens(cutoff)
-                .subscribe(
-                        result -> log.info("Cleaned up expired password reset tokens"),
-                        error -> log.error("Failed to cleanup expired password reset tokens: {}", error.getMessage())
-                );
+        try {
+            LocalDateTime cutoff = LocalDateTime.now().minusDays(1);
+            tokenRepository.deleteExpiredTokens(cutoff).block();
+            log.info("Cleaned up expired password reset tokens");
+        } catch (Exception e) {
+            log.error("Failed to cleanup expired password reset tokens: {}", e.getMessage(), e);
+        }
     }
 }

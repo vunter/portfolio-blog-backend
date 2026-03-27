@@ -50,11 +50,12 @@ public class AesEncryptor {
     @PostConstruct
     public void validateConfiguration() {
         if (keySpec == null) {
-            log.warn("⚠️ MFA encryption key not configured! TOTP secrets will be stored in PLAINTEXT.");
-            if (Arrays.stream(environment.getActiveProfiles())
-                    .anyMatch(p -> p.equals("prod") || p.equals("cloud"))) {
-                throw new IllegalStateException("MFA_ENCRYPTION_KEY is required in production");
+            boolean isProductionProfile = Arrays.stream(environment.getActiveProfiles())
+                    .anyMatch(p -> p.equals("prod") || p.equals("cloud") || p.equals("cluster") || p.equals("nitro"));
+            if (isProductionProfile) {
+                throw new IllegalStateException("MFA_ENCRYPTION_KEY is required in production profiles (prod, cloud, cluster, nitro)");
             }
+            log.warn("MFA encryption key not configured! TOTP secrets will be stored in PLAINTEXT.");
         }
     }
 

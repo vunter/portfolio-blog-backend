@@ -8,6 +8,8 @@ import dev.catananti.entity.User;
 import dev.catananti.exception.AccountLockedException;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.security.JwtTokenProvider;
+import org.springframework.transaction.annotation.Transactional;
+import dev.catananti.util.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,8 +23,12 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -48,8 +54,12 @@ public class AuthService {
 
     private static final String MFA_TOKEN_PREFIX = "mfa:token:";
     private static final String MFA_ATTEMPTS_PREFIX = "mfa:attempts:";
-    private static final Duration MFA_TOKEN_TTL = Duration.ofMinutes(5);
-    private static final int MAX_MFA_ATTEMPTS = 5;
+
+    @Value("${mfa.token-ttl-minutes:5}")
+    private int mfaTokenTtlMinutes;
+
+    @Value("${mfa.max-attempts:5}")
+    private int maxMfaAttempts;
 
     @Value("${jwt.expiration:86400000}")
     private long jwtExpirationMs;
@@ -156,7 +166,7 @@ public class AuthService {
         return verifyCredentials(loginKey, request.getPassword(), clientIp)
                 .map(user -> {
                     String token = tokenProvider.generateToken(user.getEmail(), user.getRole());
-                    log.debug("User logged in: {} from IP: {}", user.getEmail(), clientIp);
+                    log.debug("User logged in: {} from IP: {}", PiiMasker.maskEmail(user.getEmail()), clientIp);
                     return AuthResponse.builder()
                             .token(token)
                             .type("Bearer")
@@ -195,7 +205,7 @@ public class AuthService {
         String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
         return refreshTokenService.createRefreshToken(user.getId(), clientIp, userAgent)
                 .map(refreshToken -> {
-                    log.debug("User logged in with refresh token: {} from IP: {}", user.getEmail(), clientIp);
+                    log.debug("User logged in with refresh token: {} from IP: {}", PiiMasker.maskEmail(user.getEmail()), clientIp);
                     return TokenResponse.builder()
                             .accessToken(accessToken)
                             .refreshToken(refreshToken.getToken())
@@ -210,13 +220,15 @@ public class AuthService {
     /**
      * Issue an MFA challenge: return a temporary mfaToken (stored in Redis) instead of real JWT.
      * The client must call /api/v1/admin/mfa/verify with this token + OTP code.
+     * SEC: The MFA token is hashed before use as a Redis key so a Redis compromise
+     * does not reveal tokens that could be used to complete MFA login.
      */
     private Mono<TokenResponse> issueMfaChallenge(User user) {
         String mfaToken = UUID.randomUUID().toString();
-        String redisKey = MFA_TOKEN_PREFIX + mfaToken;
-        // Store userId in Redis with short TTL
+        String redisKey = MFA_TOKEN_PREFIX + hashMfaToken(mfaToken);
+        // Store userId in Redis with short TTL; plain UUID returned to client
         return redisTemplate.opsForValue()
-                .set(redisKey, String.valueOf(user.getId()), MFA_TOKEN_TTL)
+                .set(redisKey, String.valueOf(user.getId()), Duration.ofMinutes(mfaTokenTtlMinutes))
                 .then(sendMfaCodeIfEmail(user))
                 .thenReturn(TokenResponse.builder()
                         .mfaRequired(true)
@@ -239,58 +251,60 @@ public class AuthService {
     /**
      * Complete MFA login: verify the OTP code, then issue real JWT tokens.
      */
-    public Mono<TokenResponse> completeMfaLogin(String mfaToken, String code, String method) {
-        String redisKey = MFA_TOKEN_PREFIX + mfaToken;
-        String attemptsKey = MFA_ATTEMPTS_PREFIX + mfaToken;
-        return redisTemplate.opsForValue().increment(attemptsKey)
-                .flatMap(attempts -> {
-                    if (attempts == 1) {
-                        return redisTemplate.expire(attemptsKey, MFA_TOKEN_TTL).thenReturn(attempts);
-                    }
-                    return Mono.just(attempts);
-                })
-                .flatMap(attempts -> {
-                    if (attempts > MAX_MFA_ATTEMPTS) {
-                        return redisTemplate.delete(redisKey)
-                                .then(redisTemplate.delete(attemptsKey))
-                                .then(Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
-                                        "Too many attempts. Please login again.")));
-                    }
-                    return redisTemplate.opsForValue().get(redisKey)
-                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "MFA token expired or invalid")))
-                .flatMap(userIdStr -> {
-                    Long userId = Long.valueOf(userIdStr);
-                    Mono<Boolean> verifyMono = switch (method) {
-                        case "TOTP" -> mfaService.map(svc -> svc.verifyTotp(userId, code))
-                                .orElse(Mono.just(false));
-                        case "EMAIL" -> emailOtpService.map(svc -> svc.verifyOtp(userId, code))
-                                .orElse(Mono.just(false));
-                        case "BACKUP" -> mfaService.map(svc -> svc.verifyBackupCode(userId, code))
-                                .orElse(Mono.just(false));
-                        default -> Mono.just(false);
-                    };
-                    return verifyMono.flatMap(valid -> {
-                        if (!valid) {
-                            return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid MFA code"));
-                        }
-                        // Delete mfaToken and attempts counter from Redis (one-time use)
-                        return redisTemplate.delete(redisKey)
-                                .then(redisTemplate.delete(attemptsKey))
-                                .then(userRepository.findById(userId))
-                                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found")))
-                                .flatMap(user -> issueFullTokens(user, "mfa-verified", null));
-                    });
-                });
-                });
+    public Mono<TokenResponse> completeMfaLogin(String mfaToken, String code, String method,
+                                                  String clientIp, String userAgent) {
+        String hashedToken = hashMfaToken(mfaToken);
+        String redisKey = MFA_TOKEN_PREFIX + hashedToken;
+        String attemptsKey = MFA_ATTEMPTS_PREFIX + hashedToken;
+
+        // Check token existence BEFORE incrementing the brute-force counter
+        return redisTemplate.opsForValue().get(redisKey)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "error.mfa_token_invalid")))
+                .flatMap(userIdStr -> redisTemplate.opsForValue().increment(attemptsKey)
+                        .flatMap(attempts -> {
+                            if (attempts == 1) {
+                                return redisTemplate.expire(attemptsKey, Duration.ofMinutes(mfaTokenTtlMinutes)).thenReturn(attempts);
+                            }
+                            return Mono.just(attempts);
+                        })
+                        .flatMap(attempts -> {
+                            if (attempts > maxMfaAttempts) {
+                                return redisTemplate.delete(redisKey)
+                                        .then(redisTemplate.delete(attemptsKey))
+                                        .then(Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                                                "Too many attempts. Please login again.")));
+                            }
+                            Long userId = Long.valueOf(userIdStr);
+                            Mono<Boolean> verifyMono = switch (method) {
+                                case "TOTP" -> mfaService.map(svc -> svc.verifyTotp(userId, code))
+                                        .orElse(Mono.just(false));
+                                case "EMAIL" -> emailOtpService.map(svc -> svc.verifyOtp(userId, code))
+                                        .orElse(Mono.just(false));
+                                case "BACKUP" -> mfaService.map(svc -> svc.verifyBackupCode(userId, code))
+                                        .orElse(Mono.just(false));
+                                default -> Mono.just(false);
+                            };
+                            return verifyMono.flatMap(valid -> {
+                                if (!valid) {
+                                    return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "error.mfa_code_invalid"));
+                                }
+                                // Delete mfaToken and attempts counter from Redis (one-time use)
+                                return redisTemplate.delete(redisKey)
+                                        .then(redisTemplate.delete(attemptsKey))
+                                        .then(userRepository.findById(userId))
+                                        .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.user_not_found")))
+                                        .flatMap(user -> issueFullTokens(user, clientIp, userAgent));
+                            });
+                        }));
     }
 
     /**
      * Resolve an mfaToken to the associated userId (for sending email OTP during login).
      */
     public Mono<Long> resolveMfaTokenUserId(String mfaToken) {
-        String redisKey = MFA_TOKEN_PREFIX + mfaToken;
+        String redisKey = MFA_TOKEN_PREFIX + hashMfaToken(mfaToken);
         return redisTemplate.opsForValue().get(redisKey)
-                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "MFA token expired or invalid")))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "error.mfa_token_invalid")))
                 .map(Long::valueOf);
     }
 
@@ -301,7 +315,7 @@ public class AuthService {
                         .map(user -> {
                             String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
                             
-                            log.debug("Access token refreshed for user: {}", user.getEmail());
+                            log.debug("Access token refreshed for user: {}", PiiMasker.maskEmail(user.getEmail()));
                             
                             return TokenResponse.builder()
                                     .accessToken(accessToken)
@@ -314,6 +328,7 @@ public class AuthService {
                         }));
     }
 
+    @Transactional
     public Mono<TokenResponse> register(RegisterRequest request, String clientIp) {
         String email = request.email().toLowerCase().trim();
 
@@ -366,12 +381,12 @@ public class AuthService {
 
                                 return emailService.sendRegistrationWelcome(savedUser.getEmail(), savedUser.getName())
                                         .onErrorResume(e -> {
-                                            log.warn("Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
+                                            log.warn("Failed to send welcome email to {}: {}", PiiMasker.maskEmail(savedUser.getEmail()), e.getMessage());
                                             return Mono.empty();
                                         })
                                         .then(refreshTokenService.createRefreshToken(savedUser.getId()))
                                         .map(refreshToken -> {
-                                            log.info("New user registered: {} from IP: {}", savedUser.getEmail(), clientIp);
+                                            log.info("New user registered: {} from IP: {}", PiiMasker.maskEmail(savedUser.getEmail()), clientIp);
 
                                             return TokenResponse.builder()
                                                     .accessToken(accessToken)
@@ -419,5 +434,19 @@ public class AuthService {
 
     public String getEmailFromToken(String token) {
         return tokenProvider.getEmailFromToken(token);
+    }
+
+    /**
+     * SEC: Hash an MFA token with SHA-256 before using as a Redis key.
+     * Ensures that a Redis compromise does not expose usable MFA tokens.
+     */
+    private String hashMfaToken(String token) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(token.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
     }
 }

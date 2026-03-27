@@ -24,4 +24,9 @@ public class LoginRequest {
     private Boolean rememberMe;
 
     private String recaptchaToken;
+
+    /** Q7.10: Normalize email to lowercase to prevent case-sensitive duplicates */
+    public void setEmail(String email) {
+        this.email = email != null ? email.toLowerCase().trim() : null;
+    }
 }
