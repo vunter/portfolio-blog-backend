@@ -9,6 +9,7 @@ import dev.catananti.service.ProfileTranslationService;
 import dev.catananti.service.PublicResumeService;
 import dev.catananti.service.ResumeProfileService;
 import dev.catananti.service.UserService;
+import dev.catananti.util.PiiMasker;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -39,6 +41,8 @@ public class ResumeProfileController {
 
     private static final Pattern NON_SLUG_CHARS = Pattern.compile("[^a-z0-9]+");
     private static final Pattern LEADING_TRAILING_HYPHENS = Pattern.compile("^-|-$");
+    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
+    private static final Set<String> RESPONSE_ONLY_FIELDS = Set.of("id", "ownerId", "locale", "avatarUrl", "createdAt", "updatedAt");
 
     /** F-093: Caffeine cache for email→userId to avoid DB lookup per request (TTL 5 min). */
     private final Cache<String, Long> userIdByEmailCache = Caffeine.newBuilder()
@@ -142,19 +146,19 @@ public class ResumeProfileController {
                                 .learningTopics(java.util.List.of())
                                 .build()))
                         .flatMap(existing -> {
-                            // Merge provided fields into existing profile request
-                            ResumeProfileRequest merged = ResumeProfileRequest.builder()
-                                    .fullName(updates.containsKey("fullName") ? String.valueOf(updates.get("fullName")) : existing.getFullName())
-                                    .title(updates.containsKey("title") ? String.valueOf(updates.get("title")) : existing.getTitle())
-                                    .email(updates.containsKey("email") ? String.valueOf(updates.get("email")) : existing.getEmail())
-                                    .phone(updates.containsKey("phone") ? String.valueOf(updates.get("phone")) : existing.getPhone())
-                                    .linkedin(updates.containsKey("linkedin") ? String.valueOf(updates.get("linkedin")) : existing.getLinkedin())
-                                    .github(updates.containsKey("github") ? String.valueOf(updates.get("github")) : existing.getGithub())
-                                    .website(updates.containsKey("website") ? String.valueOf(updates.get("website")) : existing.getWebsite())
-                                    .location(updates.containsKey("location") ? String.valueOf(updates.get("location")) : existing.getLocation())
-                                    .professionalSummary(updates.containsKey("professionalSummary") ? String.valueOf(updates.get("professionalSummary")) : existing.getProfessionalSummary())
-                                    .build();
-                            return profileService.saveProfile(userId, merged, locale);
+                            try {
+                                // Convert existing response to map, overlay with updates, strip response-only fields
+                                @SuppressWarnings("unchecked")
+                                java.util.Map<String, Object> base = MAPPER.convertValue(existing, java.util.Map.class);
+                                base.putAll(updates);
+                                RESPONSE_ONLY_FIELDS.forEach(base::remove);
+                                ResumeProfileRequest merged = MAPPER.convertValue(base, ResumeProfileRequest.class);
+                                return profileService.saveProfile(userId, merged, locale);
+                            } catch (Exception e) {
+                                return Mono.error(new org.springframework.web.server.ResponseStatusException(
+                                        org.springframework.http.HttpStatus.BAD_REQUEST,
+                                        "Invalid patch data"));
+                            }
                         }))
                 .doOnSuccess(profile -> publicResumeService.clearPdfCache(null))
                 .map(ResponseEntity::ok);
@@ -289,7 +293,7 @@ public class ResumeProfileController {
         if (authentication == null) {
             return Mono.error(new IllegalStateException("User not authenticated"));
         }
-        String email = authentication.getName();
+        String email = PiiMasker.extractEmail(authentication);
         Long cached = userIdByEmailCache.getIfPresent(email);
         if (cached != null) {
             return Mono.just(cached);

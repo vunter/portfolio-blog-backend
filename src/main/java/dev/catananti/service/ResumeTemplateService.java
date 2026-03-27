@@ -56,7 +56,7 @@ public class ResumeTemplateService {
         return validateHtmlContent(request.getHtmlContent())
                 .flatMap(valid -> {
                     if (!valid) {
-                        return Mono.error(new IllegalArgumentException("Invalid HTML content"));
+                        return Mono.error(new IllegalArgumentException("error.invalid_html_content"));
                     }
 
                     String slug = generateSlug(request.getName());
@@ -131,7 +131,7 @@ public class ResumeTemplateService {
                 .flatMap(template -> {
                     // Verify ownership
                     if (!template.getOwnerId().equals(ownerId)) {
-                        return Mono.error(new IllegalArgumentException("You don't have permission to update this template"));
+                        return Mono.error(new IllegalArgumentException("error.template_update_denied"));
                     }
 
                     // Update fields
@@ -233,7 +233,7 @@ public class ResumeTemplateService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Template not found: " + id)))
                 .flatMap(template -> {
                     if (!template.getOwnerId().equals(ownerId)) {
-                        return Mono.error(new IllegalArgumentException("You don't have permission to delete this template"));
+                        return Mono.error(new IllegalArgumentException("error.template_delete_denied"));
                     }
                     return databaseClient.sql("DELETE FROM resume_templates WHERE id = :id")
                             .bind("id", id)
@@ -354,7 +354,7 @@ public class ResumeTemplateService {
         } else if (request.getTemplateSlug() != null) {
             return generatePdfFromSlug(request.getTemplateSlug(), request.getVariables());
         } else {
-            return Mono.error(new IllegalArgumentException("Either htmlContent, templateId, or templateSlug is required"));
+            return Mono.error(new IllegalArgumentException("error.pdf_source_required"));
         }
     }
 

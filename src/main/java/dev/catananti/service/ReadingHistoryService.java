@@ -6,6 +6,7 @@ import dev.catananti.entity.ReadingHistory;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ReadingHistoryRepository;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -74,13 +75,13 @@ public class ReadingHistoryService {
                 .flatMap(user -> {
                     int offset = page * size;
                     return readingHistoryRepository.findByUserIdOrderByLastReadAtDesc(user.getId(), size, offset)
-                            .concatMap(rh -> articleRepository.findById(rh.getArticleId())
+                            .flatMap(rh -> articleRepository.findById(rh.getArticleId())
                                     .flatMap(articleService::enrichArticleWithMetadata)
                                     .map(article -> new ReadingHistoryResponse(
                                             articleService.mapToResponse(article),
                                             rh.getLastReadAt(),
                                             rh.getReadCount()
-                                    )))
+                                    )), 4)
                             .collectList()
                             .zipWith(readingHistoryRepository.countByUserId(user.getId()))
                             .map(tuple -> PageResponse.of(tuple.getT1(), page, size, tuple.getT2()));
@@ -95,7 +96,7 @@ public class ReadingHistoryService {
     public Mono<Void> clearHistory(String email) {
         return userRepository.findByEmail(email)
                 .flatMap(user -> readingHistoryRepository.deleteByUserId(user.getId()))
-                .doOnSuccess(_ -> log.info("Reading history cleared for user: {}", email));
+                .doOnSuccess(_ -> log.info("Reading history cleared for user: {}", PiiMasker.maskEmail(email)));
     }
 
     /**

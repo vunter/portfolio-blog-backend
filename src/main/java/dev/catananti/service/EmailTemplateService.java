@@ -38,13 +38,15 @@ public class EmailTemplateService {
     private final TemplateEngine fileTemplateEngine;
     private final TemplateEngine stringTemplateEngine;
     private final DatabaseClient db;
+    private final IdService idService;
 
     /** Cached custom variables: template_id -> list of CustomVar. Invalidated on writes. */
     private volatile Map<String, List<CustomVar>> customVarsCache = new ConcurrentHashMap<>();
     private volatile boolean cacheLoaded = false;
 
-    public EmailTemplateService(DatabaseClient databaseClient) {
+    public EmailTemplateService(DatabaseClient databaseClient, IdService idService) {
         this.db = databaseClient;
+        this.idService = idService;
 
         // File-based templates from classpath
         var resolver = new ClassLoaderTemplateResolver();
@@ -80,11 +82,11 @@ public class EmailTemplateService {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
-        refreshCustomVarsCache().subscribe(
-            null,
-            err -> log.warn("Failed to load custom email variables: {}", err.getMessage()),
-            () -> log.info("Custom email variables cache loaded")
-        );
+        refreshCustomVarsCache()
+                .subscribe(
+                        v -> log.info("Custom email variables cache loaded"),
+                        e -> log.warn("Failed to load custom email variables: {}", e.getMessage())
+                );
     }
 
     // ==================== Template Rendering ====================
@@ -172,13 +174,13 @@ public class EmailTemplateService {
 
     // ==================== Custom Variables CRUD ====================
 
-    public record CustomVar(int id, String key, String value, String description, String templateId, String locale) {}
+    public record CustomVar(long id, String key, String value, String description, String templateId, String locale) {}
 
     /** Load all custom variables into cache. Called at startup and after mutations. */
     public Mono<Void> refreshCustomVarsCache() {
         return db.sql("SELECT id, var_key, var_value, description, template_id, locale FROM email_custom_variables ORDER BY id")
                 .map(row -> new CustomVar(
-                        row.get("id", Integer.class),
+                        row.get("id", Long.class),
                         row.get("var_key", String.class),
                         row.get("var_value", String.class),
                         row.get("description", String.class),
@@ -220,12 +222,13 @@ public class EmailTemplateService {
         String tid = (templateId == null || templateId.isBlank()) ? "__global__" : templateId;
         String loc = (locale == null || locale.isBlank()) ? "*" : locale;
         return db.sql("""
-                INSERT INTO email_custom_variables (var_key, var_value, description, template_id, locale, updated_at)
-                VALUES (:key, :val, :desc, :tid, :locale, NOW())
+                INSERT INTO email_custom_variables (id, var_key, var_value, description, template_id, locale, updated_at)
+                VALUES (:id, :key, :val, :desc, :tid, :locale, NOW())
                 ON CONFLICT (var_key, template_id, locale)
                 DO UPDATE SET var_value = :val, description = :desc, updated_at = NOW()
                 RETURNING id, var_key, var_value, description, template_id, locale
                 """)
+                .bind("id", idService.nextId())
                 .bind("key", key)
                 .bind("val", value)
                 .bind("desc", description != null ? description : "")
@@ -238,7 +241,7 @@ public class EmailTemplateService {
     }
 
     /** Update a custom variable by ID. */
-    public Mono<CustomVar> updateCustomVariable(int id, String value, String description) {
+    public Mono<CustomVar> updateCustomVariable(long id, String value, String description) {
         return db.sql("""
                 UPDATE email_custom_variables SET var_value = :val, description = :desc, updated_at = NOW()
                 WHERE id = :id
@@ -254,7 +257,7 @@ public class EmailTemplateService {
     }
 
     /** Delete a custom variable by ID. */
-    public Mono<Boolean> deleteCustomVariable(int id) {
+    public Mono<Boolean> deleteCustomVariable(long id) {
         return db.sql("DELETE FROM email_custom_variables WHERE id = :id")
                 .bind("id", id)
                 .fetch().rowsUpdated()
@@ -265,7 +268,7 @@ public class EmailTemplateService {
 
     private CustomVar mapCustomVar(io.r2dbc.spi.Readable row) {
         return new CustomVar(
-                row.get("id", Integer.class),
+                row.get("id", Long.class),
                 row.get("var_key", String.class),
                 row.get("var_value", String.class),
                 row.get("description", String.class),

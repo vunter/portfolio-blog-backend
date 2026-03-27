@@ -4,6 +4,7 @@ import dev.catananti.dto.ContactRequest;
 import dev.catananti.dto.ContactResponse;
 import dev.catananti.service.ContactService;
 import dev.catananti.service.RecaptchaService;
+import dev.catananti.util.PiiMasker;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,10 +29,7 @@ public class ContactController {
     @ResponseStatus(HttpStatus.CREATED)
     public Mono<ContactResponse> sendMessage(@Valid @RequestBody ContactRequest request) {
         // F-081: Mask PII in logs — only show local part prefix
-        String email = request.getEmail();
-        int atIdx = email != null ? email.indexOf('@') : -1;
-        String maskedEmail = atIdx > 0 ? email.substring(0, Math.min(3, atIdx)) + "***" : "***";
-        log.debug("Received contact message from: {}", maskedEmail);
+        log.debug("Received contact message from: {}", PiiMasker.maskEmail(request.getEmail()));
         return recaptchaService.verify(request.getRecaptchaToken(), "contact")
                 .then(contactService.saveContact(request));
     }

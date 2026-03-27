@@ -61,8 +61,9 @@ public class I18nController {
             });
     }
 
-    @PostMapping("/cache/invalidate")
-    @Operation(summary = "Invalidate translation cache")
+    /**
+     * Invalidate translation cache (called internally by AdminTranslationController).
+     */
     public Mono<ResponseEntity<Map<String, String>>> invalidateCache() {
         cache.clear();
         log.info("Translation cache invalidated");

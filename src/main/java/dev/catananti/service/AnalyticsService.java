@@ -22,7 +22,6 @@ import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -77,7 +76,7 @@ public class AnalyticsService {
         String eventType = request.getEventType().toUpperCase();
         if (!ALLOWED_EVENT_TYPES.contains(eventType)) {
             log.warn("Invalid event type rejected: {}", eventType);
-            return Mono.error(new IllegalArgumentException("Invalid event type: " + request.getEventType()));
+            return Mono.error(new IllegalArgumentException("error.invalid_event_type"));
         }
 
         // Validate articleId exists if provided
@@ -90,7 +89,6 @@ public class AnalyticsService {
                 .flatMap(valid -> {
                     // Resolve country from raw IP before anonymization
                     String rawIp = IpAddressExtractor.extractClientIp(httpRequest);
-                    String countryCode = geoIPService.getCountryCode(rawIp).orElse(null);
 
                     // SEC-08: Anonymize IP for GDPR/LGPD compliance
                     String userIp = IpAddressExtractor.anonymizeIp(rawIp);
@@ -100,6 +98,12 @@ public class AnalyticsService {
                     String deviceType = DeviceParser.parseDeviceType(userAgent);
                     String browserFamily = DeviceParser.parseBrowserFamily(userAgent);
                     String osFamily = DeviceParser.parseOsFamily(userAgent);
+
+                    // F-ASYNC-03: Resolve country code reactively
+                    return geoIPService.getCountryCode(rawIp)
+                            .defaultIfEmpty("")
+                            .flatMap(countryCode -> {
+                    String resolvedCountry = countryCode.isEmpty() ? null : countryCode;
 
                     String metadataJson = null;
                     if (request.getMetadata() != null) {
@@ -130,15 +134,15 @@ public class AnalyticsService {
                     // Bind nullable params
                     spec = articleId != null ? spec.bind("articleId", articleId) : spec.bindNull("articleId", Long.class);
                     spec = userAgent != null ? spec.bind("userAgent", userAgent) : spec.bindNull("userAgent", String.class);
-                    spec = countryCode != null ? spec.bind("countryCode", countryCode) : spec.bindNull("countryCode", String.class);
+                    spec = resolvedCountry != null ? spec.bind("countryCode", resolvedCountry) : spec.bindNull("countryCode", String.class);
                     spec = referrer != null ? spec.bind("referrer", referrer) : spec.bindNull("referrer", String.class);
                     spec = metadataJson != null ? spec.bind("metadata", metadataJson) : spec.bindNull("metadata", String.class);
 
                     return spec.then()
                             .doOnSuccess(v -> log.debug("Analytics event tracked: {} for article {}",
                                     eventType, articleId));
-                })
-                .switchIfEmpty(Mono.empty()); // Silently ignore invalid articleIds
+                    }); // end geoIPService.getCountryCode flatMap
+                });
     }
 
     public Mono<Void> trackArticleView(String slug, ServerHttpRequest httpRequest) {
@@ -153,7 +157,11 @@ public class AnalyticsService {
                             .referrer(referrer)
                             .build();
                     return trackEvent(request, httpRequest);
-                });
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.debug("Article view ignored: slug '{}' not found", slug);
+                    return Mono.empty();
+                }));
     }
 
     public Mono<AnalyticsSummary> getAnalyticsSummary(int days) {
@@ -231,8 +239,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.TopArticle>> getTopArticles(LocalDateTime since, int limit) {
@@ -252,10 +259,8 @@ public class AnalyticsService {
                 .all()
                 .collectList()
                 .flatMap(entries -> {
-                    if (entries.isEmpty()) return Mono.just(new ArrayList<AnalyticsSummary.TopArticle>());
+                    if (entries.isEmpty()) return Mono.<List<AnalyticsSummary.TopArticle>>just(List.of());
                     List<Long> articleIds = entries.stream().map(Map.Entry::getKey).toList();
-                    Map<Long, Long> viewsMap = entries.stream()
-                            .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
                     return articleRepository.findAllById(articleIds)
                             .collectMap(article -> article.getId(), article -> article)
                             .map(articleMap -> entries.stream()
@@ -270,7 +275,6 @@ public class AnalyticsService {
                                     })
                                     .toList());
                 })
-                .defaultIfEmpty(new ArrayList<>())
                 .flatMap(list -> list.isEmpty() ? getTopArticlesFromViewCounts(limit) : Mono.just(list));
     }
 
@@ -291,8 +295,7 @@ public class AnalyticsService {
                         .views(row.get("views_count", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrers(LocalDateTime since, int limit) {
@@ -311,8 +314,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.TopSource>> getTopSources(LocalDateTime since, int limit) {
@@ -332,8 +334,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     public Mono<Long> getArticleViewCount(Long articleId) {
@@ -470,8 +471,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesByAuthor(LocalDateTime since, int limit, Long authorId) {
@@ -495,8 +495,6 @@ public class AnalyticsService {
                 .flatMap(entries -> {
                     if (entries.isEmpty()) return getTopArticlesFromViewCountsByAuthor(limit, authorId);
                     List<Long> articleIds = entries.stream().map(Map.Entry::getKey).toList();
-                    Map<Long, Long> viewsMap = entries.stream()
-                            .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
                     return articleRepository.findAllById(articleIds)
                             .collectMap(article -> article.getId(), article -> article)
                             .map(articleMap -> entries.stream()
@@ -510,8 +508,7 @@ public class AnalyticsService {
                                                 .build();
                                     })
                                     .toList());
-                })
-                .defaultIfEmpty(new ArrayList<>());
+                });
     }
 
     private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesFromViewCountsByAuthor(int limit, Long authorId) {
@@ -531,8 +528,7 @@ public class AnalyticsService {
                         .views(row.get("views_count", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrersByAuthor(LocalDateTime since, int limit, Long authorId) {
@@ -553,8 +549,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.TopSource>> getTopSourcesByAuthor(LocalDateTime since, int limit, Long authorId) {
@@ -577,8 +572,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.DeviceStat>> getTopDevices(LocalDateTime since) {
@@ -595,8 +589,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.DeviceStat>> getTopDevicesByAuthor(LocalDateTime since, Long authorId) {
@@ -616,8 +609,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.BrowserStat>> getTopBrowsers(LocalDateTime since) {
@@ -635,8 +627,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.BrowserStat>> getTopBrowsersByAuthor(LocalDateTime since, Long authorId) {
@@ -657,8 +648,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.CountryStat>> getTopCountries(LocalDateTime since) {
@@ -676,8 +666,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     private Mono<List<AnalyticsSummary.CountryStat>> getTopCountriesByAuthor(LocalDateTime since, Long authorId) {
@@ -697,8 +686,7 @@ public class AnalyticsService {
                         .count(row.get("cnt", Long.class))
                         .build())
                 .all()
-                .collectList()
-                .defaultIfEmpty(new ArrayList<>());
+                .collectList();
     }
 
     /**
@@ -709,9 +697,8 @@ public class AnalyticsService {
     public void cleanupOldEvents() {
         try {
             LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
-            analyticsRepository.deleteByCreatedAtBefore(cutoff)
-                    .doOnSuccess(result -> log.info("Analytics events older than {} days cleaned up", retentionDays))
-                    .block();
+            analyticsRepository.deleteByCreatedAtBefore(cutoff).block();
+            log.info("Analytics events older than {} days cleaned up", retentionDays);
         } catch (Exception e) {
             log.error("Failed to cleanup old analytics events: {}", e.getMessage(), e);
         }

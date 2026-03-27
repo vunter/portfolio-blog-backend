@@ -124,7 +124,7 @@ public class AdminCacheController {
                 )));
     }
 
-    @DeleteMapping("/all")
+    @DeleteMapping
     @Operation(summary = "Invalidate all caches", description = "Clear all cached data")
     public Mono<ResponseEntity<Map<String, Object>>> invalidateAllCaches() {
         log.info("Invalidating all caches");
@@ -133,12 +133,5 @@ public class AdminCacheController {
                         "message", "All caches invalidated",
                         "entriesRemoved", count
                 )));
-    }
-
-    @DeleteMapping
-    @Operation(summary = "Invalidate all caches (alias)", description = "Clear all cached data (alias for /all)")
-    public Mono<ResponseEntity<Map<String, Object>>> invalidateAllCachesAlias() {
-        log.info("Invalidating all caches (alias)");
-        return invalidateAllCaches();
     }
 }

@@ -38,7 +38,8 @@ public class TranslationService {
 
     private static final String DEEPL_FREE_URL = "https://api-free.deepl.com/v2/translate";
     private static final String DEEPL_PRO_URL = "https://api.deepl.com/v2/translate";
-    private static final int MAX_BATCH_SIZE = 50; // DeepL allows up to 50 texts per request
+    @Value("${app.translation.max-batch-size:50}")
+    private int maxBatchSize; // DeepL allows up to 50 texts per request
     private static final long FREE_TIER_CHAR_LIMIT = 500_000L;
     private static final double USAGE_WARNING_THRESHOLD = 0.8;
 
@@ -130,15 +131,15 @@ public class TranslationService {
         String normalizedLang = normalizeLanguage(targetLang);
 
         // Split into batches if needed
-        if (contentTexts.size() <= MAX_BATCH_SIZE) {
+        if (contentTexts.size() <= maxBatchSize) {
             return callDeepL(contentTexts, normalizedLang)
                     .map(translated -> reassemble(texts, contentIndices, translated));
         }
 
         // Multiple batches
         List<Mono<List<String>>> batches = new ArrayList<>();
-        for (int i = 0; i < contentTexts.size(); i += MAX_BATCH_SIZE) {
-            int end = Math.min(i + MAX_BATCH_SIZE, contentTexts.size());
+        for (int i = 0; i < contentTexts.size(); i += maxBatchSize) {
+            int end = Math.min(i + maxBatchSize, contentTexts.size());
             batches.add(callDeepL(contentTexts.subList(i, end), normalizedLang));
         }
 
@@ -173,6 +174,7 @@ public class TranslationService {
                 .body(BodyInserters.fromFormData(formData))
                 .retrieve()
                 .bodyToMono(DeepLResponse.class)
+                .timeout(Duration.ofSeconds(30))
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .map(response -> {
                     if (response.getTranslations() == null) {

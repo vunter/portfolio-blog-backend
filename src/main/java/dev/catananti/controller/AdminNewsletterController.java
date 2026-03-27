@@ -4,6 +4,7 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.SubscriberResponse;
 import dev.catananti.service.NewsletterService;
 import dev.catananti.service.NewsletterTrackingService;
+import dev.catananti.util.PiiMasker;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -34,13 +35,6 @@ public class AdminNewsletterController {
     private final NewsletterService newsletterService;
     private final NewsletterTrackingService trackingService;
 
-    @GetMapping("/analytics")
-    @Operation(summary = "Get newsletter analytics", description = "Get open rates, click rates, and top links")
-    public Mono<Map<String, Object>> getAnalytics(
-            @RequestParam(defaultValue = "30") @Min(1) @Max(365) int days) {
-        return trackingService.getNewsletterAnalytics(days);
-    }
-
     @GetMapping("/subscribers")
     @Operation(summary = "Get all subscribers", description = "Get paginated newsletter subscribers, with optional status and email filters")
     public Mono<PageResponse<SubscriberResponse>> getAllSubscribers(
@@ -48,7 +42,7 @@ public class AdminNewsletterController {
             @RequestParam(required = false) String email,
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        log.debug("Fetching subscribers: status={}, email={}, page={}, size={}", status, email, page, size);
+        log.debug("Fetching subscribers: status={}, email={}, page={}, size={}", status, PiiMasker.maskEmail(email), page, size);
         return newsletterService.getAllSubscribersPaginated(status, email, page, size);
     }
 

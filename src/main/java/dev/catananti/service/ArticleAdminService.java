@@ -16,6 +16,7 @@ import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -24,6 +25,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -174,9 +176,9 @@ public class ArticleAdminService {
                     request.setSlug(uniqueSlug);
                     return getCurrentUser()
                             .map(User::getId)
-                            .defaultIfEmpty(0L)
+                            .switchIfEmpty(Mono.error(new IllegalStateException("No authenticated user")))
                             .flatMap(userId -> {
-                                Long authorId = userId != 0L ? userId : null;
+                                Long authorId = userId;
                                 return fetchOrCreateTags(request.getTagSlugs())
                                         .collectList()
                                         .flatMap(tags -> {
@@ -247,7 +249,7 @@ public class ArticleAdminService {
                 });
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<ArticleResponse> updateArticle(Long id, ArticleRequest request) {
         return articleRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
@@ -326,7 +328,7 @@ public class ArticleAdminService {
         try {
             targetStatus = ArticleStatus.valueOf(status);
         } catch (IllegalArgumentException e) {
-            return Mono.error(new IllegalArgumentException("Invalid status: " + status));
+            return Mono.error(new IllegalArgumentException("error.invalid_status"));
         }
 
         return getCurrentUser()
@@ -340,7 +342,7 @@ public class ArticleAdminService {
                                         article.setPublishedAt(LocalDateTime.now());
                                     }
                                     return articleRepository.save(article);
-                                }))
+                                }), 8)
                         .count())
                 .flatMap(count -> invalidateFeedCaches().thenReturn(count))
                 .doOnSuccess(count -> log.info("Bulk status update: {} articles → {}", count, status));
@@ -400,10 +402,12 @@ public class ArticleAdminService {
                     article.setUpdatedAt(LocalDateTime.now());
 
                     ArticleReview review = ArticleReview.builder()
+                            .id(idService.nextId())
                             .articleId(id)
                             .reviewerId(user.getId())
                             .status("APPROVED")
                             .createdAt(LocalDateTime.now())
+                            .updatedAt(LocalDateTime.now())
                             .build();
 
                     return articleRepository.save(article)
@@ -435,11 +439,13 @@ public class ArticleAdminService {
                     article.setUpdatedAt(LocalDateTime.now());
 
                     ArticleReview review = ArticleReview.builder()
+                            .id(idService.nextId())
                             .articleId(id)
                             .reviewerId(user.getId())
                             .status("CHANGES_REQUESTED")
                             .feedback(feedback)
                             .createdAt(LocalDateTime.now())
+                            .updatedAt(LocalDateTime.now())
                             .build();
 
                     return articleRepository.save(article)
@@ -474,7 +480,7 @@ public class ArticleAdminService {
                         article.getExcerpt(),
                         subscriber.getUnsubscribeToken()
                 ).onErrorResume(e -> {
-                    log.warn("Failed to send article notification to {}: {}", subscriber.getEmail(), e.getMessage());
+                    log.warn("Failed to send article notification to {}: {}", PiiMasker.maskEmail(subscriber.getEmail()), e.getMessage());
                     return Mono.empty();
                 }), 10)
                 .then()
@@ -490,7 +496,7 @@ public class ArticleAdminService {
                         .switchIfEmpty(Mono.defer(() -> {
                             log.warn("Tag '{}' not found, skipping", slug);
                             return Mono.empty();
-                        })));
+                        })), 8);
     }
 
     private Mono<Void> saveArticleTags(Long articleId, List<Tag> tags) {
@@ -500,7 +506,7 @@ public class ArticleAdminService {
                         .bind("articleId", articleId)
                         .bind("tagId", tag.getId())
                         .fetch()
-                        .rowsUpdated())
+                        .rowsUpdated(), 8)
                 .then();
     }
 

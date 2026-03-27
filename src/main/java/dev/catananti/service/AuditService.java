@@ -142,6 +142,31 @@ public class AuditService {
                 "Password reset requested", ipAddress);
     }
 
+    public Mono<Void> logOAuth2AccountLinked(Long userId, String email, String provider) {
+        return logAction(AuditEventType.OAUTH2_ACCOUNT_LINKED.action(), "USER", userId.toString(), userId, email,
+                "OAuth2 account linked: " + provider);
+    }
+
+    public Mono<Void> logOAuth2AccountUnlinked(Long userId, String email, String provider) {
+        return logAction(AuditEventType.OAUTH2_ACCOUNT_UNLINKED.action(), "USER", userId.toString(), userId, email,
+                "OAuth2 account unlinked: " + provider);
+    }
+
+    public Mono<Void> logMfaEnabled(Long userId, String email, String method) {
+        return logAction(AuditEventType.MFA_ENABLED.action(), "USER", userId.toString(), userId, email,
+                "MFA enabled with method: " + method);
+    }
+
+    public Mono<Void> logMfaDisabled(Long userId, String email) {
+        return logAction(AuditEventType.MFA_DISABLED.action(), "USER", userId.toString(), userId, email,
+                "MFA disabled completely");
+    }
+
+    public Mono<Void> logMfaMethodDisabled(Long userId, String email, String method) {
+        return logAction(AuditEventType.MFA_METHOD_DISABLED.action(), "USER", userId.toString(), userId, email,
+                "MFA method disabled: " + method);
+    }
+
     // Query methods
     public Flux<AuditLog> getRecentLogs(int days, int limit) {
         LocalDateTime since = LocalDateTime.now().minusDays(days);

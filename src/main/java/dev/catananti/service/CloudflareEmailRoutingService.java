@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -88,6 +89,7 @@ public class CloudflareEmailRoutingService {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(CfRuleResponse.class)
+                .timeout(Duration.ofSeconds(15))
                 .flatMap(resp -> {
                     if (resp.success() && resp.result() != null) {
                         String ruleId = resp.result().id();
@@ -121,6 +123,7 @@ public class CloudflareEmailRoutingService {
                 .uri("/zones/{zoneId}/email/routing/rules/{ruleId}", zoneId, ruleId)
                 .retrieve()
                 .bodyToMono(CfRuleResponse.class)
+                .timeout(Duration.ofSeconds(15))
                 .doOnSuccess(resp -> {
                     if (resp != null && resp.success()) {
                         log.info("CF email routing rule deleted: {}", ruleId);

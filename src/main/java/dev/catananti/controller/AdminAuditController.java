@@ -136,7 +136,7 @@ public class AdminAuditController {
         auditLogRepository.deleteByCreatedAtBefore(cutoff)
                 .subscribe(
                         result -> log.info("Audit log retention cleanup completed"),
-                        error -> log.error("Failed to cleanup old audit logs: {}", error.getMessage())
+                        e -> log.error("Failed to cleanup old audit logs: {}", e.getMessage(), e)
                 );
     }
 

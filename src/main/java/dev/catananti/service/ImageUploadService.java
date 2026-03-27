@@ -58,7 +58,7 @@ public class ImageUploadService {
         if (filename == null || filename.isBlank() || 
             filename.contains("..") || filename.contains("/") || 
             filename.contains("\\") || filename.contains("\0")) {
-            return Mono.error(new IllegalArgumentException("Invalid filename"));
+            return Mono.error(new IllegalArgumentException("error.invalid_filename"));
         }
         
         String extension = getExtension(filename);
@@ -93,6 +93,7 @@ public class ImageUploadService {
                     Files.createDirectories(directory);
                     return filePath;
                 })
+                .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(path -> {
                     // F-180: Reject obviously oversized uploads before writing to disk
                     long contentLength = filePart.headers().getContentLength();

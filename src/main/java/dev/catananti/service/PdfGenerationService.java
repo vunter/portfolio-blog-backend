@@ -3,6 +3,7 @@ package dev.catananti.service;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.Margin;
 import dev.catananti.exception.PdfGenerationException;
+import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.util.HtmlUtils;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -27,8 +28,14 @@ import java.util.concurrent.Semaphore;
 @Slf4j
 public class PdfGenerationService {
 
+    private final BlogMetrics blogMetrics;
+
     private volatile Playwright playwright;
     private volatile Browser browser;
+
+    public PdfGenerationService(BlogMetrics blogMetrics) {
+        this.blogMetrics = blogMetrics;
+    }
 
     @org.springframework.beans.factory.annotation.Value("${app.pdf.timeout-seconds:30}")
     private int timeoutSeconds = 30;
@@ -36,13 +43,9 @@ public class PdfGenerationService {
     @org.springframework.beans.factory.annotation.Value("${app.pdf.max-pages:50}")
     private int maxPages = 50;
 
-    /**
-     * IMP-08: Semaphore to limit concurrent PDF generation.
-     * Playwright serializes page operations through a single browser process,
-     * so unbounded concurrency starves the bounded-elastic thread pool.
-     */
-    private static final int MAX_CONCURRENT_PDF = 3;
-    private final Semaphore pdfSemaphore = new Semaphore(MAX_CONCURRENT_PDF);
+    @org.springframework.beans.factory.annotation.Value("${app.pdf.max-concurrent:3}")
+    private int maxConcurrentPdf = 3;
+    private volatile Semaphore pdfSemaphore = new Semaphore(3);
 
     /**
      * Paper size dimensions.
@@ -100,6 +103,7 @@ public class PdfGenerationService {
 
     @PostConstruct
     public void init() {
+        this.pdfSemaphore = new Semaphore(maxConcurrentPdf);
         // Eagerly trigger initialization on boundedElastic scheduler (non-blocking)
         browserMono.subscribe(
                 b -> log.info("Playwright pre-initialized successfully"),
@@ -144,6 +148,8 @@ public class PdfGenerationService {
      * @return Mono containing the PDF bytes
      */
     public Mono<byte[]> generatePdf(String htmlContent, String paperSize, boolean landscape) {
+        // Q12.3: Record PDF generation latency
+        io.micrometer.core.instrument.Timer.Sample sample = io.micrometer.core.instrument.Timer.start();
         return ensureBrowserReactive()
                 .flatMap(browserInstance -> Mono.fromCallable(() -> {
                             // F-197: Blocking semaphore.acquire() is intentionally wrapped in
@@ -158,7 +164,11 @@ public class PdfGenerationService {
                         })
                         .subscribeOn(Schedulers.boundedElastic()))
                 .timeout(java.time.Duration.ofSeconds(timeoutSeconds))
-                .doOnSuccess(bytes -> log.info("PDF generated successfully: {} bytes", bytes.length))
+                .doOnSuccess(bytes -> {
+                    sample.stop(blogMetrics.getPdfGenerationTimer());
+                    blogMetrics.incrementPdfGenerated();
+                    log.info("PDF generated successfully: {} bytes", bytes.length);
+                })
                 .doOnError(e -> log.error("PDF generation failed", e));
     }
 

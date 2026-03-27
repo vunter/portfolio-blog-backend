@@ -6,6 +6,7 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.service.CacheService;
 import dev.catananti.service.EmailService;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
@@ -58,14 +59,13 @@ public class ArticlePublishScheduler {
                             .doOnNext(article -> log.info("Auto-published scheduled article: {} (scheduled for: {})",
                                     article.getSlug(), article.getScheduledAt()))
                             .then(cacheService.invalidateAllArticles())
-                            .doFinally(signal -> redisTemplate.delete(LOCK_KEY)
+                            .then(redisTemplate.delete(LOCK_KEY)
                                     .onErrorResume(e -> reactor.core.publisher.Mono.empty())
-                                    .subscribe());
+                                    .then());
                 })
                 .subscribe(
-                        null,
-                        error -> log.error("Error publishing scheduled articles: {}", error.getMessage()),
-                        () -> log.debug("Scheduled articles check completed")
+                        v -> log.debug("Scheduled articles check completed"),
+                        error -> log.error("Error publishing scheduled articles: {}", error.getMessage(), error)
                 );
     }
 
@@ -89,7 +89,7 @@ public class ArticlePublishScheduler {
                                 article.getExcerpt(),
                                 subscriber.getUnsubscribeToken()
                         ).onErrorResume(e -> {
-                            log.warn("Failed to send article notification to {}: {}", subscriber.getEmail(), e.getMessage());
+                            log.warn("Failed to send article notification to {}: {}", PiiMasker.maskEmail(subscriber.getEmail()), e.getMessage());
                             return reactor.core.publisher.Mono.empty();
                         }), 5))
                 .then()

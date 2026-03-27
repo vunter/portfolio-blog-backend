@@ -4,6 +4,7 @@ import jakarta.mail.internet.MimeMessage;
 import lombok.extern.slf4j.Slf4j;
 import dev.catananti.config.ResilienceConfig;
 import dev.catananti.util.HtmlUtils;
+import dev.catananti.util.PiiMasker;
 import com.resend.Resend;
 import com.resend.core.exception.ResendException;
 import com.resend.services.emails.model.CreateEmailOptions;
@@ -146,7 +147,7 @@ public class EmailService {
                 })
                 .flatMap(count -> {
                     if (count > emailRateLimitPerHour) {
-                        log.warn("Email rate limit exceeded for recipient: {} (count: {}/{})", recipientEmail, count, emailRateLimitPerHour);
+                        log.warn("Email rate limit exceeded for recipient: {} (count: {}/{})", PiiMasker.maskEmail(recipientEmail), count, emailRateLimitPerHour);
                         return Mono.error(new IllegalStateException(
                                 "Email rate limit exceeded for " + recipientEmail + ". Max " + emailRateLimitPerHour + " per hour."));
                     }
@@ -156,7 +157,7 @@ public class EmailService {
                     if (e instanceof IllegalStateException ise) {
                         return Mono.error(ise); // re-throw rate limit errors
                     }
-                    log.warn("Redis unavailable for email rate limiting, allowing email to: {}", recipientEmail);
+                    log.warn("Redis unavailable for email rate limiting, allowing email to: {}", PiiMasker.maskEmail(recipientEmail));
                     return Mono.empty(); // fallback: allow if Redis is down
                 });
     }
@@ -166,14 +167,16 @@ public class EmailService {
      * Delegates to Resend HTTP API or SMTP depending on {@code app.email.provider}.
      */
     public Mono<Void> sendTextEmail(String to, String subject, String text) {
-        return checkRateLimit(to).then(Mono.<Void>fromRunnable(() -> {
+        return checkRateLimit(to).then(Mono.fromCallable(() -> {
             if (resendClient != null) {
                 sendViaResend(to, subject, null, text);
             } else {
                 sendViaSmtp(to, subject, text, false);
             }
+            return (Void) null;
         }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
-                .timeout(resilience.getExternalTimeout()));
+                .timeout(resilience.getExternalTimeout())
+                .then());
     }
 
     /**
@@ -181,14 +184,16 @@ public class EmailService {
      * Delegates to Resend HTTP API or SMTP depending on {@code app.email.provider}.
      */
     public Mono<Void> sendHtmlEmail(String to, String subject, String htmlContent) {
-        return checkRateLimit(to).then(Mono.<Void>fromRunnable(() -> {
+        return checkRateLimit(to).then(Mono.fromCallable(() -> {
             if (resendClient != null) {
                 sendViaResend(to, subject, htmlContent, null);
             } else {
                 sendViaSmtp(to, subject, htmlContent, true);
             }
+            return (Void) null;
         }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
-                .timeout(resilience.getExternalTimeout()));
+                .timeout(resilience.getExternalTimeout())
+                .then());
     }
 
     /** Send email via Resend HTTP API. */
@@ -205,9 +210,9 @@ public class EmailService {
                 builder.text(text);
             }
             CreateEmailResponse response = resendClient.emails().send(builder.build());
-            log.debug("Email sent via Resend to: {} (id: {})", to, response.getId());
+            log.debug("Email sent via Resend to: {} (id: {})", PiiMasker.maskEmail(to), response.getId());
         } catch (ResendException e) {
-            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage(), e);
+            log.warn("Failed to send email via Resend to {}: {}", PiiMasker.maskEmail(to), e.getMessage(), e);
             throw new RuntimeException("Failed to send email via Resend", e);
         }
     }
@@ -222,9 +227,9 @@ public class EmailService {
             helper.setSubject(subject);
             helper.setText(content, isHtml);
             mailSender.send(message);
-            log.debug("Email sent via SMTP to: {}", to);
+            log.debug("Email sent via SMTP to: {}", PiiMasker.maskEmail(to));
         } catch (Exception e) {
-            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage(), e);
+            log.warn("Failed to send email via SMTP to {}: {}", PiiMasker.maskEmail(to), e.getMessage(), e);
             throw new RuntimeException("Failed to send email via SMTP", e);
         }
     }
@@ -319,14 +324,16 @@ public class EmailService {
      * Send HTML email with List-Unsubscribe headers (RFC 8058) for newsletter emails.
      */
     public Mono<Void> sendHtmlEmailWithUnsubscribe(String to, String subject, String htmlContent, String unsubscribeUrl) {
-        return checkRateLimit(to).then(Mono.<Void>fromRunnable(() -> {
+        return checkRateLimit(to).then(Mono.fromCallable(() -> {
             if (resendClient != null) {
                 sendViaResendWithHeaders(to, subject, htmlContent, unsubscribeUrl);
             } else {
                 sendViaSmtpWithHeaders(to, subject, htmlContent, unsubscribeUrl);
             }
+            return (Void) null;
         }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
-                .timeout(resilience.getExternalTimeout()));
+                .timeout(resilience.getExternalTimeout())
+                .then());
     }
 
     /** Send email via Resend HTTP API with List-Unsubscribe headers. */
@@ -340,9 +347,9 @@ public class EmailService {
                     .addHeader("List-Unsubscribe", "<" + unsubscribeUrl + ">")
                     .addHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
             CreateEmailResponse response = resendClient.emails().send(builder.build());
-            log.debug("Email sent via Resend to: {} (id: {})", to, response.getId());
+            log.debug("Email sent via Resend to: {} (id: {})", PiiMasker.maskEmail(to), response.getId());
         } catch (ResendException e) {
-            log.warn("Failed to send email via Resend to {}: {}", to, e.getMessage(), e);
+            log.warn("Failed to send email via Resend to {}: {}", PiiMasker.maskEmail(to), e.getMessage(), e);
             throw new RuntimeException("Failed to send email via Resend", e);
         }
     }
@@ -359,9 +366,9 @@ public class EmailService {
             message.addHeader("List-Unsubscribe", "<" + unsubscribeUrl + ">");
             message.addHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
             mailSender.send(message);
-            log.debug("Email sent via SMTP to: {}", to);
+            log.debug("Email sent via SMTP to: {}", PiiMasker.maskEmail(to));
         } catch (Exception e) {
-            log.warn("Failed to send email via SMTP to {}: {}", to, e.getMessage(), e);
+            log.warn("Failed to send email via SMTP to {}: {}", PiiMasker.maskEmail(to), e.getMessage(), e);
             throw new RuntimeException("Failed to send email via SMTP", e);
         }
     }
@@ -420,8 +427,8 @@ public class EmailService {
         ));
 
         return sendHtmlEmail(email, subject, html)
-                .doOnSuccess(v -> log.debug("Account lockout notification sent to: {}", email))
-                .doOnError(e -> log.error("Failed to send account lockout notification to {}: {}", email, e.getMessage(), e))
+                .doOnSuccess(v -> log.debug("Account lockout notification sent to: {}", PiiMasker.maskEmail(email)))
+                .doOnError(e -> log.error("Failed to send account lockout notification to {}: {}", PiiMasker.maskEmail(email), e.getMessage(), e))
                 .onErrorResume(e -> Mono.empty());
     }
 

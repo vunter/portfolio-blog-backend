@@ -1,8 +1,10 @@
 package dev.catananti.controller;
 
 import dev.catananti.dto.ArticleVersionResponse;
+import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.ArticleVersionService;
+import dev.catananti.util.PiiMasker;
 import dev.catananti.service.ArticleVersionService.VersionDiff;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -10,10 +12,12 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -30,6 +34,7 @@ public class AdminArticleVersionController {
 
     private final ArticleVersionService versionService;
     private final UserRepository userRepository;
+    private final ArticleRepository articleRepository;
 
     @GetMapping
     @Operation(summary = "Get version history", description = "Get all versions of an article")
@@ -78,8 +83,24 @@ public class AdminArticleVersionController {
             @RequestParam(defaultValue = "Manual restore") String reason,
             Authentication authentication) {
         log.info("Restoring articleId={} to versionNumber={}", articleId, versionNumber);
-        return userRepository.findByEmail(authentication.getName())
-                .flatMap(user -> versionService.restoreVersion(articleId, versionNumber, user.getId(), user.getName()))
+        return userRepository.findByEmail(PiiMasker.extractEmail(authentication))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.user_not_found")))
+                .flatMap(user -> articleRepository.findById(articleId)
+                        .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.article_not_found")))
+                        .flatMap(article -> {
+                            // Ownership check: only the author or an ADMIN may restore
+                            boolean isAdmin = "ADMIN".equals(user.getRole());
+                            boolean isAuthor = article.getAuthorId() != null
+                                    && article.getAuthorId().equals(user.getId());
+                            if (!isAdmin && !isAuthor) {
+                                log.warn("User {} attempted to restore articleId={} without ownership",
+                                        PiiMasker.maskEmail(user.getEmail()), articleId);
+                                return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN,
+                                        "error.not_article_owner"));
+                            }
+                            return versionService.restoreVersion(articleId, versionNumber,
+                                    user.getId(), user.getName());
+                        }))
                 .map(article -> ResponseEntity.ok(Map.of(
                         "message", "Article restored to version " + versionNumber,
                         "articleId", articleId,

@@ -3,6 +3,7 @@ package dev.catananti.controller;
 import dev.catananti.dto.SubscribeRequest;
 import dev.catananti.service.NewsletterService;
 import dev.catananti.service.RecaptchaService;
+import dev.catananti.util.PiiMasker;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -55,8 +56,7 @@ public class NewsletterController {
     @Operation(summary = "Unsubscribe from newsletter", description = "Unsubscribe an email from the newsletter")
     public Mono<Map<String, String>> unsubscribe(
             @RequestParam @Email(message = "Invalid email format") String email) {
-        String masked = email.length() > 3 ? email.substring(0, 3) + "***" : "***";
-        log.debug("Newsletter unsubscription: email={}", masked);
+        log.debug("Newsletter unsubscription: email={}", PiiMasker.maskEmail(email));
         // Always return success to prevent email enumeration
         return newsletterService.unsubscribe(email)
                 .flatMap(this::localizeResult)

@@ -26,6 +26,21 @@ public interface PasswordResetTokenRepository extends ReactiveCrudRepository<Pas
     @Query("UPDATE password_reset_tokens SET used = true, used_at = :usedAt WHERE id = :id")
     Mono<Void> markAsUsed(Long id, LocalDateTime usedAt);
 
+    /**
+     * SEC: Atomic conditional mark-as-used. Returns number of rows affected (1 if successful, 0 if already used).
+     * Prevents race conditions where two concurrent requests use the same token.
+     */
+    @Modifying
+    @Query("UPDATE password_reset_tokens SET used = true, used_at = :usedAt WHERE id = :id AND used = false")
+    Mono<Long> markAsUsedConditionally(Long id, LocalDateTime usedAt);
+
+    /**
+     * SEC: Rollback a token to unused state if the password change fails after marking as used.
+     */
+    @Modifying
+    @Query("UPDATE password_reset_tokens SET used = false, used_at = NULL WHERE id = :id")
+    Mono<Void> unmarkAsUsed(Long id);
+
     @Modifying
     @Query("DELETE FROM password_reset_tokens WHERE expires_at < :cutoff OR (used = true AND used_at < :cutoff)")
     Mono<Void> deleteExpiredTokens(LocalDateTime cutoff);

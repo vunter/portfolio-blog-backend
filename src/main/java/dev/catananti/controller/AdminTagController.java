@@ -2,8 +2,9 @@ package dev.catananti.controller;
 
 import dev.catananti.dto.TagRequest;
 import dev.catananti.dto.TagResponse;
+import dev.catananti.dto.UserResponse;
 import dev.catananti.entity.UserRole;
-import dev.catananti.repository.UserRepository;
+import dev.catananti.service.UserService;
 import dev.catananti.service.TagService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -31,7 +32,7 @@ import java.util.List;
 public class AdminTagController {
 
     private final TagService tagService;
-    private final UserRepository userRepository;
+    private final UserService userService;
 
     @GetMapping
     public Mono<List<TagResponse>> getAllTags(@RequestParam(required = false) String locale) {
@@ -41,7 +42,7 @@ public class AdminTagController {
                 return tagService.getAllTags(locale).collectList();
             } else {
                 // DEV: only tags linked to their articles
-                return tagService.getTagsByAuthorId(user.getId(), locale).collectList();
+                return tagService.getTagsByAuthorId(Long.valueOf(user.getId()), locale).collectList();
             }
         });
     }
@@ -75,11 +76,11 @@ public class AdminTagController {
         return tagService.deleteTag(id);
     }
 
-    private Mono<dev.catananti.entity.User> getCurrentUser() {
+    private Mono<UserResponse> getCurrentUser() {
         return ReactiveSecurityContextHolder.getContext()
                 .map(SecurityContext::getAuthentication)
                 .filter(auth -> auth != null && auth.isAuthenticated())
                 .map(auth -> auth.getName())
-                .flatMap(email -> userRepository.findByEmail(email));
+                .flatMap(userService::getUserByEmail);
     }
 }

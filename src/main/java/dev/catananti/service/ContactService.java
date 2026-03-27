@@ -6,6 +6,7 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Contact;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ContactRepository;
+import dev.catananti.util.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -67,8 +68,8 @@ public class ContactService {
         // F-170: Spam scoring
         int spamScore = calculateSpamScore(request.getMessage());
         if (spamScore > 70) {
-            log.warn("Contact form submission rejected with spam score {}: {}", spamScore, request.getEmail());
-            return Mono.error(new IllegalArgumentException("Message rejected: detected as spam"));
+            log.warn("Contact form submission rejected with spam score {}: {}", spamScore, PiiMasker.maskEmail(request.getEmail()));
+            return Mono.error(new IllegalArgumentException("error.message_spam_detected"));
         }
 
         // F-169: Enforce field length limits to prevent abuse
@@ -165,7 +166,7 @@ public class ContactService {
                     contact.getName(),
                     contact.getSubject(),
                     contact.getMessage()
-            ).doOnError(e -> log.error("Failed to send contact auto-reply to {}", contact.getEmail(), e))
+            ).doOnError(e -> log.error("Failed to send contact auto-reply to {}", PiiMasker.maskEmail(contact.getEmail()), e))
              .onErrorResume(e -> Mono.empty());
         }
 
