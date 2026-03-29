@@ -51,6 +51,7 @@ LABEL maintainer="Leonardo Catananti <leonardo.catananti@gmail.com>" \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       nodejs \
       npm \
+      wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Playwright's compatible Chromium + all system dependencies
