@@ -179,7 +179,6 @@ public class SecurityConfig {
                         // Public resume endpoints
                         .pathMatchers("/api/v1/resume/css/**").permitAll()
                         .pathMatchers("/api/v1/resume/templates/popular").permitAll()
-                        .pathMatchers("/api/v1/resume/templates/slug/*/pdf").permitAll()
                         // Public resume download
                         .pathMatchers("/api/public/**").permitAll()
                         .pathMatchers("/api/v1/public/**").permitAll()

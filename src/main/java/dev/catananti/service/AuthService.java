@@ -332,8 +332,17 @@ public class AuthService {
     public Mono<TokenResponse> register(RegisterRequest request, String clientIp) {
         String email = request.email().toLowerCase().trim();
 
-        return userRepository.existsByEmail(email)
-                .flatMap(exists -> {
+        // Run BCrypt hash unconditionally to prevent timing side-channel attacks.
+        // Both code paths (existing account vs new registration) will consume similar wall-clock time.
+        Mono<String> encodedPasswordMono = Mono.fromCallable(() -> passwordEncoder.encode(request.password()))
+                .subscribeOn(Schedulers.boundedElastic())
+                .cache();
+
+        return Mono.zip(userRepository.existsByEmail(email), encodedPasswordMono)
+                .flatMap(tuple -> {
+                    boolean exists = tuple.getT1();
+                    String encodedPassword = tuple.getT2();
+
                     if (exists) {
                         // Send informational email instead of revealing account existence
                         return emailService.sendTextEmail(email,
@@ -343,15 +352,11 @@ public class AuthService {
                                     log.warn("Failed to send existing-account email: {}", e.getMessage());
                                     return Mono.empty();
                                 })
-                                .then(Mono.fromCallable(() -> passwordEncoder.encode("dummy"))
-                                        .subscribeOn(Schedulers.boundedElastic()))
                                 .thenReturn(TokenResponse.builder()
-                                        .accessToken("")
-                                        .refreshToken("")
+                                        .accessToken(null)
+                                        .refreshToken(null)
                                         .tokenType("Bearer")
                                         .expiresIn(jwtExpirationMs / 1000)
-                                        .email(email)
-                                        .name(request.name())
                                         .build());
                     }
 
@@ -370,12 +375,8 @@ public class AuthService {
                             .updatedAt(LocalDateTime.now())
                             .build();
 
-                    return Mono.fromCallable(() -> passwordEncoder.encode(request.password()))
-                            .subscribeOn(Schedulers.boundedElastic())
-                            .flatMap(encodedPassword -> {
-                                user.setPasswordHash(encodedPassword);
-                                return userRepository.save(user);
-                            })
+                    user.setPasswordHash(encodedPassword);
+                    return userRepository.save(user)
                             .flatMap(savedUser -> {
                                 String accessToken = tokenProvider.generateToken(savedUser.getEmail(), savedUser.getRole());
 
