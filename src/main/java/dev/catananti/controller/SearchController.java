@@ -44,8 +44,8 @@ public class SearchController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
             ServerHttpRequest httpRequest) {
-        log.info("Search request: query='{}', page={}, size={}", q, page, size);
-        log.info("[search-analytics] term='{}' tags={} sortBy={} page={}", q, tags, sortBy, page);
+        log.debug("Search request: query='{}', page={}, size={}", q, page, size);
+        log.debug("[search-analytics] term='{}' tags={} sortBy={} page={}", q, tags, sortBy, page);
 
         SearchRequest request = SearchRequest.builder()
                 .query(q)

@@ -327,7 +327,7 @@ public class AuthController {
                     Map<String, Object> dto = new java.util.LinkedHashMap<>();
                     dto.put("id", session.getId());
                     dto.put("deviceName", session.getDeviceName());
-                    dto.put("ipAddress", session.getIpAddress());
+                    dto.put("ipAddress", IpAddressExtractor.anonymizeIp(session.getIpAddress()));
                     dto.put("createdAt", session.getCreatedAt());
                     dto.put("lastUsedAt", session.getLastUsedAt());
                     dto.put("expiresAt", session.getExpiresAt());

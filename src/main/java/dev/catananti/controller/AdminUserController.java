@@ -129,7 +129,7 @@ public class AdminUserController {
     @GetMapping("/email/{email}")
     @Operation(summary = "Get user by email", description = "Get user information by email address")
     public Mono<ResponseEntity<UserResponse>> getUserByEmail(
-            @PathVariable String email) {
+            @PathVariable @jakarta.validation.constraints.Email @jakarta.validation.constraints.Size(max = 254) String email) {
         log.debug("Admin fetching user by email: {}", PiiMasker.maskEmail(email));
         return userService.getUserByEmail(email)
                 .map(ResponseEntity::ok);

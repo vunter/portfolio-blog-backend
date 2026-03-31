@@ -44,7 +44,7 @@ public class AdminExportController {
     @Operation(summary = "Export blog data", description = "Export all articles and tags as JSON")
     public Mono<ResponseEntity<BlogExport>> exportBlog(
             @Parameter(description = "Name of the person exporting")
-            @RequestParam(defaultValue = "Admin") String exportedBy) {
+            @RequestParam(defaultValue = "Admin") @jakarta.validation.constraints.Size(max = 100) @jakarta.validation.constraints.Pattern(regexp = "^[a-zA-Z0-9 _-]+$", message = "exportedBy must contain only alphanumeric characters, spaces, hyphens, and underscores") String exportedBy) {
         log.info("Exporting blog data");
         return checkExportLimit()
                 .then(exportImportService.exportAll(exportedBy))
@@ -54,7 +54,7 @@ public class AdminExportController {
     @GetMapping("/json")
     @Operation(summary = "Export as JSON file", description = "Download blog data as a JSON file")
     public Mono<ResponseEntity<String>> exportAsJsonFile(
-            @RequestParam(defaultValue = "Admin") String exportedBy) {
+            @RequestParam(defaultValue = "Admin") @jakarta.validation.constraints.Size(max = 100) @jakarta.validation.constraints.Pattern(regexp = "^[a-zA-Z0-9 _-]+$") String exportedBy) {
         log.info("Exporting blog data as JSON file");
         String filename = "blog-export-" + 
                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")) + ".json";
@@ -62,7 +62,10 @@ public class AdminExportController {
         return checkExportLimit()
                 .then(exportImportService.exportToJson(exportedBy))
                 .map(json -> ResponseEntity.ok()
-                        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                        .header(HttpHeaders.CONTENT_DISPOSITION,
+                                org.springframework.http.ContentDisposition.attachment()
+                                        .filename(filename, java.nio.charset.StandardCharsets.UTF_8)
+                                        .build().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .body(json));
     }
