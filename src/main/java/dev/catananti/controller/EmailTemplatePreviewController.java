@@ -3,7 +3,9 @@ package dev.catananti.controller;
 import dev.catananti.service.EmailTemplateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.server.ResponseStatusException;
@@ -255,15 +257,22 @@ public class EmailTemplatePreviewController {
     }
 
     @GetMapping(value = "/{templateId}/preview", produces = MediaType.TEXT_HTML_VALUE)
-    public Mono<String> previewTemplate(@PathVariable String templateId) {
+    public Mono<ResponseEntity<String>> previewTemplate(@PathVariable String templateId) {
         TemplateInfo template = findTemplate(templateId);
         return templateService.ensureCacheLoaded().then(
             templateService.getTemplateSource(templateId)
                 .map(source -> {
+                    String rendered;
                     if (source.isOverride()) {
-                        return templateService.renderFromString(source.html(), template.sampleData(), templateId);
+                        rendered = templateService.renderFromString(source.html(), template.sampleData(), templateId);
+                    } else {
+                        rendered = templateService.render(template.id(), template.sampleData());
                     }
-                    return templateService.render(template.id(), template.sampleData());
+                    return ResponseEntity.ok()
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                            .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:;")
+                            .header("X-Content-Type-Options", "nosniff")
+                            .body(rendered);
                 }));
     }
 
@@ -292,7 +301,7 @@ public class EmailTemplatePreviewController {
                 }));
     }
 
-    /** Save template override (custom HTML). */
+    /** Save template override (custom HTML). Strips script tags before persisting. */
     @PutMapping("/{templateId}")
     public Mono<Map<String, String>> updateTemplate(
             @PathVariable String templateId,
@@ -304,8 +313,12 @@ public class EmailTemplatePreviewController {
             return Mono.error(new ResponseStatusException(
                     org.springframework.http.HttpStatus.BAD_REQUEST, "HTML content is required"));
         }
+        // Sanitize: strip script/iframe/object tags before persisting
+        org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(html);
+        doc.select("script, iframe, object, embed, applet").remove();
+        String sanitizedHtml = doc.html();
         String user = auth != null ? auth.getName() : "admin";
-        return templateService.saveOverride(templateId, html, user)
+        return templateService.saveOverride(templateId, sanitizedHtml, user)
             .thenReturn(Map.of("message", "Template saved", "templateId", templateId));
     }
 
@@ -321,7 +334,7 @@ public class EmailTemplatePreviewController {
 
     /** Preview custom HTML with sample data (without saving). */
     @PostMapping(value = "/{templateId}/preview", produces = MediaType.TEXT_HTML_VALUE)
-    public Mono<String> previewCustomHtml(@PathVariable String templateId, @RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity<String>> previewCustomHtml(@PathVariable String templateId, @RequestBody Map<String, String> body) {
         TemplateInfo template = findTemplate(templateId);
         String html = body.get("html");
         if (html == null || html.isBlank()) {
@@ -330,7 +343,12 @@ public class EmailTemplatePreviewController {
         }
         return templateService.ensureCacheLoaded().then(
             Mono.fromCallable(() -> templateService.renderFromString(html, template.sampleData(), templateId))
-                .subscribeOn(Schedulers.boundedElastic()));
+                .subscribeOn(Schedulers.boundedElastic())
+                .map(rendered -> ResponseEntity.ok()
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                        .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:;")
+                        .header("X-Content-Type-Options", "nosniff")
+                        .body(rendered)));
     }
 
     // ==================== Custom Variables CRUD ====================

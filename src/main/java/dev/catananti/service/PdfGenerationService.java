@@ -188,14 +188,45 @@ public class PdfGenerationService {
      * Internal method to perform the actual PDF conversion using Playwright.
      * This is a blocking operation and should be called on boundedElastic scheduler.
      */
+    /**
+     * Sanitize HTML content for PDF generation.
+     * Strips script tags and dangerous elements while preserving layout/style tags
+     * needed for PDF rendering.
+     */
+    private String sanitizeHtmlForPdf(String htmlContent) {
+        Document doc = Jsoup.parse(htmlContent);
+        // Remove script tags and event handler attributes
+        doc.select("script, iframe, object, embed, applet, form, input, textarea, button").remove();
+        // Remove event handler attributes from all elements
+        doc.getAllElements().forEach(element -> {
+            element.attributes().asList().stream()
+                    .filter(attr -> attr.getKey().toLowerCase().startsWith("on"))
+                    .forEach(attr -> element.removeAttr(attr.getKey()));
+            // Remove javascript: protocol in href/src
+            for (String urlAttr : new String[]{"href", "src", "action"}) {
+                String val = element.attr(urlAttr);
+                if (val != null && val.trim().toLowerCase().startsWith("javascript:")) {
+                    element.removeAttr(urlAttr);
+                }
+            }
+        });
+        // Preserve full document structure for PDF rendering
+        doc.outputSettings().syntax(Document.OutputSettings.Syntax.html);
+        return doc.html();
+    }
+
     private byte[] convertToPdf(Browser browserInstance, String htmlContent, String paperSizeStr, boolean landscape) {
         Path tempFile = null;
         BrowserContext context = null;
-        
+
         try {
+            // Sanitize HTML before rendering to prevent script injection
+            String sanitizedHtml = sanitizeHtmlForPdf(htmlContent);
+
             // Create a temporary HTML file (Playwright works best with file URLs)
             tempFile = Files.createTempFile("resume_", ".html");
-            Files.writeString(tempFile, htmlContent, StandardCharsets.UTF_8);
+            tempFile.toFile().deleteOnExit();
+            Files.writeString(tempFile, sanitizedHtml, StandardCharsets.UTF_8);
             
             log.debug("Created temp HTML file: {}", tempFile);
             
