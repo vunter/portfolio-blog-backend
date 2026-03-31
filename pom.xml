@@ -37,7 +37,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 		<lombok.version>1.18.42</lombok.version>
-		<jjwt.version>0.13.0</jjwt.version>
+		<jjwt.version>0.13.1</jjwt.version>
 		<testcontainers.version>1.21.0</testcontainers.version>
 		<spring-cloud.version>2025.1.0</spring-cloud.version>
 	</properties>
@@ -412,17 +412,17 @@
 		</pluginRepository>
 	</pluginRepositories>
 
-	<!-- Deploy artifacts to local Nexus (F-002: use HTTPS when Nexus TLS is configured) -->
+	<!-- Deploy artifacts to local Nexus — HTTPS required when Nexus TLS is configured -->
 	<distributionManagement>
 		<snapshotRepository>
 			<id>nexus-snapshots</id>
 			<name>Nexus Snapshots</name>
-			<url>http://192.168.1.214:30081/repository/maven-snapshots/</url>
+			<url>https://192.168.1.214:30081/repository/maven-snapshots/</url>
 		</snapshotRepository>
 		<repository>
 			<id>nexus-releases</id>
 			<name>Nexus Releases</name>
-			<url>http://192.168.1.214:30081/repository/maven-releases/</url>
+			<url>https://192.168.1.214:30081/repository/maven-releases/</url>
 		</repository>
 	</distributionManagement>
 
