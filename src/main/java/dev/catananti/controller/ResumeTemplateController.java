@@ -259,7 +259,7 @@ public class ResumeTemplateController {
     @Operation(summary = "Generate PDF from template slug")
     @PostMapping("/templates/slug/{slug}/pdf")
     public Mono<ResponseEntity<byte[]>> generatePdfFromSlug(
-            @PathVariable String slug,
+            @PathVariable @jakarta.validation.constraints.Pattern(regexp = "^[a-z0-9-]+$") @jakarta.validation.constraints.Size(max = 200) String slug,
             @RequestBody(required = false) Map<String, String> variables) {
         
         return templateService.generatePdfFromSlug(slug, variables)
