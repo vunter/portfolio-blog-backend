@@ -7,7 +7,7 @@
 # The main backend image is built with PLAYWRIGHT_REMOTE=true so it skips the
 # Chromium install and connects here over WebSocket via APP_PDF_BROWSER_WS_ENDPOINT.
 
-FROM mcr.microsoft.com/playwright:v1.51.0-noble
+FROM mcr.microsoft.com/playwright:v1.60.0-noble
 
 WORKDIR /app
 
