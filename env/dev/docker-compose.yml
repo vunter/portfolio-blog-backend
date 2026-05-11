@@ -1,0 +1,355 @@
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: portfolio-blog-api
+    read_only: true
+    tmpfs:
+      - /tmp:size=256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+      - DATABASE_URL=r2dbc:postgresql://postgres:5432/blog
+      - DATABASE_USERNAME=${DB_USERNAME:-postgres}
+      - DATABASE_PASSWORD=${DB_PASSWORD:-postgres}
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:-redis}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ADMIN_NAME=${ADMIN_NAME:-Administrator}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - RECAPTCHA_ENABLED=${RECAPTCHA_ENABLED:-true}
+      - RECAPTCHA_SITE_KEY=${RECAPTCHA_SITE_KEY:?RECAPTCHA_SITE_KEY is required}
+      - RECAPTCHA_SECRET_KEY=${RECAPTCHA_SECRET_KEY:?RECAPTCHA_SECRET_KEY is required}
+      - RECAPTCHA_SCORE_THRESHOLD=${RECAPTCHA_SCORE_THRESHOLD:-0.5}
+      - VAULT_ADDR=${VAULT_ADDR:-http://192.168.1.193:30820}
+      - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}
+      - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}
+      - DD_AGENT_ENABLED=${DD_AGENT_ENABLED:-true}
+      - DD_AGENT_HOST=datadog-agent
+      - DD_TRACE_AGENT_URL=http://datadog-agent:8126
+      - DD_SERVICE=portfolio-blog-api
+      - DD_ENV=development
+      - DD_VERSION=2.0.0
+      - DD_LOGS_INJECTION=true
+      - DD_PROFILING_ENABLED=false
+      - DD_METRICS_ENABLED=true
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET:-media}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - S3_PUBLIC_URL=${S3_PUBLIC_URL:-http://localhost:9000/media}
+      - SNOWFLAKE_NODE_ID=${SNOWFLAKE_NODE_ID:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.5'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    volumes:
+      - uploads_data:/app/uploads
+      - app_logs:/app/logs
+    networks:
+      - blog-frontend-network
+      - blog-backend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"java","service":"portfolio-blog-api"}]'
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: blog-postgres
+    environment:
+      POSTGRES_DB: blog
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+      LANG: en_US.UTF-8
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d blog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"postgresql","service":"blog-postgres"}]'
+
+  redis:
+    image: redis:7-alpine
+    container_name: blog-redis
+    command: redis-server --appendonly no --save "" --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD:-redis}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-redis}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"redis","service":"blog-redis"}]'
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    container_name: blog-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    profiles:
+      - s3
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: blog-prometheus
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/bearer_token:/etc/prometheus/bearer_token:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+      - '--web.external-url=/prometheus'
+      - '--web.route-prefix=/prometheus'
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"prometheus","service":"blog-prometheus"}]'
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: blog-grafana
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required - set a strong password (generate with: openssl rand -base64 32)}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"grafana","service":"blog-grafana"}]'
+
+  frontend:
+    build:
+      context: ../../../portfolio-blog-frontend
+      dockerfile: Dockerfile
+    container_name: portfolio-blog-frontend
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+      - /var/cache/nginx:size=64M
+      - /var/run:size=1M
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - blog-frontend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"nginx","service":"portfolio-blog-frontend"}]'
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: blog-nginx
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+      - /var/cache/nginx:size=128M
+      - /var/run:size=1M
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+    depends_on:
+      - app
+      - frontend
+      - prometheus
+      - grafana
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - blog-frontend-network
+      - blog-backend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"nginx","service":"blog-nginx"}]'
+
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    container_name: datadog-agent
+    pid: host
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE:-us5.datadoghq.com}
+      - DD_APM_ENABLED=true
+      - DD_APM_NON_LOCAL_TRAFFIC=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_CONTAINER_EXCLUDE="name:datadog-agent"
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_PROCESS_AGENT_ENABLED=true
+      - DD_ENV=${DD_ENV:-development}
+      - DD_TAGS=env:${DD_ENV:-development},service:portfolio-blog,team:catananti
+      - DD_HOSTNAME=${DD_HOSTNAME:-dev-localhost}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - blog-backend-network
+      - blog-frontend-network
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+networks:
+  blog-frontend-network:
+    driver: bridge
+  blog-backend-network:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+  uploads_data:
+  app_logs:
