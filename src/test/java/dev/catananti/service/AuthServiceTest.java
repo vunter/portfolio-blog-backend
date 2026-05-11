@@ -113,7 +113,7 @@ class AuthServiceTest {
                 .thenReturn(Mono.just(testUser));
         when(passwordEncoder.matches("password123", testUser.getPasswordHash()))
                 .thenReturn(true);
-        when(tokenProvider.generateToken("test@example.com", "ADMIN"))
+        when(tokenProvider.generateToken(testUser.getId(), "ADMIN"))
                 .thenReturn("jwt-token-here");
 
         // When
@@ -131,7 +131,7 @@ class AuthServiceTest {
 
         verify(userRepository).findByEmail("test@example.com");
         verify(passwordEncoder).matches("password123", testUser.getPasswordHash());
-        verify(tokenProvider).generateToken("test@example.com", "ADMIN");
+        verify(tokenProvider).generateToken(testUser.getId(), "ADMIN");
         verify(loginAttemptService).clearFailedAttempts("test@example.com");
     }
 
@@ -197,21 +197,6 @@ class AuthServiceTest {
         verify(tokenProvider).validateToken(token);
     }
 
-    @Test
-    @DisplayName("Should return email from token")
-    void getEmailFromToken_ShouldReturnEmail() {
-        // Given
-        String token = "jwt-token";
-        when(tokenProvider.getEmailFromToken(token)).thenReturn("test@example.com");
-
-        // When
-        String email = authService.getEmailFromToken(token);
-
-        // Then
-        assertThat(email).isEqualTo("test@example.com");
-        verify(tokenProvider).getEmailFromToken(token);
-    }
-
     // ==================== ADDED TESTS ====================
 
     @Test
@@ -252,7 +237,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(testUser));
         when(passwordEncoder.matches("password123", testUser.getPasswordHash())).thenReturn(true);
         when(loginAttemptService.clearFailedAttempts("test@example.com")).thenReturn(Mono.empty());
-        when(tokenProvider.generateToken("test@example.com", "ADMIN")).thenReturn("access-token");
+        when(tokenProvider.generateToken(testUser.getId(), "ADMIN")).thenReturn("access-token");
         when(refreshTokenService.createRefreshToken(testUser.getId(), "127.0.0.1", "TestAgent")).thenReturn(Mono.just(refreshToken));
 
         StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1", "TestAgent"))
@@ -313,7 +298,7 @@ class AuthServiceTest {
 
         when(refreshTokenService.verifyAndRotate("old-refresh-tok", null, null)).thenReturn(Mono.just(newRefreshToken));
         when(userRepository.findById(testUser.getId())).thenReturn(Mono.just(testUser));
-        when(tokenProvider.generateToken("test@example.com", "ADMIN")).thenReturn("new-access-token");
+        when(tokenProvider.generateToken(testUser.getId(), "ADMIN")).thenReturn("new-access-token");
 
         StepVerifier.create(authService.refreshAccessToken("old-refresh-tok", null, null))
                 .assertNext(resp -> {
@@ -353,7 +338,7 @@ class AuthServiceTest {
         when(idService.nextId()).thenReturn(555L);
         when(passwordEncoder.encode("Password123!@")).thenReturn("hashed");
         when(userRepository.save(any(User.class))).thenReturn(Mono.just(savedUser));
-        when(tokenProvider.generateToken("new@example.com", "VIEWER")).thenReturn("access-tok");
+        when(tokenProvider.generateToken(555L, "VIEWER")).thenReturn("access-tok");
         when(emailService.sendRegistrationWelcome("new@example.com", "New User")).thenReturn(Mono.empty());
         when(refreshTokenService.createRefreshToken(555L)).thenReturn(Mono.just(refreshToken));
 
@@ -374,12 +359,12 @@ class AuthServiceTest {
         when(userRepository.existsByEmail("existing@example.com")).thenReturn(Mono.just(true));
         when(emailService.sendTextEmail(eq("existing@example.com"), anyString(), anyString()))
                 .thenReturn(Mono.empty());
-        when(passwordEncoder.encode("dummy")).thenReturn("hashed-dummy");
+        when(passwordEncoder.encode("Password123!@")).thenReturn("hashed-dummy");
 
         StepVerifier.create(authService.register(request, "127.0.0.1"))
                 .assertNext(resp -> {
-                    assertThat(resp.getAccessToken()).isEmpty();
-                    assertThat(resp.getEmail()).isEqualTo("existing@example.com");
+                    assertThat(resp.getAccessToken()).isNull();
+                    assertThat(resp.getEmail()).isNull();
                 })
                 .verifyComplete();
 

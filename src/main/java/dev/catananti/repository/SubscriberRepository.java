@@ -14,17 +14,18 @@ import java.util.List;
 @Repository
 public interface SubscriberRepository extends ReactiveCrudRepository<Subscriber, Long> {
 
+    @Query("SELECT * FROM subscribers WHERE email = LOWER(TRIM(:email))")
     Mono<Subscriber> findByEmail(String email);
 
     Mono<Subscriber> findByConfirmationToken(String token);
 
     Mono<Subscriber> findByUnsubscribeToken(String token);
 
-    @Query("SELECT * FROM subscribers WHERE status = :status LIMIT 1000")
-    Flux<Subscriber> findByStatus(String status);
+    @Query("SELECT * FROM subscribers WHERE status = :status LIMIT :limit")
+    Flux<Subscriber> findByStatus(String status, int limit);
 
-    @Query("SELECT * FROM subscribers WHERE status = 'CONFIRMED' ORDER BY created_at DESC LIMIT 1000")
-    Flux<Subscriber> findAllConfirmed();
+    @Query("SELECT * FROM subscribers WHERE status = 'CONFIRMED' ORDER BY created_at DESC LIMIT :limit")
+    Flux<Subscriber> findAllConfirmed(int limit);
 
     @Query("SELECT * FROM subscribers ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Subscriber> findAllPaginated(int limit, int offset);
@@ -53,6 +54,7 @@ public interface SubscriberRepository extends ReactiveCrudRepository<Subscriber,
     @Query("SELECT COUNT(*) FROM subscribers WHERE status = 'PENDING'")
     Mono<Long> countPending();
 
+    @Query("SELECT COUNT(*) > 0 FROM subscribers WHERE email = LOWER(TRIM(:email))")
     Mono<Boolean> existsByEmail(String email);
 
     @Modifying

@@ -40,7 +40,7 @@ public class ArticleReview implements Persistable<Long>, NewRecordAware {
     private Long reviewerId;
 
     @Column("status")
-    private String status; // APPROVED, CHANGES_REQUESTED
+    private ArticleReviewStatus status;
 
     @Column("feedback")
     private String feedback;

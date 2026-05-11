@@ -4,6 +4,7 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.ResumeTemplateRequest;
 import dev.catananti.dto.ResumeTemplateResponse;
 import dev.catananti.entity.ResumeTemplate;
+import dev.catananti.entity.ResumeTemplateStatus;
 import dev.catananti.entity.User;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ResumeTemplateRepository;
@@ -73,7 +74,7 @@ class ResumeTemplateServiceTest {
                 .name(LocalizedText.of("en", "My Resume"))
                 .description(LocalizedText.of("en", "A professional resume template"))
                 .htmlContent("<html><body><h1>Resume</h1></body></html>")
-                .status("ACTIVE")
+                .status(ResumeTemplateStatus.ACTIVE)
                 .ownerId(1L)
                 .version(1)
                 .isDefault(false)

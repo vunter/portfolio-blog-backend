@@ -7,13 +7,11 @@ import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
-
 @Repository
 public interface CommentRepository extends ReactiveCrudRepository<Comment, Long> {
 
-    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at DESC LIMIT 500")
-    Flux<Comment> findApprovedByArticleId(Long articleId);
+    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at DESC LIMIT :limit")
+    Flux<Comment> findApprovedByArticleId(Long articleId, int limit);
 
     @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Comment> findApprovedByArticleIdPaginated(Long articleId, int limit, int offset);
@@ -29,13 +27,13 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
 
     // Q9.1: Batch-load replies for multiple parent IDs to avoid N+1
     @Query("SELECT * FROM comments WHERE parent_id IN (:parentIds) AND status = 'APPROVED' ORDER BY created_at ASC")
-    Flux<Comment> findApprovedRepliesByParentIds(List<Long> parentIds);
+    Flux<Comment> findApprovedRepliesByParentIds(Long[] parentIds);
 
-    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' ORDER BY created_at ASC LIMIT 500")
-    Flux<Comment> findAllApprovedByArticleId(Long articleId);
+    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' ORDER BY created_at ASC LIMIT :limit")
+    Flux<Comment> findAllApprovedByArticleId(Long articleId, int limit);
 
-    @Query("SELECT * FROM comments WHERE article_id = :articleId ORDER BY created_at DESC LIMIT 100")
-    Flux<Comment> findAllByArticleId(Long articleId);
+    @Query("SELECT * FROM comments WHERE article_id = :articleId ORDER BY created_at DESC LIMIT :limit")
+    Flux<Comment> findAllByArticleId(Long articleId, int limit);
 
     @Query("SELECT * FROM comments WHERE status = :status ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Comment> findByStatus(String status, int limit, int offset);
@@ -53,11 +51,16 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
 
     Mono<Void> deleteByParentId(Long parentId);
 
+    // Atomic increment likes count
     @Query("UPDATE comments SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = :id")
-    Mono<Void> incrementLikesById(Long id);
+    Mono<Void> incrementLikes(Long id);
 
+    // Atomic decrement likes count (floor at 0)
     @Query("UPDATE comments SET likes_count = GREATEST(COALESCE(likes_count, 0) - 1, 0) WHERE id = :id")
-    Mono<Void> decrementLikesById(Long id);
+    Mono<Void> decrementLikes(Long id);
+
+    @Query("SELECT likes_count FROM comments WHERE id = :id")
+    Mono<Integer> getLikesCount(Long id);
 
     @Query("SELECT COUNT(*) FROM comments WHERE LOWER(author_email) = LOWER(:email) AND status = 'APPROVED'")
     Mono<Long> countApprovedByAuthorEmail(String email);

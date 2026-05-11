@@ -4,6 +4,7 @@ import dev.catananti.config.ResilienceConfig;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.User;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.metrics.BlogMetrics;
@@ -60,6 +61,9 @@ class ArticleServiceTest {
     @Mock
     private ResilienceConfig resilience;
 
+    @Mock
+    private dev.catananti.config.PaginationConfig paginationConfig;
+
     @InjectMocks
     private ArticleService articleService;
 
@@ -77,7 +81,7 @@ class ArticleServiceTest {
                 .subtitle("Test Subtitle")
                 .content("This is test content for the article.")
                 .excerpt("Test excerpt")
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .viewsCount(10)
                 .likesCount(5)
                 .readingTimeMinutes(3)
@@ -89,6 +93,10 @@ class ArticleServiceTest {
         // Mock resilience config
         lenient().when(resilience.getDatabaseTimeout()).thenReturn(java.time.Duration.ofSeconds(10));
         lenient().when(resilience.getDatabaseCircuitBreaker()).thenReturn(CircuitBreaker.ofDefaults("test"));
+
+        // Mock pagination config
+        lenient().when(paginationConfig.getFeedMaxItems()).thenReturn(100);
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
 
         // Mock CommentRepository
         lenient().when(commentRepository.countApprovedByArticleId(anyLong())).thenReturn(Mono.just(0L));
@@ -377,7 +385,7 @@ class ArticleServiceTest {
     void getRelatedArticles_ShouldReturnResults() {
         Article related = Article.builder()
                 .id(2L).slug("related-article").title("Related")
-                .status("PUBLISHED").viewsCount(0).likesCount(0)
+                .status(ArticleStatus.PUBLISHED).viewsCount(0).likesCount(0)
                 .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now())
                 .publishedAt(LocalDateTime.now())
                 .build();
@@ -415,7 +423,7 @@ class ArticleServiceTest {
     @Test
     @DisplayName("Should return all published articles for feed")
     void findAllPublishedForFeed_ShouldReturnArticles() {
-        when(articleRepository.findAllPublishedOrderByPublishedAtDesc())
+        when(articleRepository.findAllPublishedOrderByPublishedAtDesc(anyInt()))
                 .thenReturn(Flux.just(testArticle));
 
         StepVerifier.create(articleService.findAllPublishedForFeed().collectList())

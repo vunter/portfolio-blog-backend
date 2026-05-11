@@ -28,8 +28,7 @@ import java.util.UUID;
 @Slf4j
 public class LinkedInImportController {
 
-    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
-
+    private final tools.jackson.databind.ObjectMapper objectMapper;
     private final LinkedInPortabilityService portabilityService;
     private final OAuth2Service oAuth2Service;
 
@@ -81,7 +80,7 @@ public class LinkedInImportController {
                             })
                             .flatMap(profileRequest -> {
                                 try {
-                                    var mapper = MAPPER;
+                                    var mapper = objectMapper;
                                     String json = mapper.writeValueAsString(profileRequest);
                                     return portabilityService.storeImportResult(json, userIdentifier);
                                 } catch (Exception e) {
@@ -112,7 +111,7 @@ public class LinkedInImportController {
         return portabilityService.retrieveImportResult(key, userIdentifier)
                 .flatMap(json -> {
                     try {
-                        ResumeProfileRequest result = MAPPER.readValue(json, ResumeProfileRequest.class);
+                        ResumeProfileRequest result = objectMapper.readValue(json, ResumeProfileRequest.class);
                         return Mono.just(ResponseEntity.ok(result));
                     } catch (Exception e) {
                         log.error("Failed to deserialize import result for key={}: {}", key, e.getMessage(), e);

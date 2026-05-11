@@ -28,6 +28,14 @@ public interface RefreshTokenRepository extends ReactiveCrudRepository<RefreshTo
     @Query("SELECT * FROM refresh_tokens WHERE user_id = :userId AND revoked = false AND expires_at > NOW() ORDER BY created_at DESC")
     Flux<RefreshToken> findActiveByUserId(Long userId);
 
+    /**
+     * Revokes a token by setting revoked=true. Returns the number of updated rows.
+     * In combination with findByToken, this replaces the PostgreSQL-specific RETURNING approach.
+     */
+    @Modifying
+    @Query("UPDATE refresh_tokens SET revoked = true WHERE token = :token AND revoked = false")
+    Mono<Long> revokeByTokenIfActive(String token);
+
     @Modifying
     @Query("DELETE FROM refresh_tokens WHERE expires_at < :now")
     Mono<Void> deleteExpired(LocalDateTime now);

@@ -1,11 +1,14 @@
 package dev.catananti.service;
 
+import dev.catananti.config.ResilienceConfig;
 import dev.catananti.dto.TokenResponse;
 import dev.catananti.entity.User;
 import dev.catananti.entity.UserSocialAccount;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.repository.UserSocialAccountRepository;
 import dev.catananti.security.JwtTokenProvider;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -31,9 +34,9 @@ import java.util.Map;
 @Slf4j
 public class OAuth2Service {
 
-    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
     private static final Duration OAUTH_TIMEOUT = Duration.ofSeconds(15);
 
+    private final tools.jackson.databind.ObjectMapper objectMapper;
     private final UserRepository userRepository;
     private final UserSocialAccountRepository socialAccountRepository;
     private final RefreshTokenService refreshTokenService;
@@ -42,6 +45,7 @@ public class OAuth2Service {
     private final AuditService auditService;
     private final WebClient webClient;
     private final ReactiveStringRedisTemplate redisTemplate;
+    private final CircuitBreaker circuitBreaker;
 
     private static final String OAUTH2_STATE_PREFIX = "oauth2:state:";
     private static final Duration STATE_TTL = Duration.ofMinutes(5);
@@ -72,7 +76,9 @@ public class OAuth2Service {
                          JwtTokenProvider tokenProvider,
                          IdService idService,
                          AuditService auditService,
-                         ReactiveStringRedisTemplate redisTemplate) {
+                         ReactiveStringRedisTemplate redisTemplate,
+                         ResilienceConfig resilience,
+                         tools.jackson.databind.ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.socialAccountRepository = socialAccountRepository;
         this.refreshTokenService = refreshTokenService;
@@ -81,6 +87,8 @@ public class OAuth2Service {
         this.auditService = auditService;
         this.redisTemplate = redisTemplate;
         this.webClient = WebClient.builder().build();
+        this.circuitBreaker = resilience.getOauthCircuitBreaker();
+        this.objectMapper = objectMapper;
     }
 
     public boolean isGoogleEnabled() {
@@ -163,10 +171,11 @@ public class OAuth2Service {
                 .retrieve()
                 .bodyToMono(String.class)
                 .timeout(OAUTH_TIMEOUT)
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .doOnNext(body -> log.info("Google token response received, length={}", body.length()))
                 .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = MAPPER;
+                        var mapper = objectMapper;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         throw new RuntimeException("Failed to parse Google token response", e);
@@ -184,7 +193,7 @@ public class OAuth2Service {
                 })
                 .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = MAPPER;
+                        var mapper = objectMapper;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         throw new RuntimeException("Failed to parse Google userinfo response", e);
@@ -227,9 +236,10 @@ public class OAuth2Service {
                 .retrieve()
                 .bodyToMono(String.class)
                 .timeout(OAUTH_TIMEOUT)
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = MAPPER;
+                        var mapper = objectMapper;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse GitHub token response", e);
@@ -247,7 +257,7 @@ public class OAuth2Service {
                             .timeout(OAUTH_TIMEOUT)
                             .flatMap(body -> Mono.fromCallable(() -> {
                                 try {
-                                    var mapper = MAPPER;
+                                    var mapper = objectMapper;
                                     return (Map<String, Object>) mapper.readValue(body, Map.class);
                                 } catch (Exception e) {
                                     log.error("Failed to parse GitHub user response", e);
@@ -263,7 +273,7 @@ public class OAuth2Service {
                             .timeout(OAUTH_TIMEOUT)
                             .flatMap(body -> Mono.fromCallable(() -> {
                                 try {
-                                    var mapper = MAPPER;
+                                    var mapper = objectMapper;
                                     return (List<Map<String, Object>>) mapper.readValue(body,
                                             mapper.getTypeFactory().constructCollectionType(List.class, Map.class));
                                 } catch (Exception e) {
@@ -320,10 +330,11 @@ public class OAuth2Service {
                 .retrieve()
                 .bodyToMono(String.class)
                 .timeout(OAUTH_TIMEOUT)
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .doOnNext(body -> log.info("LinkedIn token response received, length={}", body.length()))
                 .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = MAPPER;
+                        var mapper = objectMapper;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse LinkedIn token response", e);
@@ -342,7 +353,7 @@ public class OAuth2Service {
                 })
                 .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = MAPPER;
+                        var mapper = objectMapper;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse LinkedIn userinfo response", e);
@@ -478,7 +489,7 @@ public class OAuth2Service {
     }
 
     private Mono<TokenResponse> issueTokens(User user, String clientIp) {
-        String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
+        String accessToken = tokenProvider.generateToken(user.getId(), user.getRole());
         return refreshTokenService.createRefreshToken(user.getId(), clientIp, "OAuth2")
                 .map(refreshToken -> TokenResponse.builder()
                         .accessToken(accessToken)

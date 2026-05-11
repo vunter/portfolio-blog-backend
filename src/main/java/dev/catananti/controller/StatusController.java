@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.SubscriberRepository;
@@ -127,7 +128,7 @@ public class StatusController {
     private Mono<Map<String, Object>> getBlogStats() {
         return Mono.zip(
                 articleRepository.countAll().defaultIfEmpty(0L),
-                articleRepository.countByStatus("PUBLISHED").defaultIfEmpty(0L),
+                articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()).defaultIfEmpty(0L),
                 commentRepository.count().defaultIfEmpty(0L),
                 subscriberRepository.countConfirmed().defaultIfEmpty(0L)
         ).map(tuple -> Map.<String, Object>of(

@@ -3,7 +3,7 @@ package dev.catananti.controller;
 import dev.catananti.dto.ContactResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.ContactService;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,11 +26,13 @@ import reactor.core.publisher.Mono;
 public class AdminContactController {
 
     private final ContactService contactService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping("/messages")
     public Mono<PageResponse<ContactResponse>> getAllMessages(
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+            @RequestParam(defaultValue = "20") @Min(1) int size) {
+        size = paginationConfig.clampPageSize(size);
         log.debug("Fetching contact messages: page={}, size={}", page, size);
         return contactService.getAllContactsPaginated(page, size);
     }

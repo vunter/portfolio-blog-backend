@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.*;
 import dev.catananti.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -30,6 +32,9 @@ class AdminUserControllerTest {
 
     @Mock
     private UserService userService;
+
+    @Spy
+    private PaginationConfig paginationConfig = new PaginationConfig();
 
     @InjectMocks
     private AdminUserController controller;

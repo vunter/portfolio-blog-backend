@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.ContactResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.ContactService;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -25,6 +27,9 @@ class AdminContactControllerTest {
 
     @Mock
     private ContactService contactService;
+
+    @Spy
+    private PaginationConfig paginationConfig = new PaginationConfig();
 
     @InjectMocks
     private AdminContactController controller;

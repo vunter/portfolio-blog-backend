@@ -3,6 +3,7 @@ package dev.catananti.integration;
 import dev.catananti.controller.*;
 import dev.catananti.dto.*;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.SubscriberRepository;
@@ -150,13 +151,21 @@ class ApiEndpointIntegrationTest {
         @Mock
         private AnalyticsService analyticsService;
 
+        @Mock
+        private dev.catananti.config.PaginationConfig paginationConfig;
+
+        @Mock
+        private org.springframework.core.env.Environment environment;
+
         private ArticleController articleController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
-            articleController = new ArticleController(articleService, java.util.Optional.of(deduplicationService), readingHistoryService, analyticsService);
+            lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+            lenient().when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
+            articleController = new ArticleController(articleService, java.util.Optional.of(deduplicationService), readingHistoryService, analyticsService, paginationConfig, environment);
             client = WebTestClient.bindToController(articleController)
                     .configureClient().build();
         }
@@ -246,11 +255,15 @@ class ApiEndpointIntegrationTest {
         @Mock
         private TagService tagService;
 
+        @Mock
+        private dev.catananti.config.PaginationConfig paginationConfig;
+
         private TagController tagController;
 
         @BeforeEach
         void setUp() {
-            tagController = new TagController(tagService);
+            lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+            tagController = new TagController(tagService, paginationConfig);
         }
 
         @Test
@@ -294,11 +307,15 @@ class ApiEndpointIntegrationTest {
         @Mock
         private SearchService searchService;
 
+        @Mock
+        private dev.catananti.config.PaginationConfig paginationConfig;
+
         private SearchController searchController;
 
         @BeforeEach
         void setUp() {
-            searchController = new SearchController(searchService);
+            lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+            searchController = new SearchController(searchService, paginationConfig);
         }
 
         @Test
@@ -500,13 +517,15 @@ class ApiEndpointIntegrationTest {
         @Mock private ArticleAdminService articleAdminService;
         @Mock private ArticleService articleService;
         @Mock private ArticleTranslationService articleTranslationService;
+        @Mock private dev.catananti.config.PaginationConfig paginationConfig;
 
         private AdminArticleController adminArticleController;
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
-            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService);
+            lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService, paginationConfig);
             client = WebTestClient.bindToController(adminArticleController)
                     .configureClient().build();
         }
@@ -517,10 +536,10 @@ class ApiEndpointIntegrationTest {
             var page = pageOf(List.of(
                     buildArticle("draft-post", "Draft Post"),
                     buildArticle("pub-post", "Published Post")));
-            when(articleAdminService.getAllArticles(eq(0), eq(10), any()))
+            when(articleAdminService.getAllArticles(eq(0), eq(10), any(), any()))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(adminArticleController.getAllArticles(0, 10, null, null))
+            StepVerifier.create(adminArticleController.getAllArticles(0, 10, null, null, "newest"))
                     .assertNext(result -> assertThat(result.getContent()).hasSize(2))
                     .verifyComplete();
         }
@@ -737,12 +756,13 @@ class ApiEndpointIntegrationTest {
     class AdminCommentManagement {
 
         @Mock private CommentService commentService;
-        @InjectMocks private AdminCommentController adminCommentController;
+        private AdminCommentController adminCommentController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
+            adminCommentController = new AdminCommentController(commentService, new dev.catananti.config.PaginationConfig());
             client = WebTestClient.bindToController(adminCommentController)
                     .configureClient().build();
         }
@@ -803,12 +823,19 @@ class ApiEndpointIntegrationTest {
         @Mock private CommentService commentService;
         @Mock private RecaptchaService recaptchaService;
         @Mock private UserService userService;
-        @InjectMocks private CommentController commentController;
+        @Mock private org.springframework.core.env.Environment environment;
+        private CommentController commentController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
+            lenient().when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
+            commentController = new CommentController(
+                    commentService, recaptchaService, userService,
+                    Optional.empty(),
+                    new dev.catananti.config.PaginationConfig(),
+                    environment);
             client = WebTestClient.bindToController(commentController)
                     .configureClient().build();
             lenient().when(recaptchaService.verify(any(), any())).thenReturn(Mono.empty());
@@ -877,13 +904,15 @@ class ApiEndpointIntegrationTest {
 
         @Mock private UserService userService;
         @Mock private RoleUpgradeRequestService roleUpgradeRequestService;
+        @Mock private dev.catananti.config.PaginationConfig paginationConfig;
 
         private AdminUserController adminUserController;
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
-            adminUserController = new AdminUserController(userService, roleUpgradeRequestService);
+            lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+            adminUserController = new AdminUserController(userService, roleUpgradeRequestService, paginationConfig);
             client = WebTestClient.bindToController(adminUserController)
                     .configureClient().build();
         }
@@ -1108,7 +1137,7 @@ class ApiEndpointIntegrationTest {
         @DisplayName("GET /admin/dashboard/activity — recent activity feed (200)")
         void recentActivity_200() {
             var article = mock(Article.class);
-            when(article.getStatus()).thenReturn("PUBLISHED");
+            when(article.getStatus()).thenReturn(ArticleStatus.PUBLISHED);
             when(article.getTitle()).thenReturn("Test Article");
             when(article.getUpdatedAt()).thenReturn(LocalDateTime.now());
             when(articleRepository.findRecentlyUpdated(10))
@@ -1324,13 +1353,15 @@ class ApiEndpointIntegrationTest {
 
             @Mock private NewsletterService newsletterService;
             @Mock private NewsletterTrackingService newsletterTrackingService;
+            @Mock private dev.catananti.config.PaginationConfig paginationConfig;
 
             private AdminNewsletterController adminNewsletterController;
             private WebTestClient client;
 
             @BeforeEach
             void setUp() {
-                adminNewsletterController = new AdminNewsletterController(newsletterService, newsletterTrackingService);
+                lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+                adminNewsletterController = new AdminNewsletterController(newsletterService, newsletterTrackingService, paginationConfig);
                 client = WebTestClient.bindToController(adminNewsletterController)
                         .configureClient().build();
             }
@@ -1398,6 +1429,7 @@ class ApiEndpointIntegrationTest {
         @Mock private UserService userService;
         @Mock private SiteSettingsService settingsService;
         @Mock private NewsletterService newsletterService;
+        @Mock private dev.catananti.config.PaginationConfig paginationConfig;
 
         private AdminArticleController adminArticleController;
         @InjectMocks private AdminTagController adminTagController;
@@ -1408,7 +1440,8 @@ class ApiEndpointIntegrationTest {
 
         @BeforeEach
         void setUp() {
-            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService);
+            lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService, paginationConfig);
             tagClient = WebTestClient.bindToController(adminTagController)
                     .configureClient().build();
             commentClient = WebTestClient.bindToController(adminCommentController)

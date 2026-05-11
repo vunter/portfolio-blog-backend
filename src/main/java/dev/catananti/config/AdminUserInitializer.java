@@ -50,34 +50,38 @@ public class AdminUserInitializer {
             return;
         }
 
-        userRepository.existsByEmail(adminEmail)
-                .flatMap(exists -> {
-                    if (exists) {
-                        log.debug("Admin user already exists: {}", maskEmail(adminEmail));
-                        return Mono.empty();
-                    }
+        // Block at startup so a transient DB outage produces a hard failure (visible in logs and
+        // failing readiness probes) rather than a silently broken admin account.
+        try {
+            userRepository.existsByEmail(adminEmail)
+                    .flatMap(exists -> {
+                        if (exists) {
+                            log.debug("Admin user already exists: {}", maskEmail(adminEmail));
+                            return Mono.empty();
+                        }
 
-                    return Mono.fromCallable(() -> passwordEncoder.encode(adminPassword))
-                            .subscribeOn(Schedulers.boundedElastic())
-                            .flatMap(encodedPassword -> {
-                                User admin = User.builder()
-                                        .id(idService.nextId())
-                                        .email(adminEmail)
-                                        .passwordHash(encodedPassword)
-                                        .name(adminName)
-                                        .role("ADMIN")
-                                        .createdAt(LocalDateTime.now())
-                                        .updatedAt(LocalDateTime.now())
-                                        .build();
+                        return Mono.fromCallable(() -> passwordEncoder.encode(adminPassword))
+                                .subscribeOn(Schedulers.boundedElastic())
+                                .flatMap(encodedPassword -> {
+                                    User admin = User.builder()
+                                            .id(idService.nextId())
+                                            .email(adminEmail)
+                                            .passwordHash(encodedPassword)
+                                            .name(adminName)
+                                            .role("ADMIN")
+                                            .createdAt(LocalDateTime.now())
+                                            .updatedAt(LocalDateTime.now())
+                                            .build();
 
-                                return userRepository.save(admin)
-                                        .doOnSuccess(u -> log.debug("Admin user created successfully: {}", maskEmail(u.getEmail())));
-                            });
-                })
-                .subscribe(
-                        result -> {},
-                        e -> log.error("Failed to initialize admin user: {}", e.getMessage(), e)
-                );
+                                    return userRepository.save(admin)
+                                            .doOnSuccess(u -> log.info("Admin user created successfully: {}", maskEmail(u.getEmail())));
+                                });
+                    })
+                    .block(java.time.Duration.ofSeconds(30));
+        } catch (Exception e) {
+            log.error("Failed to initialize admin user — application will fail to start", e);
+            throw new IllegalStateException("Admin user initialization failed: " + e.getMessage(), e);
+        }
     }
 
     /** F-034: Safe email masking that won't crash on malformed emails (missing @) */

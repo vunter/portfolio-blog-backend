@@ -103,7 +103,8 @@ public class SecurityConfig {
                                     || path.startsWith("/api/v1/contact") || path.startsWith("/api/v1/search/")
                                     || "/api/v1/analytics/event".equals(path)
                                     || path.startsWith("/api/v1/analytics/view/")
-                                    || "/api/v1/csp-report".equals(path)) {
+                                    || "/api/v1/csp-report".equals(path)
+                                    || "/api/v1/client-errors".equals(path)) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
                                 }
                                 // F-016: Extracted to shared constant PUBLIC_AUTH_PATHS
@@ -190,6 +191,8 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
                         // CSP violation reports (public, sent by browsers automatically)
                         .pathMatchers(HttpMethod.POST, "/api/v1/csp-report").permitAll()
+                        // Q13.3: Client error reports (public)
+                        .pathMatchers(HttpMethod.POST, "/api/v1/client-errors").permitAll()
                         // Actuator - health/info/prometheus public (prometheus protected by nginx basic auth externally)
                         .pathMatchers("/actuator/health/**", "/actuator/info", "/actuator/prometheus").permitAll()
                         .pathMatchers("/actuator/**").hasRole("ADMIN")

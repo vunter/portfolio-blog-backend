@@ -24,7 +24,6 @@ import java.util.stream.Collectors;
 @Slf4j
 public class LinkedInPortabilityService {
 
-    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
     private static final String SNAPSHOT_API = "https://api.linkedin.com/rest/memberSnapshotData";
     private static final String TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
     private static final String AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization";
@@ -36,6 +35,7 @@ public class LinkedInPortabilityService {
             "CERTIFICATIONS", "LANGUAGES", "PROJECTS"
     );
 
+    private final tools.jackson.databind.ObjectMapper objectMapper;
     private final WebClient webClient;
     private final ReactiveStringRedisTemplate redisTemplate;
 
@@ -51,9 +51,11 @@ public class LinkedInPortabilityService {
     @Value("${oauth2.redirect-base-url:}")
     private String redirectBaseUrl;
 
-    public LinkedInPortabilityService(ReactiveStringRedisTemplate redisTemplate) {
+    public LinkedInPortabilityService(ReactiveStringRedisTemplate redisTemplate,
+                                      tools.jackson.databind.ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
         this.webClient = WebClient.builder().build();
+        this.objectMapper = objectMapper;
     }
 
     public boolean isPortabilityEnabled() {
@@ -83,7 +85,7 @@ public class LinkedInPortabilityService {
                 .timeout(Duration.ofSeconds(15))
                 .flatMap(body -> Mono.fromCallable(() -> {
                     try {
-                        var mapper = MAPPER;
+                        var mapper = objectMapper;
                         return (Map<String, Object>) mapper.readValue(body, Map.class);
                     } catch (Exception e) {
                         log.error("Failed to parse LinkedIn token response", e);
@@ -159,7 +161,7 @@ public class LinkedInPortabilityService {
 
         return responseMono.flatMap(body -> Mono.fromCallable(() -> {
             try {
-                var mapper = MAPPER;
+                var mapper = objectMapper;
                 Map<String, Object> json = (Map<String, Object>) mapper.readValue(body, Map.class);
                 List<Map<String, Object>> elements = new ArrayList<>();
 

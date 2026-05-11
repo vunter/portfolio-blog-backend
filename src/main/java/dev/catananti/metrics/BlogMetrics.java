@@ -1,5 +1,7 @@
 package dev.catananti.metrics;
 
+import dev.catananti.entity.ArticleStatus;
+import dev.catananti.entity.CommentStatus;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.SubscriberRepository;
@@ -93,10 +95,10 @@ public class BlogMetrics {
     public void updateMetrics() {
         reactor.core.publisher.Mono.zip(
                 articleRepository.countAll().onErrorReturn(0L),
-                articleRepository.countByStatus("PUBLISHED").onErrorReturn(0L),
-                articleRepository.countByStatus("DRAFT").onErrorReturn(0L),
+                articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()).onErrorReturn(0L),
+                articleRepository.countByStatus(ArticleStatus.DRAFT.name()).onErrorReturn(0L),
                 commentRepository.count().onErrorReturn(0L),
-                commentRepository.countByStatus("PENDING").onErrorReturn(0L),
+                commentRepository.countByStatus(CommentStatus.PENDING.name()).onErrorReturn(0L),
                 subscriberRepository.countConfirmed().onErrorReturn(0L)
         ).subscribe(
                 tuple -> {

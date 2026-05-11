@@ -13,6 +13,8 @@ import dev.catananti.util.IpAddressExtractor;
 import dev.catananti.util.PiiMasker;
 import dev.catananti.service.EmailChangeService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +27,7 @@ import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.web.server.csrf.ServerCsrfTokenRepository;
 import org.springframework.util.StringUtils;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
@@ -35,6 +38,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/admin/auth")
 @RequiredArgsConstructor
+@Validated
 @Slf4j
 public class AuthController {
 
@@ -293,7 +297,8 @@ public class AuthController {
     }
 
     @GetMapping("/verify-email-change")
-    public Mono<ResponseEntity<Map<String, String>>> verifyEmailChange(@RequestParam String token) {
+    public Mono<ResponseEntity<Map<String, String>>> verifyEmailChange(
+            @RequestParam @NotBlank @Size(min = 1, max = 128) String token) {
         return emailChangeService.verifyEmailChange(token)
                 .map(newEmail -> ResponseEntity.ok(Map.of(
                         "message", "Email changed successfully",
@@ -306,7 +311,8 @@ public class AuthController {
     }
 
     @GetMapping("/revert-email-change")
-    public Mono<ResponseEntity<Map<String, String>>> revertEmailChange(@RequestParam String token) {
+    public Mono<ResponseEntity<Map<String, String>>> revertEmailChange(
+            @RequestParam @NotBlank @Size(min = 1, max = 128) String token) {
         return emailChangeService.revertEmailChange(token)
                 .map(restoredEmail -> ResponseEntity.ok(Map.of(
                         "message", "Email reverted successfully",

@@ -1,5 +1,6 @@
 package dev.catananti.config;
 
+import io.lettuce.core.RedisConnectionException;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,7 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.mail.MailException;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -147,12 +149,8 @@ public class PerformanceMonitoringAspect {
                 || error instanceof org.springframework.security.access.AccessDeniedException
                 || error instanceof org.springframework.security.authentication.BadCredentialsException
                 || error instanceof org.springframework.web.server.ResponseStatusException
-                || (error.getMessage() != null && (
-                        error.getMessage().contains("email_already_exists")
-                        || error.getMessage().contains("Invalid credentials")
-                        || error.getMessage().contains("Unable to connect to Redis")
-                        || error.getMessage().contains("Connection has been closed")
-                        || error.getMessage().contains("Failed to send email")));
+                || error instanceof io.lettuce.core.RedisConnectionException
+                || error instanceof org.springframework.mail.MailException;
     }
 
     private Timer getOrCreateTimer(String metricName, String className, String methodName, String status) {

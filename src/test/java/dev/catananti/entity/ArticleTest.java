@@ -97,7 +97,7 @@ class ArticleTest {
                 .build();
 
         // Then
-        assertThat(article.getStatus()).isEqualTo("DRAFT");
+        assertThat(article.getStatus()).isEqualTo(ArticleStatus.DRAFT);
         assertThat(article.getViewsCount()).isEqualTo(0);
         assertThat(article.getLikesCount()).isEqualTo(0);
         assertThat(article.getTags()).isEmpty();

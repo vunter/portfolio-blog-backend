@@ -34,7 +34,7 @@ class EntityCoverageTest {
 
             assertThat(article.getId()).isEqualTo(1L);
             assertThat(article.getSlug()).isEqualTo("test-slug");
-            assertThat(article.getStatus()).isEqualTo("DRAFT");
+            assertThat(article.getStatus()).isEqualTo(ArticleStatus.DRAFT);
             assertThat(article.getViewsCount()).isZero();
             assertThat(article.getLikesCount()).isZero();
             assertThat(article.getOriginalLocale()).isEqualTo("en");
@@ -80,7 +80,7 @@ class EntityCoverageTest {
         void shouldReturnTrueForScheduledArticle() {
             Article article = Article.builder()
                     .id(1L)
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .scheduledAt(LocalDateTime.now().plusDays(1))
                     .build();
 
@@ -92,7 +92,7 @@ class EntityCoverageTest {
         void shouldReturnFalseForNonScheduledStatus() {
             Article article = Article.builder()
                     .id(1L)
-                    .status("DRAFT")
+                    .status(ArticleStatus.DRAFT)
                     .scheduledAt(LocalDateTime.now().plusDays(1))
                     .build();
 
@@ -104,7 +104,7 @@ class EntityCoverageTest {
         void shouldReturnFalseWhenScheduledAtNull() {
             Article article = Article.builder()
                     .id(1L)
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .build();
 
             assertThat(article.isScheduled()).isFalse();
@@ -115,7 +115,7 @@ class EntityCoverageTest {
         void shouldPublishNowForPastScheduledTime() {
             Article article = Article.builder()
                     .id(1L)
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .scheduledAt(LocalDateTime.now().minusMinutes(5))
                     .build();
 
@@ -127,7 +127,7 @@ class EntityCoverageTest {
         void shouldNotPublishNowForFutureScheduledTime() {
             Article article = Article.builder()
                     .id(1L)
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .scheduledAt(LocalDateTime.now().plusDays(1))
                     .build();
 
@@ -139,7 +139,7 @@ class EntityCoverageTest {
         void shouldNotPublishNowForDraft() {
             Article article = Article.builder()
                     .id(1L)
-                    .status("DRAFT")
+                    .status(ArticleStatus.DRAFT)
                     .build();
 
             assertThat(article.shouldPublishNow()).isFalse();
@@ -337,28 +337,28 @@ class EntityCoverageTest {
         @Test
         @DisplayName("isConfirmed should return true for CONFIRMED status")
         void shouldReturnTrueForConfirmed() {
-            Subscriber sub = Subscriber.builder().status("CONFIRMED").build();
+            Subscriber sub = Subscriber.builder().status(SubscriberStatus.CONFIRMED).build();
             assertThat(sub.isConfirmed()).isTrue();
         }
 
         @Test
         @DisplayName("isConfirmed should return false for PENDING status")
         void shouldReturnFalseForPending() {
-            Subscriber sub = Subscriber.builder().status("PENDING").build();
+            Subscriber sub = Subscriber.builder().status(SubscriberStatus.PENDING).build();
             assertThat(sub.isConfirmed()).isFalse();
         }
 
         @Test
         @DisplayName("isActive should return true for CONFIRMED status")
         void shouldReturnTrueForActive() {
-            Subscriber sub = Subscriber.builder().status("CONFIRMED").build();
+            Subscriber sub = Subscriber.builder().status(SubscriberStatus.CONFIRMED).build();
             assertThat(sub.isActive()).isTrue();
         }
 
         @Test
         @DisplayName("isActive should return false for UNSUBSCRIBED status")
         void shouldReturnFalseForUnsubscribed() {
-            Subscriber sub = Subscriber.builder().status("UNSUBSCRIBED").build();
+            Subscriber sub = Subscriber.builder().status(SubscriberStatus.UNSUBSCRIBED).build();
             assertThat(sub.isActive()).isFalse();
         }
 
@@ -366,7 +366,7 @@ class EntityCoverageTest {
         @DisplayName("default status should be PENDING")
         void shouldHaveDefaultPendingStatus() {
             Subscriber sub = Subscriber.builder().id(1L).email("test@test.com").build();
-            assertThat(sub.getStatus()).isEqualTo("PENDING");
+            assertThat(sub.getStatus()).isEqualTo(SubscriberStatus.PENDING);
         }
 
         @Test
@@ -445,7 +445,7 @@ class EntityCoverageTest {
                     .content("Great article!")
                     .build();
 
-            assertThat(comment.getStatus()).isEqualTo("PENDING");
+            assertThat(comment.getStatus()).isEqualTo(CommentStatus.PENDING);
             assertThat(comment.getReplies()).isNotNull().isEmpty();
             assertThat(comment.isNewRecord()).isTrue();
         }
@@ -467,36 +467,17 @@ class EntityCoverageTest {
     class SubscriberStatusTests {
 
         @Test
-        @DisplayName("matches should return true for matching status string")
-        void shouldMatchForMatchingStatus() {
-            assertThat(SubscriberStatus.PENDING.matches("PENDING")).isTrue();
-            assertThat(SubscriberStatus.CONFIRMED.matches("CONFIRMED")).isTrue();
-            assertThat(SubscriberStatus.UNSUBSCRIBED.matches("UNSUBSCRIBED")).isTrue();
-        }
-
-        @Test
-        @DisplayName("matches should return false for non-matching status string")
-        void shouldNotMatchForDifferentStatus() {
-            assertThat(SubscriberStatus.PENDING.matches("CONFIRMED")).isFalse();
-            assertThat(SubscriberStatus.CONFIRMED.matches("PENDING")).isFalse();
-        }
-
-        @Test
-        @DisplayName("matches should return false for null")
-        void shouldNotMatchNull() {
-            assertThat(SubscriberStatus.PENDING.matches(null)).isFalse();
-        }
-
-        @Test
-        @DisplayName("matches should be case-sensitive")
-        void shouldBeCaseSensitive() {
-            assertThat(SubscriberStatus.PENDING.matches("pending")).isFalse();
-        }
-
-        @Test
         @DisplayName("Should have exactly 3 values")
         void shouldHaveThreeValues() {
             assertThat(SubscriberStatus.values()).hasSize(3);
+        }
+
+        @Test
+        @DisplayName("name() should return uppercase string")
+        void shouldReturnUppercaseNames() {
+            assertThat(SubscriberStatus.PENDING.name()).isEqualTo("PENDING");
+            assertThat(SubscriberStatus.CONFIRMED.name()).isEqualTo("CONFIRMED");
+            assertThat(SubscriberStatus.UNSUBSCRIBED.name()).isEqualTo("UNSUBSCRIBED");
         }
     }
 
@@ -505,24 +486,24 @@ class EntityCoverageTest {
     class ArticleStatusTests {
 
         @Test
-        @DisplayName("matches should return true for matching status")
-        void shouldMatchForMatchingStatus() {
-            assertThat(ArticleStatus.DRAFT.matches("DRAFT")).isTrue();
-            assertThat(ArticleStatus.PUBLISHED.matches("PUBLISHED")).isTrue();
-            assertThat(ArticleStatus.SCHEDULED.matches("SCHEDULED")).isTrue();
-            assertThat(ArticleStatus.REVIEW.matches("REVIEW")).isTrue();
-            assertThat(ArticleStatus.ARCHIVED.matches("ARCHIVED")).isTrue();
+        @DisplayName("fromString should parse valid statuses")
+        void shouldParseValidStatuses() {
+            assertThat(ArticleStatus.fromString("DRAFT", ArticleStatus.DRAFT)).isEqualTo(ArticleStatus.DRAFT);
+            assertThat(ArticleStatus.fromString("published", ArticleStatus.DRAFT)).isEqualTo(ArticleStatus.PUBLISHED);
+            assertThat(ArticleStatus.fromString("SCHEDULED", ArticleStatus.DRAFT)).isEqualTo(ArticleStatus.SCHEDULED);
         }
 
         @Test
-        @DisplayName("matches should return false for non-matching")
-        void shouldNotMatchForDifferent() {
-            assertThat(ArticleStatus.DRAFT.matches("PUBLISHED")).isFalse();
+        @DisplayName("fromString should return default for null or invalid")
+        void shouldReturnDefaultForInvalid() {
+            assertThat(ArticleStatus.fromString(null, ArticleStatus.DRAFT)).isEqualTo(ArticleStatus.DRAFT);
+            assertThat(ArticleStatus.fromString("", ArticleStatus.DRAFT)).isEqualTo(ArticleStatus.DRAFT);
+            assertThat(ArticleStatus.fromString("INVALID", ArticleStatus.DRAFT)).isEqualTo(ArticleStatus.DRAFT);
         }
 
         @Test
         @DisplayName("Should have exactly 5 values")
-        void shouldHaveFourValues() {
+        void shouldHaveFiveValues() {
             assertThat(ArticleStatus.values()).hasSize(5);
         }
     }
@@ -532,18 +513,17 @@ class EntityCoverageTest {
     class CommentStatusTests {
 
         @Test
-        @DisplayName("matches should work for all values")
-        void shouldMatchAllValues() {
-            assertThat(CommentStatus.PENDING.matches("PENDING")).isTrue();
-            assertThat(CommentStatus.APPROVED.matches("APPROVED")).isTrue();
-            assertThat(CommentStatus.REJECTED.matches("REJECTED")).isTrue();
-            assertThat(CommentStatus.SPAM.matches("SPAM")).isTrue();
+        @DisplayName("fromString should parse valid statuses")
+        void shouldParseValidStatuses() {
+            assertThat(CommentStatus.fromString("PENDING", CommentStatus.PENDING)).isEqualTo(CommentStatus.PENDING);
+            assertThat(CommentStatus.fromString("approved", CommentStatus.PENDING)).isEqualTo(CommentStatus.APPROVED);
         }
 
         @Test
-        @DisplayName("matches should return false for wrong value")
-        void shouldNotMatchWrongValue() {
-            assertThat(CommentStatus.PENDING.matches("APPROVED")).isFalse();
+        @DisplayName("fromString should return default for invalid")
+        void shouldReturnDefaultForInvalid() {
+            assertThat(CommentStatus.fromString(null, CommentStatus.PENDING)).isEqualTo(CommentStatus.PENDING);
+            assertThat(CommentStatus.fromString("INVALID", CommentStatus.PENDING)).isEqualTo(CommentStatus.PENDING);
         }
 
         @Test
@@ -583,11 +563,17 @@ class EntityCoverageTest {
     class ResumeTemplateStatusTests {
 
         @Test
-        @DisplayName("matches should work for all values")
-        void shouldMatchAllValues() {
-            assertThat(ResumeTemplateStatus.DRAFT.matches("DRAFT")).isTrue();
-            assertThat(ResumeTemplateStatus.ACTIVE.matches("ACTIVE")).isTrue();
-            assertThat(ResumeTemplateStatus.ARCHIVED.matches("ARCHIVED")).isTrue();
+        @DisplayName("fromString should parse valid statuses")
+        void shouldParseValidStatuses() {
+            assertThat(ResumeTemplateStatus.fromString("DRAFT", ResumeTemplateStatus.DRAFT)).isEqualTo(ResumeTemplateStatus.DRAFT);
+            assertThat(ResumeTemplateStatus.fromString("active", ResumeTemplateStatus.DRAFT)).isEqualTo(ResumeTemplateStatus.ACTIVE);
+        }
+
+        @Test
+        @DisplayName("fromString should return default for invalid")
+        void shouldReturnDefaultForInvalid() {
+            assertThat(ResumeTemplateStatus.fromString(null, ResumeTemplateStatus.DRAFT)).isEqualTo(ResumeTemplateStatus.DRAFT);
+            assertThat(ResumeTemplateStatus.fromString("INVALID", ResumeTemplateStatus.DRAFT)).isEqualTo(ResumeTemplateStatus.DRAFT);
         }
 
         @Test

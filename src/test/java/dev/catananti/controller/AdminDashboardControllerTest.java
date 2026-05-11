@@ -6,6 +6,7 @@ import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -114,13 +115,13 @@ class AdminDashboardControllerTest {
         @DisplayName("Should return recent article activity sorted by date")
         void shouldReturnRecentActivity() {
             Article published = Article.builder()
-                    .id(1L).title("Published Article").status("PUBLISHED")
+                    .id(1L).title("Published Article").status(ArticleStatus.PUBLISHED)
                     .createdAt(LocalDateTime.now().minusDays(5))
                     .updatedAt(LocalDateTime.now().minusDays(1))
                     .build();
 
             Article draft = Article.builder()
-                    .id(2L).title("Draft Article").status("DRAFT")
+                    .id(2L).title("Draft Article").status(ArticleStatus.DRAFT)
                     .createdAt(LocalDateTime.now().minusDays(2))
                     .build();
 

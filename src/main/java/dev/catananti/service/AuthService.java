@@ -4,6 +4,7 @@ import dev.catananti.dto.AuthResponse;
 import dev.catananti.dto.LoginRequest;
 import dev.catananti.dto.RegisterRequest;
 import dev.catananti.dto.TokenResponse;
+import dev.catananti.entity.RefreshToken;
 import dev.catananti.entity.User;
 import dev.catananti.exception.AccountLockedException;
 import dev.catananti.repository.UserRepository;
@@ -150,6 +151,14 @@ public class AuthService {
                                                         return Mono.<User>error(new BadCredentialsException(message));
                                                     }));
                                 }
+                                // SEC: Reject deactivated users at credential-verification time so a fresh
+                                // token is never minted for them. The per-request filter only catches
+                                // already-issued tokens; without this check, a deactivated user can simply
+                                // log in again to bypass the cache eviction.
+                                if (!Boolean.TRUE.equals(user.getActive())) {
+                                    log.warn("Login denied — account is deactivated: {}", PiiMasker.maskEmail(user.getEmail()));
+                                    return Mono.<User>error(new BadCredentialsException("error.account_deactivated"));
+                                }
                                 return clearFailedAttempts(loginKey).thenReturn(user);
                             }))
                 .switchIfEmpty(Mono.defer(() ->
@@ -165,7 +174,7 @@ public class AuthService {
     private Mono<AuthResponse> performLogin(LoginRequest request, String loginKey, String clientIp) {
         return verifyCredentials(loginKey, request.getPassword(), clientIp)
                 .map(user -> {
-                    String token = tokenProvider.generateToken(user.getEmail(), user.getRole());
+                    String token = tokenProvider.generateToken(user.getId(), user.getRole());
                     log.debug("User logged in: {} from IP: {}", PiiMasker.maskEmail(user.getEmail()), clientIp);
                     return AuthResponse.builder()
                             .token(token)
@@ -202,7 +211,7 @@ public class AuthService {
     }
 
     private Mono<TokenResponse> issueFullTokens(User user, String clientIp, String userAgent) {
-        String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
+        String accessToken = tokenProvider.generateToken(user.getId(), user.getRole());
         return refreshTokenService.createRefreshToken(user.getId(), clientIp, userAgent)
                 .map(refreshToken -> {
                     log.debug("User logged in with refresh token: {} from IP: {}", PiiMasker.maskEmail(user.getEmail()), clientIp);
@@ -313,8 +322,8 @@ public class AuthService {
                 .flatMap(newRefreshToken -> userRepository.findById(newRefreshToken.getUserId())
                         .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
                         .map(user -> {
-                            String accessToken = tokenProvider.generateToken(user.getEmail(), user.getRole());
-                            
+                            String accessToken = tokenProvider.generateToken(user.getId(), user.getRole());
+
                             log.debug("Access token refreshed for user: {}", PiiMasker.maskEmail(user.getEmail()));
                             
                             return TokenResponse.builder()
@@ -328,15 +337,15 @@ public class AuthService {
                         }));
     }
 
-    @Transactional
     public Mono<TokenResponse> register(RegisterRequest request, String clientIp) {
         String email = request.email().toLowerCase().trim();
 
-        // Run BCrypt hash unconditionally to prevent timing side-channel attacks.
-        // Both code paths (existing account vs new registration) will consume similar wall-clock time.
+        // Step 1: BCrypt hash off the reactor thread BEFORE the transactional boundary.
+        // Running BCrypt unconditionally also equalizes wall-clock time between
+        // "account exists" and "new account" paths to mitigate timing-based enumeration.
         Mono<String> encodedPasswordMono = Mono.fromCallable(() -> passwordEncoder.encode(request.password()))
                 .subscribeOn(Schedulers.boundedElastic())
-                .cache();
+                .cache(Duration.ofSeconds(10));
 
         return Mono.zip(userRepository.existsByEmail(email), encodedPasswordMono)
                 .flatMap(tuple -> {
@@ -344,7 +353,6 @@ public class AuthService {
                     String encodedPassword = tuple.getT2();
 
                     if (exists) {
-                        // Send informational email instead of revealing account existence
                         return emailService.sendTextEmail(email,
                                         "Account registration attempt",
                                         "An account with this email already exists. If this was you, try logging in.")
@@ -360,46 +368,59 @@ public class AuthService {
                                         .build());
                     }
 
-                    User user = User.builder()
-                            .id(idService.nextId())
-                            .name(htmlSanitizerService.stripHtml(request.name()))
-                            .email(email)
-                            // F-156: Offload blocking BCrypt.encode to boundedElastic
-                            .passwordHash(null) // set below reactively
-                            .role("VIEWER")
-                            .active(true)
-                            .termsAccepted(true)
-                            .termsAcceptedAt(LocalDateTime.now())
-                            .termsVersion("1.0")
-                            .createdAt(LocalDateTime.now())
-                            .updatedAt(LocalDateTime.now())
-                            .build();
-
-                    user.setPasswordHash(encodedPassword);
-                    return userRepository.save(user)
-                            .flatMap(savedUser -> {
-                                String accessToken = tokenProvider.generateToken(savedUser.getEmail(), savedUser.getRole());
-
+                    // Step 2: Run only the DB writes inside the transactional boundary so
+                    // a refresh-token failure rolls the user insert back. Side-effects
+                    // (welcome email, logging) happen AFTER commit and are part of the
+                    // reactive chain — never .subscribe() inside an operator (creates
+                    // untracked subscriptions and silently swallows errors).
+                    return persistNewUser(email, encodedPassword, request.name())
+                            .flatMap(saved -> {
+                                User savedUser = saved.getT1();
+                                RefreshToken refreshToken = saved.getT2();
+                                String accessToken = tokenProvider.generateToken(savedUser.getId(), savedUser.getRole());
+                                log.info("New user registered: {} from IP: {}", PiiMasker.maskEmail(savedUser.getEmail()), clientIp);
+                                TokenResponse response = TokenResponse.builder()
+                                        .accessToken(accessToken)
+                                        .refreshToken(refreshToken.getToken())
+                                        .tokenType("Bearer")
+                                        .expiresIn(jwtExpirationMs / 1000)
+                                        .email(savedUser.getEmail())
+                                        .name(savedUser.getName())
+                                        .build();
+                                // Welcome email — best-effort, never rolls back the registration.
                                 return emailService.sendRegistrationWelcome(savedUser.getEmail(), savedUser.getName())
                                         .onErrorResume(e -> {
                                             log.warn("Failed to send welcome email to {}: {}", PiiMasker.maskEmail(savedUser.getEmail()), e.getMessage());
                                             return Mono.empty();
                                         })
-                                        .then(refreshTokenService.createRefreshToken(savedUser.getId()))
-                                        .map(refreshToken -> {
-                                            log.info("New user registered: {} from IP: {}", PiiMasker.maskEmail(savedUser.getEmail()), clientIp);
-
-                                            return TokenResponse.builder()
-                                                    .accessToken(accessToken)
-                                                    .refreshToken(refreshToken.getToken())
-                                                    .tokenType("Bearer")
-                                                    .expiresIn(jwtExpirationMs / 1000)
-                                                    .email(savedUser.getEmail())
-                                                    .name(savedUser.getName())
-                                                    .build();
-                                        });
+                                        .thenReturn(response);
                             });
                 });
+    }
+
+    /**
+     * Persists the new user row AND its first refresh token atomically. If the refresh-token
+     * insert fails, the user insert rolls back, preventing orphaned accounts.
+     */
+    @Transactional
+    public Mono<reactor.util.function.Tuple2<User, RefreshToken>> persistNewUser(String email, String encodedPassword, String rawName) {
+        User user = User.builder()
+                .id(idService.nextId())
+                .name(htmlSanitizerService.stripHtml(rawName))
+                .email(email)
+                .passwordHash(encodedPassword)
+                .role("VIEWER")
+                .active(true)
+                .termsAccepted(true)
+                .termsAcceptedAt(LocalDateTime.now())
+                .termsVersion("1.0")
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+
+        return userRepository.save(user)
+                .flatMap(saved -> refreshTokenService.createRefreshToken(saved.getId())
+                        .map(token -> reactor.util.function.Tuples.of(saved, token)));
     }
 
     public Mono<Void> logout(String refreshToken, String accessToken) {
@@ -431,10 +452,6 @@ public class AuthService {
 
     public boolean validateToken(String token) {
         return tokenProvider.validateToken(token);
-    }
-
-    public String getEmailFromToken(String token) {
-        return tokenProvider.getEmailFromToken(token);
     }
 
     /**

@@ -4,6 +4,7 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.PdfGenerationRequest;
 import dev.catananti.dto.ResumeTemplateRequest;
 import dev.catananti.dto.ResumeTemplateResponse;
+import dev.catananti.entity.ResumeTemplateStatus;
 import dev.catananti.service.ResumeProfileService;
 import dev.catananti.service.ResumeTemplateService;
 import dev.catananti.util.PiiMasker;
@@ -15,7 +16,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +56,7 @@ public class ResumeTemplateController {
     private final ResumeProfileService profileService;
     private final dev.catananti.service.PublicResumeService publicResumeService;
     private final dev.catananti.service.UserService userService;
+    private final PaginationConfig paginationConfig;
 
     // ==================== Template CRUD ====================
 
@@ -188,11 +190,11 @@ public class ResumeTemplateController {
     @GetMapping("/templates")
     public Mono<PageResponse<ResumeTemplateResponse>> getMyTemplates(
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size,
+            @RequestParam(defaultValue = "20") @Min(1) int size,
             Authentication authentication) {
-        
+        final int clampedSize = paginationConfig.clampPageSize(size);
         return extractUserId(authentication)
-                .flatMap(userId -> templateService.getTemplatesByOwner(userId, page, size));
+                .flatMap(userId -> templateService.getTemplatesByOwner(userId, page, clampedSize));
     }
 
     // ==================== INC-06: Duplicate & Preview ====================
@@ -216,7 +218,7 @@ public class ResumeTemplateController {
                             copyReq.setName(source.getName() + " (Copy)");
                             copyReq.setHtmlContent(source.getHtmlContent());
                             copyReq.setCssContent(source.getCssContent());
-                            copyReq.setStatus("DRAFT");
+                            copyReq.setStatus(ResumeTemplateStatus.DRAFT.name());
                             copyReq.setPaperSize(source.getPaperSize());
                             copyReq.setOrientation(source.getOrientation());
                             copyReq.setIsDefault(false);

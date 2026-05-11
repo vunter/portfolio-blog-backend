@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.exception.ResourceNotFoundException;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.env.Environment;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -47,12 +49,17 @@ class ArticleControllerTest {
     @Mock
     private ServerHttpRequest mockRequest;
 
+    private PaginationConfig paginationConfig = new PaginationConfig();
+
+    @Mock
+    private Environment environment;
+
     // F-065: Manual construction needed since deduplicationService is Optional<>
     private ArticleController articleController;
 
     @BeforeEach
     void setUp() {
-        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService, analyticsService);
+        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService, analyticsService, paginationConfig, environment);
     }
 
     @Test

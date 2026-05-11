@@ -14,6 +14,7 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
 
     Mono<Article> findBySlug(String slug);
 
+    @Query("SELECT * FROM articles WHERE slug = :slug AND status = :status")
     Mono<Article> findBySlugAndStatus(String slug, String status);
 
     @Query("SELECT * FROM articles WHERE status = :status ORDER BY published_at DESC LIMIT :limit OFFSET :offset")
@@ -34,6 +35,7 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("SELECT COUNT(*) FROM articles WHERE status = :status")
     Mono<Long> countByStatus(String status);
 
+    // LIKE-based fallback for H2 dev/test profile (to_tsvector not supported).
     @Query("SELECT * FROM articles WHERE status = :status AND " +
            "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
            "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
@@ -46,6 +48,40 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
            "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
            "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
     Mono<Long> countSearchByStatusAndQuery(String status, String query);
+
+    // Q4.2: PostgreSQL FTS variants — match against base article OR any article_i18n translation.
+    // Uses 'simple' config for language-agnostic matching (PT/ES/IT/EN all work equally).
+    // Backed by GIN indexes in V14 (articles) and V16 (article_i18n).
+    @Query("""
+            SELECT * FROM articles a
+            WHERE a.status = :status AND (
+                to_tsvector('simple', coalesce(a.title, '') || ' ' || coalesce(a.excerpt, '') || ' ' || coalesce(a.content, ''))
+                    @@ plainto_tsquery('simple', :query)
+                OR EXISTS (
+                    SELECT 1 FROM article_i18n i18n
+                    WHERE i18n.article_id = a.id
+                      AND to_tsvector('simple', coalesce(i18n.title, '') || ' ' || coalesce(i18n.excerpt, '') || ' ' || coalesce(i18n.content, ''))
+                          @@ plainto_tsquery('simple', :query)
+                )
+            )
+            ORDER BY a.published_at DESC LIMIT :limit OFFSET :offset
+            """)
+    Flux<Article> searchByStatusAndQueryFts(String status, String query, int limit, int offset);
+
+    @Query("""
+            SELECT COUNT(*) FROM articles a
+            WHERE a.status = :status AND (
+                to_tsvector('simple', coalesce(a.title, '') || ' ' || coalesce(a.excerpt, '') || ' ' || coalesce(a.content, ''))
+                    @@ plainto_tsquery('simple', :query)
+                OR EXISTS (
+                    SELECT 1 FROM article_i18n i18n
+                    WHERE i18n.article_id = a.id
+                      AND to_tsvector('simple', coalesce(i18n.title, '') || ' ' || coalesce(i18n.excerpt, '') || ' ' || coalesce(i18n.content, ''))
+                          @@ plainto_tsquery('simple', :query)
+                )
+            )
+            """)
+    Mono<Long> countSearchByStatusAndQueryFts(String status, String query);
 
     @Query("SELECT a.* FROM articles a " +
            "JOIN article_tags at ON a.id = at.article_id " +
@@ -60,8 +96,8 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
            "WHERE t.slug = :tagSlug AND a.status = :status")
     Mono<Long> countByTagSlugAndStatus(String tagSlug, String status);
 
-    @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC LIMIT 100")
-    Flux<Article> findAllPublishedOrderByPublishedAtDesc();
+    @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC LIMIT :limit")
+    Flux<Article> findAllPublishedOrderByPublishedAtDesc(int limit);
 
     Mono<Boolean> existsBySlug(String slug);
 
@@ -130,6 +166,32 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     // Recent articles ordered by latest update, for admin dashboard activity feed
     @Query("SELECT * FROM articles ORDER BY COALESCE(updated_at, created_at) DESC LIMIT :limit")
     Flux<Article> findRecentlyUpdated(int limit);
+
+    // ==================== SORTABLE ADMIN QUERIES ====================
+
+    @Query("SELECT * FROM articles WHERE status = :status ORDER BY title ASC LIMIT :limit OFFSET :offset")
+    Flux<Article> findByStatusOrderByTitleAsc(String status, int limit, int offset);
+
+    @Query("SELECT * FROM articles ORDER BY title ASC LIMIT :limit OFFSET :offset")
+    Flux<Article> findAllOrderByTitleAsc(int limit, int offset);
+
+    @Query("SELECT * FROM articles WHERE status = :status ORDER BY created_at ASC LIMIT :limit OFFSET :offset")
+    Flux<Article> findByStatusOrderByCreatedAtAsc(String status, int limit, int offset);
+
+    @Query("SELECT * FROM articles ORDER BY created_at ASC LIMIT :limit OFFSET :offset")
+    Flux<Article> findAllOrderByCreatedAtAsc(int limit, int offset);
+
+    @Query("SELECT * FROM articles WHERE status = :status ORDER BY views_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
+    Flux<Article> findByStatusOrderByViewsDesc(String status, int limit, int offset);
+
+    @Query("SELECT * FROM articles ORDER BY views_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
+    Flux<Article> findAllOrderByViewsDesc(int limit, int offset);
+
+    @Query("SELECT * FROM articles WHERE status = :status ORDER BY likes_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
+    Flux<Article> findByStatusOrderByLikesDesc(String status, int limit, int offset);
+
+    @Query("SELECT * FROM articles ORDER BY likes_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
+    Flux<Article> findAllOrderByLikesDesc(int limit, int offset);
 
     // ==================== AUTHOR-SCOPED QUERIES (ownership enforcement) ====================
 

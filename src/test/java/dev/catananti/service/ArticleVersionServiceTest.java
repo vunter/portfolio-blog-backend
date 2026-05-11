@@ -1,6 +1,7 @@
 package dev.catananti.service;
 
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.ArticleVersion;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ArticleRepository;
@@ -52,7 +53,7 @@ class ArticleVersionServiceTest {
                 .subtitle("Test Subtitle")
                 .content("Test Content")
                 .excerpt("Test Excerpt")
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();

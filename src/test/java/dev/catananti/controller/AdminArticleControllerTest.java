@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.ArticleI18nResponse;
 import dev.catananti.dto.ArticleRequest;
 import dev.catananti.dto.ArticleResponse;
@@ -26,6 +27,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -40,6 +42,9 @@ class AdminArticleControllerTest {
     @Mock
     private ArticleTranslationService articleTranslationService;
 
+    @Mock
+    private PaginationConfig paginationConfig;
+
     @InjectMocks
     private AdminArticleController controller;
 
@@ -49,6 +54,7 @@ class AdminArticleControllerTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
         publishedArticle = ArticleResponse.builder()
                 .id("1001")
                 .slug("spring-boot-guide")
@@ -91,10 +97,10 @@ class AdminArticleControllerTest {
                     .last(true)
                     .build();
 
-            when(articleAdminService.getAllArticles(0, 10, null))
+            when(articleAdminService.getAllArticles(0, 10, null, "newest"))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getAllArticles(0, 10, null, null))
+            StepVerifier.create(controller.getAllArticles(0, 10, null, null, "newest"))
                     .assertNext(result -> {
                         assertThat(result.getContent()).hasSize(2);
                         assertThat(result.getTotalElements()).isEqualTo(2);
@@ -115,10 +121,10 @@ class AdminArticleControllerTest {
                     .last(true)
                     .build();
 
-            when(articleAdminService.getAllArticles(0, 10, "PUBLISHED"))
+            when(articleAdminService.getAllArticles(0, 10, "PUBLISHED", "newest"))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getAllArticles(0, 10, "PUBLISHED", null))
+            StepVerifier.create(controller.getAllArticles(0, 10, "PUBLISHED", null, "newest"))
                     .assertNext(result -> {
                         assertThat(result.getContent()).hasSize(1);
                         assertThat(result.getContent().getFirst().getStatus()).isEqualTo("PUBLISHED");
@@ -142,7 +148,7 @@ class AdminArticleControllerTest {
             when(articleService.searchArticles("Spring", 0, 10))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getAllArticles(0, 10, null, "Spring"))
+            StepVerifier.create(controller.getAllArticles(0, 10, null, "Spring", "newest"))
                     .assertNext(result -> {
                         assertThat(result.getContent()).hasSize(1);
                     })

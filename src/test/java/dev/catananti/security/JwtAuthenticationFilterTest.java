@@ -29,6 +29,7 @@ import org.springframework.http.HttpStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -54,6 +55,8 @@ class JwtAuthenticationFilterTest {
     private static final String INVALID_JWT = "invalid.jwt.token";
     private static final String TEST_EMAIL = "leonardo@example.com";
     private static final String TEST_ROLE = "ADMIN";
+    private static final Long TEST_USER_ID = 1L;
+    private static final Long INACTIVE_USER_ID = 2L;
 
     private User activeUser;
     private User inactiveUser;
@@ -61,14 +64,14 @@ class JwtAuthenticationFilterTest {
     @BeforeEach
     void setUp() {
         activeUser = new User();
-        activeUser.setId(1L);
+        activeUser.setId(TEST_USER_ID);
         activeUser.setEmail(TEST_EMAIL);
         activeUser.setName("Leonardo Catananti");
         activeUser.setRole(TEST_ROLE);
         activeUser.setActive(true);
 
         inactiveUser = new User();
-        inactiveUser.setId(2L);
+        inactiveUser.setId(INACTIVE_USER_ID);
         inactiveUser.setEmail(TEST_EMAIL);
         inactiveUser.setName("Inactive User");
         inactiveUser.setRole("VIEWER");
@@ -105,9 +108,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(TEST_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(activeUser));
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.just(activeUser));
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -124,7 +127,7 @@ class JwtAuthenticationFilterTest {
             assertThat(captured[0].getAuthentication().getName()).isEqualTo(TEST_EMAIL);
 
             verify(tokenProvider).validateAndParseClaims(VALID_JWT);
-            verify(userRepository).findByEmail(TEST_EMAIL);
+            verify(userRepository).findById(TEST_USER_ID);
         }
     }
 
@@ -141,9 +144,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(TEST_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(activeUser));
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.just(activeUser));
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -159,7 +162,7 @@ class JwtAuthenticationFilterTest {
             assertThat(captured[0].getAuthentication().getName()).isEqualTo(TEST_EMAIL);
 
             verify(tokenProvider).validateAndParseClaims(VALID_JWT);
-            verify(userRepository).findByEmail(TEST_EMAIL);
+            verify(userRepository).findById(TEST_USER_ID);
         }
     }
 
@@ -180,9 +183,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(TEST_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(headerJwt)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(activeUser));
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.just(activeUser));
 
             // When
             Mono<Void> result = filter.filter(exchange, passThroughChain());
@@ -222,7 +225,7 @@ class JwtAuthenticationFilterTest {
             // Protected route with invalid token should return 401 immediately
             assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
             verify(tokenProvider).validateAndParseClaims(INVALID_JWT);
-            verify(userRepository, never()).findByEmail(any());
+            verify(userRepository, never()).findById(anyLong());
         }
 
         @Test
@@ -245,7 +248,7 @@ class JwtAuthenticationFilterTest {
 
             assertThat(captured[0]).isNull();
             verify(tokenProvider, never()).validateAndParseClaims(any());
-            verify(userRepository, never()).findByEmail(any());
+            verify(userRepository, never()).findById(anyLong());
         }
 
         @Test
@@ -257,9 +260,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(TEST_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.empty());
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.empty());
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -272,7 +275,7 @@ class JwtAuthenticationFilterTest {
                     .verifyComplete();
 
             assertThat(captured[0]).isNull();
-            verify(userRepository).findByEmail(TEST_EMAIL);
+            verify(userRepository).findById(TEST_USER_ID);
         }
 
         @Test
@@ -284,9 +287,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(INACTIVE_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(inactiveUser));
+            when(userRepository.findById(INACTIVE_USER_ID)).thenReturn(Mono.just(inactiveUser));
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -300,7 +303,7 @@ class JwtAuthenticationFilterTest {
 
             // Inactive user should be filtered out, so no SecurityContext is set
             assertThat(captured[0]).isNull();
-            verify(userRepository).findByEmail(TEST_EMAIL);
+            verify(userRepository).findById(INACTIVE_USER_ID);
         }
     }
 
@@ -317,9 +320,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(TEST_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(activeUser));
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.just(activeUser));
 
             // When
             Mono<Void> result = filter.filter(exchange, passThroughChain());
@@ -362,9 +365,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(INACTIVE_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(inactiveUser));
+            when(userRepository.findById(INACTIVE_USER_ID)).thenReturn(Mono.just(inactiveUser));
 
             // When
             Mono<Void> result = filter.filter(exchange, passThroughChain());
@@ -390,9 +393,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, "ADMIN");
+            Claims claims = validClaims(TEST_USER_ID, "ADMIN");
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(activeUser));
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.just(activeUser));
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -427,9 +430,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims("viewer@example.com", "VIEWER");
+            Claims claims = validClaims(viewerUser.getId(), "VIEWER");
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail("viewer@example.com")).thenReturn(Mono.just(viewerUser));
+            when(userRepository.findById(viewerUser.getId())).thenReturn(Mono.just(viewerUser));
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -457,9 +460,9 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaims(TEST_EMAIL, TEST_ROLE);
+            Claims claims = validClaims(TEST_USER_ID, TEST_ROLE);
             when(tokenProvider.validateAndParseClaims(VALID_JWT)).thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(activeUser));
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.just(activeUser));
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -476,17 +479,18 @@ class JwtAuthenticationFilterTest {
         }
     }
 
-    // --- Helper ---
-    private Claims validClaims(String email, String role) {
+    // --- Helpers ---
+    /** Builds a Claims mock with the user id encoded in {@code sub} (matches production JWTs). */
+    private Claims validClaims(Long userId, String role) {
         Claims claims = mock(Claims.class);
-        doReturn(email).when(claims).getSubject();
+        doReturn(String.valueOf(userId)).when(claims).getSubject();
         doReturn(role).when(claims).get("role", String.class);
         return claims;
     }
 
-    private Claims validClaimsWithJti(String email, String role, String jti) {
+    private Claims validClaimsWithJti(Long userId, String role, String jti) {
         Claims claims = mock(Claims.class);
-        doReturn(email).when(claims).getSubject();
+        doReturn(String.valueOf(userId)).when(claims).getSubject();
         doReturn(role).when(claims).get("role", String.class);
         doReturn(jti).when(claims).getId();
         return claims;
@@ -504,7 +508,7 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaimsWithJti(TEST_EMAIL, TEST_ROLE, "jti-123");
+            Claims claims = validClaimsWithJti(TEST_USER_ID, TEST_ROLE, "jti-123");
             when(tokenProvider.validateAndParseClaims(VALID_JWT))
                     .thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
             when(tokenBlacklistService.isBlacklisted("jti-123")).thenReturn(Mono.just(true));
@@ -523,11 +527,11 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaimsWithJti(TEST_EMAIL, TEST_ROLE, "jti-456");
+            Claims claims = validClaimsWithJti(TEST_USER_ID, TEST_ROLE, "jti-456");
             when(tokenProvider.validateAndParseClaims(VALID_JWT))
                     .thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
             when(tokenBlacklistService.isBlacklisted("jti-456")).thenReturn(Mono.just(false));
-            when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Mono.just(activeUser));
+            when(userRepository.findById(TEST_USER_ID)).thenReturn(Mono.just(activeUser));
 
             SecurityContext[] captured = new SecurityContext[1];
             WebFilterChain chain = capturingChain(captured);
@@ -547,7 +551,7 @@ class JwtAuthenticationFilterTest {
                     .build();
             MockServerWebExchange exchange = MockServerWebExchange.from(request);
 
-            Claims claims = validClaimsWithJti(TEST_EMAIL, TEST_ROLE, "jti-789");
+            Claims claims = validClaimsWithJti(TEST_USER_ID, TEST_ROLE, "jti-789");
             when(tokenProvider.validateAndParseClaims(VALID_JWT))
                     .thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
             when(tokenBlacklistService.isBlacklisted("jti-789")).thenReturn(Mono.just(true));

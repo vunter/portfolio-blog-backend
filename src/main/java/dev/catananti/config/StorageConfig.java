@@ -39,6 +39,7 @@ public class StorageConfig {
     @Bean
     @ConditionalOnProperty(name = "app.storage.type", havingValue = "s3")
     public StorageProvider s3StorageProvider(
+            ResilienceConfig resilience,
             @Value("${app.storage.s3.endpoint}") String endpoint,
             @Value("${app.storage.s3.access-key}") String accessKey,
             @Value("${app.storage.s3.secret-key}") String secretKey,
@@ -55,6 +56,6 @@ public class StorageConfig {
                 .forcePathStyle(true) // Required for MinIO and Cloudflare R2
                 .build();
 
-        return new S3StorageProvider(s3Client, bucket, publicUrl);
+        return new S3StorageProvider(s3Client, bucket, publicUrl, resilience);
     }
 }

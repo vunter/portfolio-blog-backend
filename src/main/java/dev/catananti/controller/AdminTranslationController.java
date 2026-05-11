@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.repository.TranslationRepository;
 import dev.catananti.service.IdService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -24,6 +25,7 @@ public class AdminTranslationController {
     private final TranslationRepository translationRepository;
     private final I18nController i18nController;
     private final IdService idService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping
     @Operation(summary = "List translations", description = "Paginated list with optional search filter")
@@ -32,11 +34,11 @@ public class AdminTranslationController {
             @RequestParam(defaultValue = "frontend") String namespace,
             @RequestParam(required = false) String search,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size) {
-
-        int offset = page * size;
+            @RequestParam(defaultValue = "20") int size) {
+        final int clampedSize = paginationConfig.clampPageSize(size);
+        int offset = page * clampedSize;
         return Mono.zip(
-            translationRepository.findAllPaginated(locale, namespace, search, offset, size).collectList(),
+            translationRepository.findAllPaginated(locale, namespace, search, offset, clampedSize).collectList(),
             translationRepository.countAll(locale, namespace, search)
         ).map(tuple -> {
             var items = tuple.getT1();
@@ -45,8 +47,8 @@ public class AdminTranslationController {
                 "items", items,
                 "total", total,
                 "page", page,
-                "size", size,
-                "totalPages", (int) Math.ceil((double) total / size)
+                "size", clampedSize,
+                "totalPages", (int) Math.ceil((double) total / clampedSize)
             ));
         });
     }

@@ -16,6 +16,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -104,6 +105,65 @@ class ResumeCertificationServiceTest {
                     .verifyComplete();
 
             verify(certificationRepository).deleteByProfileId(profileId);
+        }
+    }
+
+    @Nested
+    @DisplayName("mergeCertifications")
+    class MergeCertifications {
+
+        @Test
+        @DisplayName("should return empty for null input")
+        void shouldReturnEmptyForNull() {
+            StepVerifier.create(certificationService.mergeCertifications(profileId, null))
+                    .verifyComplete();
+            verifyNoInteractions(certificationRepository);
+        }
+
+        @Test
+        @DisplayName("should delete all for empty list")
+        void shouldDeleteAllForEmpty() {
+            when(certificationRepository.deleteByProfileId(profileId)).thenReturn(Mono.empty());
+            StepVerifier.create(certificationService.mergeCertifications(profileId, List.of()))
+                    .verifyComplete();
+            verify(certificationRepository).deleteByProfileId(profileId);
+        }
+
+        @Test
+        @DisplayName("should insert new and delete removed entries")
+        void shouldInsertAndDelete() {
+            var existing = ResumeCertification.builder().id(10L).profileId(profileId).name("Old Cert").issuer("Old")
+                    .sortOrder(0).createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+
+            when(certificationRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.just(existing));
+            when(certificationRepository.deleteAllById(anyIterable())).thenReturn(Mono.empty());
+            when(idService.nextId()).thenReturn(700L);
+            when(certificationRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.CertificationEntry.builder().name("New Cert").issuer("New").build()
+            );
+            StepVerifier.create(certificationService.mergeCertifications(profileId, incoming))
+                    .verifyComplete();
+            verify(certificationRepository).deleteAllById(anyIterable());
+            verify(certificationRepository).saveAll(anyIterable());
+        }
+
+        @Test
+        @DisplayName("should update existing entry")
+        void shouldUpdateExisting() {
+            var existing = ResumeCertification.builder().id(10L).profileId(profileId).name("Old").issuer("Old")
+                    .sortOrder(0).createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+
+            when(certificationRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.just(existing));
+            when(certificationRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.CertificationEntry.builder().id("10").name("Updated").issuer("Updated Org").build()
+            );
+            StepVerifier.create(certificationService.mergeCertifications(profileId, incoming))
+                    .verifyComplete();
+            verify(certificationRepository, never()).deleteAllById(anyIterable());
         }
     }
 

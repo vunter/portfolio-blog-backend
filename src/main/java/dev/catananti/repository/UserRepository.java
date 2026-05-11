@@ -10,10 +10,10 @@ import reactor.core.publisher.Mono;
 @Repository
 public interface UserRepository extends ReactiveCrudRepository<User, Long> {
 
-    @Query("SELECT * FROM users WHERE email = :email")
+    @Query("SELECT * FROM users WHERE email = LOWER(TRIM(:email))")
     Mono<User> findByEmail(String email);
 
-    @Query("SELECT COUNT(*) > 0 FROM users WHERE email = :email")
+    @Query("SELECT COUNT(*) > 0 FROM users WHERE email = LOWER(TRIM(:email))")
     Mono<Boolean> existsByEmail(String email);
 
     @Query("SELECT * FROM users WHERE LOWER(username) = LOWER(:username)")
@@ -22,8 +22,8 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Query("SELECT COUNT(*) > 0 FROM users WHERE LOWER(username) = LOWER(:username)")
     Mono<Boolean> existsByUsername(String username);
 
-    @Query("SELECT * FROM users WHERE role = :role LIMIT 1000")
-    Flux<User> findByRole(String role);
+    @Query("SELECT * FROM users WHERE role = :role LIMIT :limit")
+    Flux<User> findByRole(String role, int limit);
 
     @Query("SELECT * FROM users ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<User> findAllPaged(int limit, int offset);

@@ -16,6 +16,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -101,6 +102,81 @@ class ResumeLanguageServiceTest {
                     .verifyComplete();
 
             verify(languageRepository).deleteByProfileId(profileId);
+        }
+    }
+
+    @Nested
+    @DisplayName("mergeLanguages")
+    class MergeLanguages {
+
+        @Test
+        @DisplayName("should return empty for null input (preserve existing)")
+        void shouldReturnEmptyForNull() {
+            StepVerifier.create(languageService.mergeLanguages(profileId, null))
+                    .verifyComplete();
+            verifyNoInteractions(languageRepository);
+        }
+
+        @Test
+        @DisplayName("should delete all for empty list")
+        void shouldDeleteAllForEmpty() {
+            when(languageRepository.deleteByProfileId(profileId)).thenReturn(Mono.empty());
+            StepVerifier.create(languageService.mergeLanguages(profileId, List.of()))
+                    .verifyComplete();
+            verify(languageRepository).deleteByProfileId(profileId);
+        }
+
+        @Test
+        @DisplayName("should insert new entries when no existing")
+        void shouldInsertNew() {
+            when(languageRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.empty());
+            when(idService.nextId()).thenReturn(500L);
+            when(languageRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.LanguageEntry.builder().name("English").proficiency("Native").build()
+            );
+            StepVerifier.create(languageService.mergeLanguages(profileId, incoming))
+                    .verifyComplete();
+            verify(languageRepository).saveAll(anyIterable());
+        }
+
+        @Test
+        @DisplayName("should update existing and delete removed")
+        void shouldUpdateAndDelete() {
+            var existing = ResumeLanguage.builder().id(10L).profileId(profileId).name("Old").proficiency("B2")
+                    .sortOrder(0).createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+            var toRemove = ResumeLanguage.builder().id(20L).profileId(profileId).name("Remove").proficiency("A1")
+                    .sortOrder(1).createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+
+            when(languageRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.just(existing, toRemove));
+            when(languageRepository.deleteAllById(anyIterable())).thenReturn(Mono.empty());
+            when(languageRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.LanguageEntry.builder().id("10").name("Updated").proficiency("C1").build()
+            );
+            StepVerifier.create(languageService.mergeLanguages(profileId, incoming))
+                    .verifyComplete();
+            verify(languageRepository).deleteAllById(argThat(ids -> {
+                var list = new java.util.ArrayList<Long>();
+                ids.forEach(list::add);
+                return list.contains(20L) && !list.contains(10L);
+            }));
+        }
+
+        @Test
+        @DisplayName("should handle invalid ID string gracefully")
+        void shouldHandleInvalidId() {
+            when(languageRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.empty());
+            when(idService.nextId()).thenReturn(600L);
+            when(languageRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.LanguageEntry.builder().id("not-a-number").name("Test").proficiency("B1").build()
+            );
+            StepVerifier.create(languageService.mergeLanguages(profileId, incoming))
+                    .verifyComplete();
         }
     }
 

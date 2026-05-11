@@ -4,7 +4,6 @@ import dev.catananti.entity.User;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.TokenBlacklistService;
 import dev.catananti.service.UserCacheService;
-import dev.catananti.util.PiiMasker;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Set;
@@ -97,11 +96,11 @@ public class JwtAuthenticationFilter implements WebFilter {
 
     /**
      * F-046: Proactively evict a user from the authentication cache.
-     * @deprecated Use {@link UserCacheService#evict(String)} directly instead.
+     * @deprecated Use {@link UserCacheService#evict(Long)} directly instead.
      */
     @Deprecated
-    public void evictUserFromCache(String email) {
-        userCacheService.evict(email);
+    public void evictUserFromCache(Long userId) {
+        userCacheService.evict(userId);
     }
 
     @Override
@@ -135,11 +134,22 @@ public class JwtAuthenticationFilter implements WebFilter {
         // Token is valid (signature, encoding, and expiration all verified)
         var claims = validation.claims();
         String jti = claims.getId();
-        String email = claims.getSubject();
         String role = claims.get("role", String.class);
+        Long userId;
+        try {
+            userId = Long.parseLong(claims.getSubject());
+        } catch (NumberFormatException | NullPointerException e) {
+            log.warn("Access denied — JWT subject is not a numeric user id");
+            clearAccessTokenCookie(exchange);
+            if (isExemptPath(path)) {
+                return chain.filter(exchange);
+            }
+            return unauthorizedResponse(exchange, "Invalid token subject");
+        }
 
         // Check if the token has been blacklisted (e.g. after logout)
         if (jti != null) {
+            final Long uid = userId;
             return tokenBlacklistService.isBlacklisted(jti)
                     .flatMap(blacklisted -> {
                         if (blacklisted) {
@@ -150,30 +160,30 @@ public class JwtAuthenticationFilter implements WebFilter {
                             log.warn("Access denied — blacklisted token for path: {}", path);
                             return unauthorizedResponse(exchange, "Token revoked");
                         }
-                        return authenticateUser(exchange, chain, email, role);
+                        return authenticateUser(exchange, chain, uid, role);
                     });
         }
 
-        return authenticateUser(exchange, chain, email, role);
+        return authenticateUser(exchange, chain, userId, role);
         }); // end Mono.fromCallable().flatMap()
     }
 
     /** F-044: Allowed roles whitelist to prevent arbitrary role injection */
     private static final Set<String> ALLOWED_ROLES = Set.of("ADMIN", "DEV", "VIEWER");
 
-    private Mono<Void> authenticateUser(ServerWebExchange exchange, WebFilterChain chain, String email, String role) {
+    private Mono<Void> authenticateUser(ServerWebExchange exchange, WebFilterChain chain, Long userId, String role) {
         // F-044: Validate role against whitelist
         if (role == null || !ALLOWED_ROLES.contains(role)) {
-            log.warn("Access denied — invalid role '{}' for user: {}", role, PiiMasker.maskEmail(email));
+            log.warn("Access denied — invalid role '{}' for userId={}", role, userId);
             return unauthorizedResponse(exchange, "Invalid role");
         }
 
-        // Try Caffeine cache first, fall back to DB
-        User cached = userCacheService.getIfPresent(email);
+        // Try Caffeine cache first, fall back to DB (lookup by ID — JWT sub is opaque, no PII)
+        User cached = userCacheService.getIfPresent(userId);
         Mono<User> userMono = cached != null
                 ? Mono.just(cached)
-                : userRepository.findByEmail(email)
-                        .doOnNext(u -> userCacheService.put(email, u));
+                : userRepository.findById(userId)
+                        .doOnNext(u -> userCacheService.put(userId, u));
 
         return userMono
                 .filter(user -> Boolean.TRUE.equals(user.getActive()))
@@ -181,15 +191,17 @@ public class JwtAuthenticationFilter implements WebFilter {
                 // because chain.filter() returns Mono<Void> which completes empty by design,
                 // and switchIfEmpty after flatMap would always trigger on Mono<Void> completion)
                 .switchIfEmpty(Mono.defer(() -> {
-                    log.warn("Access denied — user not found or inactive: {}", PiiMasker.maskEmail(email));
+                    log.warn("Access denied — userId={} not found or inactive", userId);
                     return unauthorizedResponse(exchange, "User not found or inactive")
                             .then(Mono.empty());
                 }))
                 .flatMap(user -> {
-                    log.debug("Authentication successful for user: {}", PiiMasker.maskEmail(email));
+                    log.debug("Authentication successful for userId={}", userId);
                     exchange.getAttributes().put(AUTHENTICATED_USER_ATTR, user);
+                    // Principal stays as email so existing @AuthenticationPrincipal String email
+                    // controllers keep working — sourced from the loaded user, not the JWT.
                     var auth = new UsernamePasswordAuthenticationToken(
-                            email, null,
+                            user.getEmail(), null,
                             Collections.singleton(new SimpleGrantedAuthority("ROLE_" + role)));
                     return chain.filter(exchange)
                             .contextWrite(ReactiveSecurityContextHolder.withAuthentication(auth));

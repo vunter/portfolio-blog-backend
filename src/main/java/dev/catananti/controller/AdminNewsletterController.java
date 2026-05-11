@@ -8,7 +8,7 @@ import dev.catananti.util.PiiMasker;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +34,7 @@ public class AdminNewsletterController {
 
     private final NewsletterService newsletterService;
     private final NewsletterTrackingService trackingService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping("/subscribers")
     @Operation(summary = "Get all subscribers", description = "Get paginated newsletter subscribers, with optional status and email filters")
@@ -41,7 +42,8 @@ public class AdminNewsletterController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String email,
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+            @RequestParam(defaultValue = "20") @Min(1) int size) {
+        size = paginationConfig.clampPageSize(size);
         log.debug("Fetching subscribers: status={}, email={}, page={}, size={}", status, PiiMasker.maskEmail(email), page, size);
         return newsletterService.getAllSubscribersPaginated(status, email, page, size);
     }
@@ -87,7 +89,7 @@ public class AdminNewsletterController {
     public Mono<String> exportSubscribers() {
         log.info("Exporting subscribers as CSV");
         return newsletterService.getActiveSubscribers()
-                .map(s -> sanitizeCsvField(s.getEmail()) + "," + sanitizeCsvField(s.getName() != null ? s.getName() : "") + "," + sanitizeCsvField(s.getStatus()) + "," + s.getCreatedAt())
+                .map(s -> sanitizeCsvField(s.getEmail()) + "," + sanitizeCsvField(s.getName() != null ? s.getName() : "") + "," + sanitizeCsvField(s.getStatus().name()) + "," + s.getCreatedAt())
                 .collectList()
                 .map(lines -> {
                     StringBuilder csv = new StringBuilder("email,name,status,subscribed_at\n");

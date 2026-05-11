@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.ArticleService;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.env.Environment;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -47,11 +49,16 @@ class ArticleControllerIntegrationTest {
     @Mock
     private AnalyticsService analyticsService;
 
+    private PaginationConfig paginationConfig = new PaginationConfig();
+
+    @Mock
+    private Environment environment;
+
     private ArticleController articleController;
 
     @BeforeEach
     void setUp() {
-        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService, analyticsService);
+        articleController = new ArticleController(articleService, Optional.of(deduplicationService), readingHistoryService, analyticsService, paginationConfig, environment);
     }
 
     private ArticleResponse createTestArticle(String slug, String title) {

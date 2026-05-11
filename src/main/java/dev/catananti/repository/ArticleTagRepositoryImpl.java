@@ -17,25 +17,28 @@ public class ArticleTagRepositoryImpl implements ArticleTagRepository {
 
     private final R2dbcEntityTemplate r2dbcTemplate;
 
-    private static final String FIND_TAGS_BY_ARTICLE_IDS =
-            "SELECT article_id, tag_id FROM article_tags WHERE article_id = ANY(:ids)";
-
     private static final String INSERT_ARTICLE_TAG =
             "INSERT INTO article_tags (article_id, tag_id) VALUES (:articleId, :tagId)";
 
     private static final String DELETE_BY_ARTICLE_ID =
             "DELETE FROM article_tags WHERE article_id = :articleId";
 
-    private static final String COMMENT_COUNT_BY_ARTICLE_IDS =
-            "SELECT article_id, COUNT(*) as cnt FROM comments " +
-            "WHERE article_id = ANY(:ids) AND status = 'APPROVED' GROUP BY article_id";
-
     @Override
     public Flux<long[]> findTagIdsByArticleIds(Long[] articleIds) {
-        return r2dbcTemplate.getDatabaseClient()
-                .sql(FIND_TAGS_BY_ARTICLE_IDS)
-                .bind("ids", articleIds)
-                .map((row, meta) -> new long[]{
+        // Build dynamic IN clause for H2 compatibility (ANY(array) is PostgreSQL-only)
+        StringBuilder sql = new StringBuilder("SELECT article_id, tag_id FROM article_tags WHERE article_id IN (");
+        for (int i = 0; i < articleIds.length; i++) {
+            if (i > 0) sql.append(", ");
+            sql.append(":id").append(i);
+        }
+        sql.append(")");
+
+        var query = r2dbcTemplate.getDatabaseClient().sql(sql.toString());
+        for (int i = 0; i < articleIds.length; i++) {
+            query = query.bind("id" + i, articleIds[i]);
+        }
+
+        return query.map((row, meta) -> new long[]{
                         row.get("article_id", Long.class),
                         row.get("tag_id", Long.class)
                 })

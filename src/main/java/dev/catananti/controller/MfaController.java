@@ -22,6 +22,10 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.time.Duration;
@@ -46,6 +50,16 @@ public class MfaController {
 
     private String msg(Locale locale, String key, Object... args) {
         return messageSource.getMessage(key, args, key, locale);
+    }
+
+    private static String hashMfaToken(String token) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(token.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
     }
 
     private static final String OTP_SENDS_PREFIX = "mfa:otp-sends:";
@@ -176,7 +190,9 @@ public class MfaController {
                 return Mono.just(ResponseEntity.badRequest().body(Map.of("message", msg(locale, "mfa.token.required"))));
             });
         }
-        String sendsKey = OTP_SENDS_PREFIX + mfaToken;
+        // SEC: hash the MFA token before using it as a Redis key, mirroring AuthService.
+        // Storing the raw token would let a Redis read leak in-flight, usable tokens.
+        String sendsKey = OTP_SENDS_PREFIX + hashMfaToken(mfaToken);
         return redisTemplate.opsForValue().increment(sendsKey)
                 .flatMap(sends -> {
                     if (sends == 1) {

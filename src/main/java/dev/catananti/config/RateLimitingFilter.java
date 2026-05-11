@@ -87,16 +87,18 @@ public class RateLimitingFilter implements WebFilter {
                                     exchange.getResponse().setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
                                     headers.set("X-RateLimit-Limit", String.valueOf(maxRequests));
                                     headers.set("X-RateLimit-Remaining", "0");
-                                    headers.set("X-RateLimit-Reset", 
-                                            String.valueOf(Instant.now().plus(windowDuration).toEpochMilli()));
+                                    headers.set("X-RateLimit-Reset",
+                                            String.valueOf(Instant.now().plus(windowDuration).getEpochSecond()));
                                     headers.set("Retry-After", String.valueOf(windowDuration.toSeconds()));
                                     return exchange.getResponse().setComplete();
                                 }
                                 
                                 headers.set("X-RateLimit-Limit", String.valueOf(maxRequests));
-                                headers.set("X-RateLimit-Remaining", 
+                                headers.set("X-RateLimit-Remaining",
                                         String.valueOf(Math.max(0, maxRequests - count)));
-                                
+                                headers.set("X-RateLimit-Reset",
+                                        String.valueOf(Instant.now().plus(windowDuration).getEpochSecond()));
+
                                 return chain.filter(exchange);
                             })
                             .onErrorResume(e -> {
@@ -130,6 +132,8 @@ public class RateLimitingFilter implements WebFilter {
             exchange.getResponse().setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
             headers.set("X-RateLimit-Limit", String.valueOf(maxRequests));
             headers.set("X-RateLimit-Remaining", "0");
+            headers.set("X-RateLimit-Reset",
+                    String.valueOf(entry.expiresAt().getEpochSecond()));
             headers.set("Retry-After", String.valueOf(windowDuration.toSeconds()));
             return exchange.getResponse().setComplete();
         }
@@ -137,6 +141,8 @@ public class RateLimitingFilter implements WebFilter {
         headers.set("X-RateLimit-Limit", String.valueOf(maxRequests));
         headers.set("X-RateLimit-Remaining",
                 String.valueOf(Math.max(0, maxRequests - count)));
+        headers.set("X-RateLimit-Reset",
+                String.valueOf(entry.expiresAt().getEpochSecond()));
         return chain.filter(exchange);
     }
 
@@ -153,8 +159,14 @@ public class RateLimitingFilter implements WebFilter {
      * Determines rate limit reactively based on endpoint and authentication status.
      */
     private Mono<Integer> determineRateLimit(ServerWebExchange exchange, String path) {
-        // Login and password reset endpoints have stricter limits
-        if (path.contains("/auth/login") || path.contains("/forgot-password") || path.contains("/reset-password")) {
+        // Login, registration, password reset, and MFA completion endpoints all face credential-stuffing,
+        // enumeration, or brute-force attacks; they share the strictest bucket.
+        if (path.contains("/auth/login")
+                || path.contains("/auth/register")
+                || path.contains("/forgot-password")
+                || path.contains("/reset-password")
+                || path.contains("/admin/mfa/verify")
+                || path.contains("/admin/mfa/send-email-otp")) {
             return Mono.just(maxRequestsLogin);
         }
 
@@ -175,9 +187,18 @@ public class RateLimitingFilter implements WebFilter {
     }
 
     private String buildRateLimitKey(String clientIp, String path) {
-        // Use different buckets for login to prevent circumvention
+        // Per-bucket isolation prevents one endpoint's burst from exhausting another's quota.
         if (path.contains("/auth/login")) {
             return "rate_limit:login:" + clientIp;
+        }
+        if (path.contains("/auth/register")) {
+            return "rate_limit:register:" + clientIp;
+        }
+        if (path.contains("/forgot-password") || path.contains("/reset-password")) {
+            return "rate_limit:pwreset:" + clientIp;
+        }
+        if (path.contains("/admin/mfa/verify") || path.contains("/admin/mfa/send-email-otp")) {
+            return "rate_limit:mfa:" + clientIp;
         }
         // F-082: Separate bucket for contact form
         if (path.equals("/api/v1/contact")) {

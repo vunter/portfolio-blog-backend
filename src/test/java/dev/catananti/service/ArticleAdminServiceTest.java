@@ -4,6 +4,7 @@ import dev.catananti.dto.ArticleRequest;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.Tag;
 import dev.catananti.entity.User;
 import dev.catananti.exception.DuplicateResourceException;
@@ -79,6 +80,12 @@ class ArticleAdminServiceTest {
     @Mock
     private ArticleService articleService;
 
+    @Mock
+    private dev.catananti.config.PaginationConfig paginationConfig;
+
+    @Mock
+    private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
+
     @InjectMocks
     private ArticleAdminService articleAdminService;
 
@@ -107,7 +114,7 @@ class ArticleAdminServiceTest {
                 .subtitle("Sub")
                 .content("Some content for the test article")
                 .excerpt("Excerpt")
-                .status("DRAFT")
+                .status(ArticleStatus.DRAFT)
                 .readingTimeMinutes(1)
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
@@ -119,6 +126,13 @@ class ArticleAdminServiceTest {
                 .title("Test Article")
                 .status("DRAFT")
                 .build();
+
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
+
+        // Pass-through TransactionalOperator: tests don't exercise rollback semantics
+        lenient().when(transactionalOperator.transactional(any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(paginationConfig.getFeedMaxItems()).thenReturn(100);
     }
 
     // ==================== getAllArticles ====================
@@ -140,7 +154,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null)))
+            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null, "newest")))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                         assertThat(page.getTotalElements()).isEqualTo(1);
@@ -162,7 +176,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, "published")))
+            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, "published", "newest")))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                     })
@@ -180,7 +194,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(Mono.just(List.of()));
 
             // When & Then
-            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null)))
+            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null, "newest")))
                     .assertNext(page -> {
                         assertThat(page.getContent()).isEmpty();
                         assertThat(page.getTotalElements()).isZero();
@@ -317,7 +331,7 @@ class ArticleAdminServiceTest {
                     .id(556L)
                     .slug("scheduled-article")
                     .title("Scheduled")
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .build();
             when(articleRepository.save(any(Article.class))).thenReturn(Mono.just(savedArticle));
             when(articleService.enrichArticleWithMetadata(any(Article.class)))
@@ -399,23 +413,16 @@ class ArticleAdminServiceTest {
     class DeleteArticle {
 
         @Test
-        @DisplayName("Should cascade delete article and related data")
+        @DisplayName("Q3.2: Should delete article — DB ON DELETE CASCADE handles related rows")
         void shouldCascadeDeleteArticle() {
-            // Given
-            var dbClient = mock(org.springframework.r2dbc.core.DatabaseClient.class);
-            var execSpec = mock(org.springframework.r2dbc.core.DatabaseClient.GenericExecuteSpec.class);
-            var fetchSpec = mock(org.springframework.r2dbc.core.FetchSpec.class);
-
+            // Q3.2: After the refactor, deleteArticle no longer issues explicit DELETEs
+            // for tags/comments/bookmarks/etc. The DB ON DELETE CASCADE FKs handle
+            // that atomically inside the @Transactional boundary. The test now only
+            // verifies the surviving operations: findById, deleteById, cache invalidation.
             when(articleRepository.findById(articleId)).thenReturn(Mono.just(testArticle));
-            when(r2dbcTemplate.getDatabaseClient()).thenReturn(dbClient);
-            when(dbClient.sql(anyString())).thenReturn(execSpec);
-            when(execSpec.bind(eq("articleId"), eq(articleId))).thenReturn(execSpec);
-            when(execSpec.fetch()).thenReturn(fetchSpec);
-            when(fetchSpec.rowsUpdated()).thenReturn(Mono.just(1L));
             when(articleRepository.deleteById(articleId)).thenReturn(Mono.empty());
-            when(cacheService.delete(anyString())).thenReturn(Mono.just(true));
+            lenient().when(cacheService.delete(anyString())).thenReturn(Mono.just(true));
 
-            // When & Then
             StepVerifier.create(articleAdminService.deleteArticle(articleId))
                     .verifyComplete();
 
@@ -437,14 +444,14 @@ class ArticleAdminServiceTest {
                     .id(articleId)
                     .slug("test-article")
                     .title("Test Article")
-                    .status("DRAFT")
+                    .status(ArticleStatus.DRAFT)
                     .build();
 
             Article publishedArticle = Article.builder()
                     .id(articleId)
                     .slug("test-article")
                     .title("Test Article")
-                    .status("PUBLISHED")
+                    .status(ArticleStatus.PUBLISHED)
                     .publishedAt(LocalDateTime.now())
                     .build();
 
@@ -457,7 +464,7 @@ class ArticleAdminServiceTest {
             when(articleRepository.findById(articleId)).thenReturn(Mono.just(draftArticle));
             when(articleRepository.save(any(Article.class))).thenReturn(Mono.just(publishedArticle));
             when(cacheService.delete(anyString())).thenReturn(Mono.just(true));
-            when(subscriberRepository.findAllConfirmed()).thenReturn(Flux.empty());
+            when(subscriberRepository.findAllConfirmed(anyInt())).thenReturn(Flux.empty());
             when(articleService.enrichArticleWithMetadata(any(Article.class)))
                     .thenReturn(Mono.just(publishedArticle));
             when(articleService.mapToResponse(any(Article.class)))
@@ -495,7 +502,7 @@ class ArticleAdminServiceTest {
             Article publishedArticle = Article.builder()
                     .id(articleId)
                     .slug("test-article")
-                    .status("PUBLISHED")
+                    .status(ArticleStatus.PUBLISHED)
                     .build();
 
             ArticleResponse draftResponse = ArticleResponse.builder()

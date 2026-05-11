@@ -9,6 +9,7 @@ import dev.catananti.exception.DuplicateResourceException;
 import org.springframework.dao.DuplicateKeyException;
 import dev.catananti.exception.ResourceNotFoundException;
 import org.springframework.transaction.annotation.Transactional;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.util.DigestUtils;
@@ -37,6 +38,8 @@ public class NewsletterService {
     private final HtmlSanitizerService htmlSanitizerService;
     private final NotificationEventService notificationEventService;
     private final BlogMetrics blogMetrics;
+    private final PaginationConfig paginationConfig;
+    private final dev.catananti.scheduler.SchedulerLock schedulerLock;
 
     @Value("${app.site-url:http://localhost:4200}")
     private String siteUrl;
@@ -48,16 +51,16 @@ public class NewsletterService {
     public Mono<Map<String, String>> subscribe(SubscribeRequest request) {
         return subscriberRepository.findByEmail(request.getEmail())
                 .flatMap(existing -> {
-                    if (SubscriberStatus.UNSUBSCRIBED.matches(existing.getStatus())) {
+                    if (existing.getStatus() == SubscriberStatus.UNSUBSCRIBED) {
                         // Re-subscribe
-                        existing.setStatus(SubscriberStatus.PENDING.name());
+                        existing.setStatus(SubscriberStatus.PENDING);
                         existing.setConfirmationToken(UUID.randomUUID().toString());
                         existing.setUnsubscribedAt(null);
                         existing.setCreatedAt(LocalDateTime.now());
                         existing.setAnalyticsConsent(Boolean.TRUE.equals(request.getAnalyticsConsent()));
                         return subscriberRepository.save(existing)
                                 .map(s -> createConfirmationResponse(s));
-                    } else if (SubscriberStatus.CONFIRMED.matches(existing.getStatus())) {
+                    } else if (existing.getStatus() == SubscriberStatus.CONFIRMED) {
                         return Mono.error(new DuplicateResourceException("error.email_already_subscribed"));
                     } else {
                         // Still pending - check if expired, then regenerate token
@@ -101,7 +104,7 @@ public class NewsletterService {
                 .id(idService.nextId())
                 .email(request.getEmail())
                 .name(request.getName() != null ? htmlSanitizerService.stripHtml(request.getName()) : null)
-                .status(SubscriberStatus.PENDING.name())
+                .status(SubscriberStatus.PENDING)
                 .confirmationToken(UUID.randomUUID().toString())
                 .unsubscribeToken(UUID.randomUUID().toString())
                 .createdAt(LocalDateTime.now())
@@ -130,7 +133,7 @@ public class NewsletterService {
         return subscriberRepository.findByConfirmationToken(token)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Subscription", "token", token)))
                 .flatMap(subscriber -> {
-                    if (SubscriberStatus.CONFIRMED.matches(subscriber.getStatus())) {
+                    if (subscriber.getStatus() == SubscriberStatus.CONFIRMED) {
                         return Mono.just(Map.of("message", "success.newsletter_already_confirmed"));
                     }
 
@@ -140,7 +143,7 @@ public class NewsletterService {
                                 "Confirmation link has expired. Please subscribe again."));
                     }
 
-                    subscriber.setStatus(SubscriberStatus.CONFIRMED.name());
+                    subscriber.setStatus(SubscriberStatus.CONFIRMED);
                     subscriber.setConfirmedAt(LocalDateTime.now());
                     subscriber.setConfirmationToken(null);
                     // Generate a persistent unsubscribe token that survives confirmation
@@ -170,7 +173,7 @@ public class NewsletterService {
         return subscriberRepository.findByEmail(email)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Subscriber", "email", email)))
                 .flatMap(subscriber -> {
-                    subscriber.setStatus(SubscriberStatus.UNSUBSCRIBED.name());
+                    subscriber.setStatus(SubscriberStatus.UNSUBSCRIBED);
                     subscriber.setUnsubscribedAt(LocalDateTime.now());
 
                     return subscriberRepository.save(subscriber)
@@ -188,7 +191,7 @@ public class NewsletterService {
                 .switchIfEmpty(subscriberRepository.findByConfirmationToken(token))
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Subscription", "token", token)))
                 .flatMap(subscriber -> {
-                    subscriber.setStatus(SubscriberStatus.UNSUBSCRIBED.name());
+                    subscriber.setStatus(SubscriberStatus.UNSUBSCRIBED);
                     subscriber.setUnsubscribedAt(LocalDateTime.now());
 
                     return subscriberRepository.save(subscriber)
@@ -199,7 +202,7 @@ public class NewsletterService {
     // Admin methods
     public Flux<Subscriber> getAllSubscribers(String status) {
         if (status != null && !status.isEmpty()) {
-            return subscriberRepository.findByStatus(status.toUpperCase());
+            return subscriberRepository.findByStatus(status.toUpperCase(), paginationConfig.getBulkQueryMax());
         }
         return subscriberRepository.findAll();
     }
@@ -251,7 +254,7 @@ public class NewsletterService {
     }
 
     public Flux<Subscriber> getActiveSubscribers() {
-        return subscriberRepository.findAllConfirmed();
+        return subscriberRepository.findAllConfirmed(paginationConfig.getBulkQueryMax());
     }
 
     public Mono<Void> deleteSubscriber(Long id) {
@@ -270,21 +273,22 @@ public class NewsletterService {
      */
     @Scheduled(cron = "${scheduling.newsletter-cleanup-cron:0 0 3 * * *}")
     public void cleanupExpiredPendingSubscriptions() {
-        try {
-            LocalDateTime expirationDate = LocalDateTime.now().minusHours(confirmationExpirationHours);
+        LocalDateTime expirationDate = LocalDateTime.now().minusHours(confirmationExpirationHours);
 
-            subscriberRepository.countExpiredPendingSubscriptions(expirationDate)
-                    .flatMap(count -> {
-                        if (count > 0) {
-                            log.info("Cleaning up {} expired pending subscriptions", count);
-                            return subscriberRepository.deleteExpiredPendingSubscriptions(expirationDate)
-                                    .doOnSuccess(deleted -> log.info("Deleted {} expired pending subscriptions", deleted));
-                        }
-                        return Mono.just(0);
-                    })
-                    .block();
-        } catch (Exception e) {
-            log.error("Error cleaning up expired subscriptions: {}", e.getMessage(), e);
-        }
+        schedulerLock.executeWithLock("newsletter-cleanup", Duration.ofMinutes(5),
+                subscriberRepository.countExpiredPendingSubscriptions(expirationDate)
+                        .flatMap(count -> {
+                            if (count > 0) {
+                                log.info("Cleaning up {} expired pending subscriptions", count);
+                                return subscriberRepository.deleteExpiredPendingSubscriptions(expirationDate)
+                                        .doOnSuccess(deleted -> log.info("Deleted {} expired pending subscriptions", deleted));
+                            }
+                            return Mono.just(0);
+                        })
+                        .timeout(Duration.ofSeconds(30))
+                        .doOnError(e -> log.error("Error cleaning up expired subscriptions: {}", e.getMessage(), e))
+                        .onErrorComplete()
+                        .then()
+        ).subscribe();
     }
 }

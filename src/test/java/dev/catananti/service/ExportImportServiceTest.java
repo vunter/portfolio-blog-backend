@@ -7,6 +7,7 @@ import dev.catananti.dto.BlogExport;
 import dev.catananti.dto.BlogExport.BlogStats;
 import dev.catananti.dto.BlogExport.TagExportData;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.LocalizedText;
 import dev.catananti.entity.Tag;
 import dev.catananti.repository.ArticleRepository;
@@ -69,7 +70,7 @@ class ExportImportServiceTest {
                 .content("This is test content.")
                 .excerpt("Test excerpt")
                 .coverImageUrl("https://example.com/image.jpg")
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .publishedAt(LocalDateTime.of(2026, 1, 15, 10, 0))
                 .readingTimeMinutes(5)
                 .viewsCount(100)
@@ -432,7 +433,7 @@ class ExportImportServiceTest {
                     .assertNext(result -> assertThat(result.articlesImported()).isEqualTo(1))
                     .verifyComplete();
 
-            verify(articleRepository).save(argThat(a -> "DRAFT".equals(a.getStatus())));
+            verify(articleRepository).save(argThat(a -> ArticleStatus.DRAFT.equals(a.getStatus())));
         }
     }
 }

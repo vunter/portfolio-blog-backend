@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.springframework.stereotype.Service;
+import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -32,6 +33,7 @@ public class PdfGenerationService {
 
     private volatile Playwright playwright;
     private volatile Browser browser;
+    private volatile Disposable initSubscription;
 
     public PdfGenerationService(BlogMetrics blogMetrics) {
         this.blogMetrics = blogMetrics;
@@ -45,7 +47,15 @@ public class PdfGenerationService {
 
     @org.springframework.beans.factory.annotation.Value("${app.pdf.max-concurrent:3}")
     private int maxConcurrentPdf = 3;
+    // Eager init covers the (rare) case where a method is called before
+    // @PostConstruct runs — typically only matters in unit tests that
+    // construct the bean directly and never invoke init().
     private volatile Semaphore pdfSemaphore = new Semaphore(3);
+
+    // Q5.15: Optional remote browser endpoint for Playwright sidecar.
+    // When set, Chromium runs in a separate container — main image drops ~500MB.
+    @org.springframework.beans.factory.annotation.Value("${app.pdf.browser-ws-endpoint:}")
+    private String browserWsEndpoint;
 
     /**
      * Paper size dimensions.
@@ -69,36 +79,49 @@ public class PdfGenerationService {
     /**
      * Reactive lock for non-blocking lazy initialization.
      * Uses Mono.defer + cache to ensure single initialization without blocking Netty threads.
+     *
+     * Q5.15: Supports two modes:
+     * - Local: launches Chromium in the same container (default, requires Chromium installed)
+     * - Remote: connects to a Playwright sidecar via WebSocket (set app.pdf.browser-ws-endpoint)
      */
-    private final Mono<Browser> browserMono = Mono.defer(() ->
-            Mono.fromCallable(() -> {
-                log.info("Initializing Playwright for PDF generation...");
-                playwright = Playwright.create();
+    private volatile Mono<Browser> browserMono;
 
-                BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
-                        .setHeadless(true);
+    private Mono<Browser> createBrowserMono() {
+        return Mono.defer(() ->
+                Mono.fromCallable(() -> {
+                    log.info("Initializing Playwright for PDF generation...");
+                    playwright = Playwright.create();
 
-                // Container-safe flags
-                launchOptions.setArgs(java.util.List.of(
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu"
-                ));
-
-                browser = playwright.chromium().launch(launchOptions);
-                log.info("Playwright initialized successfully with Chromium");
-                return browser;
-            }).subscribeOn(Schedulers.boundedElastic())
-            .doOnError(e -> log.error("Playwright init failed: {}", e.getMessage()))
-            .retry(2)
-    ).cache(); // cache() ensures single initialization
+                    if (browserWsEndpoint != null && !browserWsEndpoint.isBlank()) {
+                        // Q5.15: Remote sidecar — Chromium runs in a separate container
+                        log.info("Connecting to remote Playwright browser at {}", browserWsEndpoint);
+                        browser = playwright.chromium().connect(browserWsEndpoint);
+                        log.info("Connected to remote Playwright browser");
+                    } else {
+                        // Local mode — launch Chromium in this container
+                        BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
+                                .setHeadless(true);
+                        launchOptions.setArgs(java.util.List.of(
+                                "--no-sandbox",
+                                "--disable-setuid-sandbox",
+                                "--disable-dev-shm-usage",
+                                "--disable-gpu"
+                        ));
+                        browser = playwright.chromium().launch(launchOptions);
+                        log.info("Playwright initialized with local Chromium");
+                    }
+                    return browser;
+                }).subscribeOn(Schedulers.boundedElastic())
+                .doOnError(e -> log.error("Playwright init failed: {}", e.getMessage()))
+                .retry(2)
+        ).cache();
+    }
 
     @PostConstruct
     public void init() {
         this.pdfSemaphore = new Semaphore(maxConcurrentPdf);
-        // Eagerly trigger initialization on boundedElastic scheduler (non-blocking)
-        browserMono.subscribe(
+        this.browserMono = createBrowserMono();
+        initSubscription = browserMono.subscribe(
                 b -> log.info("Playwright pre-initialized successfully"),
                 e -> log.warn("Failed to pre-initialize Playwright: {}. Will retry on first use.", e.getMessage(), e)
         );
@@ -107,11 +130,20 @@ public class PdfGenerationService {
     @PreDestroy
     public void cleanup() {
         log.info("Shutting down Playwright...");
+        // Invalidate the cached Mono FIRST so any in-flight request doesn't get a closed
+        // Browser handed back from the cache. New ensureBrowserReactive() callers will
+        // see a failing Mono and short-circuit.
+        browserMono = Mono.error(new IllegalStateException("PdfGenerationService is shutting down"));
+        if (initSubscription != null && !initSubscription.isDisposed()) {
+            initSubscription.dispose();
+        }
         if (browser != null) {
             try {
                 browser.close();
             } catch (Exception e) {
                 log.warn("Error closing browser: {}", e.getMessage(), e);
+            } finally {
+                browser = null;
             }
         }
         if (playwright != null) {
@@ -119,6 +151,8 @@ public class PdfGenerationService {
                 playwright.close();
             } catch (Exception e) {
                 log.warn("Error closing playwright: {}", e.getMessage(), e);
+            } finally {
+                playwright = null;
             }
         }
         log.info("Playwright shutdown complete");
@@ -129,7 +163,17 @@ public class PdfGenerationService {
      * Uses cached Mono to guarantee single initialization without synchronized blocks.
      */
     private Mono<Browser> ensureBrowserReactive() {
-        return browserMono;
+        Mono<Browser> current = browserMono;
+        if (current == null) {
+            synchronized (this) {
+                current = browserMono;
+                if (current == null) {
+                    current = createBrowserMono();
+                    browserMono = current;
+                }
+            }
+        }
+        return current;
     }
 
     /**
@@ -215,6 +259,10 @@ public class PdfGenerationService {
         return doc.html();
     }
 
+    private boolean isRemoteBrowser() {
+        return browserWsEndpoint != null && !browserWsEndpoint.isBlank();
+    }
+
     private byte[] convertToPdf(Browser browserInstance, String htmlContent, String paperSizeStr, boolean landscape) {
         Path tempFile = null;
         BrowserContext context = null;
@@ -223,32 +271,34 @@ public class PdfGenerationService {
             // Sanitize HTML before rendering to prevent script injection
             String sanitizedHtml = sanitizeHtmlForPdf(htmlContent);
 
-            // Create a temporary HTML file (Playwright works best with file URLs)
-            tempFile = Files.createTempFile("resume_", ".html");
-            tempFile.toFile().deleteOnExit();
-            Files.writeString(tempFile, sanitizedHtml, StandardCharsets.UTF_8);
-            
-            log.debug("Created temp HTML file: {}", tempFile);
-            
             // Create browser context and page
             context = browserInstance.newContext();
             Page page = context.newPage();
-            
+
             // SECURITY: Block all external network requests to prevent SSRF.
-            // Only file:// URLs (local temp HTML) are permitted.
             page.route("**", route -> {
                 String url = route.request().url();
-                if (url.startsWith("file://")) {
+                if (url.startsWith("file://") || url.startsWith("data:") || url.startsWith("about:")) {
                     route.resume();
                 } else {
                     log.warn("Blocked external request during PDF generation: {}", url);
                     route.abort();
                 }
             });
-            
-            // Navigate to the HTML file
-            page.navigate("file:///" + tempFile.toAbsolutePath().toString().replace("\\", "/"));
-            page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+
+            if (isRemoteBrowser()) {
+                // Q5.15: Remote browser — use setContent() since temp files aren't shared
+                page.setContent(sanitizedHtml);
+                page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+            } else {
+                // Local browser — use temp file (Playwright works best with file URLs)
+                tempFile = Files.createTempFile("resume_", ".html");
+                tempFile.toFile().deleteOnExit();
+                Files.writeString(tempFile, sanitizedHtml, StandardCharsets.UTF_8);
+                log.debug("Created temp HTML file: {}", tempFile);
+                page.navigate("file:///" + tempFile.toAbsolutePath().toString().replace("\\", "/"));
+                page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+            }
             
             // Inject CSS for proper PDF output (EXACTLY like Python script)
             page.addStyleTag(new Page.AddStyleTagOptions().setContent("""

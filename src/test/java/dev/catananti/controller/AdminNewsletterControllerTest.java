@@ -1,8 +1,10 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.SubscriberResponse;
 import dev.catananti.entity.Subscriber;
+import dev.catananti.entity.SubscriberStatus;
 import dev.catananti.service.NewsletterService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -30,6 +33,9 @@ class AdminNewsletterControllerTest {
 
     @Mock
     private NewsletterService newsletterService;
+
+    @Spy
+    private PaginationConfig paginationConfig = new PaginationConfig();
 
     @InjectMocks
     private AdminNewsletterController controller;
@@ -178,14 +184,14 @@ class AdminNewsletterControllerTest {
                     .id(1L)
                     .email("alice@example.com")
                     .name("Alice")
-                    .status("CONFIRMED")
+                    .status(SubscriberStatus.CONFIRMED)
                     .createdAt(LocalDateTime.of(2026, 1, 15, 10, 0))
                     .build();
             Subscriber sub2 = Subscriber.builder()
                     .id(2L)
                     .email("bob@example.com")
                     .name("Bob")
-                    .status("CONFIRMED")
+                    .status(SubscriberStatus.CONFIRMED)
                     .createdAt(LocalDateTime.of(2026, 1, 20, 14, 30))
                     .build();
 

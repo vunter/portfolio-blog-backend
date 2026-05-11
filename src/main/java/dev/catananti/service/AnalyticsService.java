@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.catananti.dto.AnalyticsComparison;
 import dev.catananti.dto.AnalyticsEventRequest;
 import dev.catananti.dto.AnalyticsSummary;
+import dev.catananti.dto.SearchAnalyticsResponse;
 import dev.catananti.entity.AnalyticsEvent;
 import dev.catananti.repository.AnalyticsRepository;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.util.DeviceParser;
 import dev.catananti.util.IpAddressExtractor;
+import java.time.Duration;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,6 +43,7 @@ public class AnalyticsService {
     private final IdService idService;
     private final DatabaseClient databaseClient;
     private final GeoIPService geoIPService;
+    private final dev.catananti.scheduler.SchedulerLock schedulerLock;
 
     @Value("${app.analytics.retention-days:90}")
     private int retentionDays;
@@ -79,10 +82,14 @@ public class AnalyticsService {
             return Mono.error(new IllegalArgumentException("error.invalid_event_type"));
         }
 
-        // Validate articleId exists if provided
+        // Validate articleId exists if provided.
+        // Returning Mono.empty for "not found" silently drops the event downstream;
+        // surface it as an error so the caller knows the event was not recorded.
         Mono<Boolean> articleValidation = request.getArticleId() != null
                 ? articleRepository.existsById(request.getArticleId())
-                        .flatMap(exists -> exists ? Mono.just(true) : Mono.empty())
+                        .flatMap(exists -> exists
+                                ? Mono.just(true)
+                                : Mono.error(new IllegalArgumentException("error.article_not_found")))
                 : Mono.just(true);
 
         return articleValidation
@@ -689,18 +696,73 @@ public class AnalyticsService {
                 .collectList();
     }
 
+    private static final String SEARCH_COUNT_SQL =
+            "SELECT COUNT(*) FROM search_queries WHERE created_at > NOW() - MAKE_INTERVAL(days => :days)";
+    private static final String SEARCH_UNIQUE_COUNT_SQL =
+            "SELECT COUNT(DISTINCT query_text) FROM search_queries WHERE created_at > NOW() - MAKE_INTERVAL(days => :days)";
+    private static final String TOP_SEARCH_QUERIES_SQL = """
+            SELECT query_text, COUNT(*) AS cnt FROM search_queries
+            WHERE created_at > NOW() - MAKE_INTERVAL(days => :days)
+            GROUP BY query_text ORDER BY cnt DESC LIMIT :topLimit
+            """;
+    private static final String TOP_ZERO_RESULT_QUERIES_SQL = """
+            SELECT query_text, COUNT(*) AS cnt FROM search_queries
+            WHERE results_count = 0 AND created_at > NOW() - MAKE_INTERVAL(days => :days)
+            GROUP BY query_text ORDER BY cnt DESC LIMIT :topLimit
+            """;
+
+    /**
+     * Q2.4: Search analytics aggregation — moved from AdminAnalyticsController.
+     * Runs four aggregate queries in parallel and returns a typed DTO.
+     */
+    public Mono<SearchAnalyticsResponse> getSearchAnalytics(int days, int topLimit) {
+        return Mono.zip(
+                countSearches(SEARCH_COUNT_SQL, days),
+                countSearches(SEARCH_UNIQUE_COUNT_SQL, days),
+                findTopSearchQueries(TOP_SEARCH_QUERIES_SQL, days, topLimit),
+                findTopSearchQueries(TOP_ZERO_RESULT_QUERIES_SQL, days, topLimit)
+        ).map(tuple -> new SearchAnalyticsResponse(
+                tuple.getT1(),
+                tuple.getT2(),
+                tuple.getT3(),
+                tuple.getT4()
+        ));
+    }
+
+    private Mono<Long> countSearches(String sql, int days) {
+        return databaseClient.sql(sql)
+                .bind("days", days)
+                .map((row, meta) -> row.get(0, Long.class))
+                .one()
+                .defaultIfEmpty(0L);
+    }
+
+    private Mono<List<SearchAnalyticsResponse.SearchQueryStat>> findTopSearchQueries(String sql, int days, int topLimit) {
+        return databaseClient.sql(sql)
+                .bind("days", days)
+                .bind("topLimit", topLimit)
+                .map((row, meta) -> new SearchAnalyticsResponse.SearchQueryStat(
+                        row.get("query_text", String.class),
+                        row.get("cnt", Long.class)))
+                .all()
+                .collectList()
+                .defaultIfEmpty(List.of());
+    }
+
     /**
      * Cleanup analytics events older than the configured retention period.
      * Runs daily by default.
      */
     @Scheduled(fixedRateString = "${scheduling.analytics-cleanup-ms:86400000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public void cleanupOldEvents() {
-        try {
-            LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
-            analyticsRepository.deleteByCreatedAtBefore(cutoff).block();
-            log.info("Analytics events older than {} days cleaned up", retentionDays);
-        } catch (Exception e) {
-            log.error("Failed to cleanup old analytics events: {}", e.getMessage(), e);
-        }
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
+        schedulerLock.executeWithLock("analytics-cleanup", Duration.ofMinutes(10),
+                analyticsRepository.deleteByCreatedAtBefore(cutoff)
+                        .timeout(Duration.ofSeconds(30))
+                        .doOnSuccess(count -> log.info("Analytics cleanup: deleted {} events older than {} days", count, retentionDays))
+                        .doOnError(e -> log.error("Failed to cleanup old analytics events: {}", e.getMessage(), e))
+                        .onErrorComplete()
+                        .then()
+        ).subscribe();
     }
 }

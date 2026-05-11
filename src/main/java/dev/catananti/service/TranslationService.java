@@ -39,7 +39,7 @@ public class TranslationService {
     private static final String DEEPL_FREE_URL = "https://api-free.deepl.com/v2/translate";
     private static final String DEEPL_PRO_URL = "https://api.deepl.com/v2/translate";
     @Value("${app.translation.max-batch-size:50}")
-    private int maxBatchSize; // DeepL allows up to 50 texts per request
+    private int maxBatchSize = 50; // DeepL allows up to 50 texts per request
     private static final long FREE_TIER_CHAR_LIMIT = 500_000L;
     private static final double USAGE_WARNING_THRESHOLD = 0.8;
 

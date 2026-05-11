@@ -123,7 +123,10 @@ public class CacheService {
      */
     public Mono<Long> invalidateAllArticles() {
         return withRedis(0L, () -> deleteByPattern(ARTICLES_CACHE_PREFIX + "*")
-                .doOnSuccess(count -> log.info("Invalidated {} article cache entries", count)));
+                .doOnSuccess(count -> {
+                    if (count > 0) log.info("Invalidated {} article cache entries", count);
+                    else log.debug("No article cache entries to invalidate");
+                }));
     }
 
     /**
@@ -143,7 +146,9 @@ public class CacheService {
      */
     public Mono<Long> invalidateArticlesByTag(String tagSlug) {
         return withRedis(0L, () -> deleteByPattern(ARTICLES_CACHE_PREFIX + "tag_" + tagSlug + "*")
-                .doOnSuccess(count -> log.info("Invalidated {} cache entries for tag: {}", count, tagSlug)));
+                .doOnSuccess(count -> {
+                    if (count > 0) log.info("Invalidated {} cache entries for tag: {}", count, tagSlug);
+                }));
     }
 
     /**
@@ -151,7 +156,9 @@ public class CacheService {
      */
     public Mono<Long> invalidateSearchCache() {
         return withRedis(0L, () -> deleteByPattern(SEARCH_CACHE_PREFIX + "*")
-                .doOnSuccess(count -> log.info("Invalidated {} search cache entries", count)));
+                .doOnSuccess(count -> {
+                    if (count > 0) log.info("Invalidated {} search cache entries", count);
+                }));
     }
 
     /**
@@ -159,7 +166,9 @@ public class CacheService {
      */
     public Mono<Long> invalidateAllTags() {
         return withRedis(0L, () -> deleteByPattern(TAGS_CACHE_PREFIX + "*")
-                .doOnSuccess(count -> log.info("Invalidated {} tag cache entries", count)));
+                .doOnSuccess(count -> {
+                    if (count > 0) log.info("Invalidated {} tag cache entries", count);
+                }));
     }
 
     /**
@@ -167,7 +176,9 @@ public class CacheService {
      */
     public Mono<Long> invalidateComments(String articleId) {
         return withRedis(0L, () -> deleteByPattern(COMMENTS_CACHE_PREFIX + articleId + "*")
-                .doOnSuccess(count -> log.info("Invalidated {} comment cache entries for article: {}", count, articleId)));
+                .doOnSuccess(count -> {
+                    if (count > 0) log.info("Invalidated {} comment cache entries for article: {}", count, articleId);
+                }));
     }
 
     /**
@@ -175,7 +186,9 @@ public class CacheService {
      */
     public Mono<Long> invalidateAllComments() {
         return withRedis(0L, () -> deleteByPattern(COMMENTS_CACHE_PREFIX + "*")
-                .doOnSuccess(count -> log.info("Invalidated {} comment cache entries", count)));
+                .doOnSuccess(count -> {
+                    if (count > 0) log.info("Invalidated {} comment cache entries", count);
+                }));
     }
 
     /**
@@ -183,7 +196,9 @@ public class CacheService {
      */
     public Mono<Long> invalidateFeedCache() {
         return withRedis(0L, () -> deleteByPattern(FEED_CACHE_PREFIX + "*")
-                .doOnSuccess(count -> log.info("Invalidated {} feed cache entries", count)));
+                .doOnSuccess(count -> {
+                    if (count > 0) log.info("Invalidated {} feed cache entries", count);
+                }));
     }
 
     /**
@@ -225,8 +240,9 @@ public class CacheService {
      */
     private Mono<Long> deleteByPattern(String pattern) {
         return redisTemplate.scan(ScanOptions.scanOptions().match(pattern).count(100).build())
+                .limitRate(100)
                 .buffer(100)
-                .flatMap(keys -> redisTemplate.delete(keys.toArray(new String[0])))
+                .flatMap(keys -> redisTemplate.delete(keys.toArray(new String[0])), 4)
                 .reduce(0L, Long::sum)
                 .defaultIfEmpty(0L);
     }

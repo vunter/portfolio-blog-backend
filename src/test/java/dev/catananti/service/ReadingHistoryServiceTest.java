@@ -3,6 +3,7 @@ package dev.catananti.service;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.ReadingHistory;
 import dev.catananti.entity.User;
 import dev.catananti.repository.ArticleRepository;
@@ -67,7 +68,7 @@ class ReadingHistoryServiceTest {
                 .slug("test-article")
                 .title("Test Article")
                 .authorId(1L)
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();
@@ -266,7 +267,7 @@ class ReadingHistoryServiceTest {
                 .build();
         Article article2 = Article.builder()
                 .id(201L).slug("second-article").title("Second Article")
-                .authorId(1L).status("PUBLISHED")
+                .authorId(1L).status(ArticleStatus.PUBLISHED)
                 .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now())
                 .build();
 

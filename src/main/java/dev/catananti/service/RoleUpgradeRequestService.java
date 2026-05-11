@@ -3,7 +3,9 @@ package dev.catananti.service;
 import dev.catananti.dto.RoleUpgradeRequestDto;
 import dev.catananti.dto.RoleUpgradeRequestResponse;
 import dev.catananti.dto.RoleUpdateRequest;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.entity.RoleUpgradeRequest;
+import dev.catananti.entity.RoleUpgradeRequestStatus;
 import dev.catananti.entity.UserRole;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.RoleUpgradeRequestRepository;
@@ -31,6 +33,7 @@ public class RoleUpgradeRequestService {
     private final IdService idService;
     private final HtmlSanitizerService htmlSanitizerService;
     private final EmailService emailService;
+    private final PaginationConfig paginationConfig;
 
     /**
      * Submit a role upgrade request.
@@ -60,7 +63,7 @@ public class RoleUpgradeRequestService {
                                         .userId(user.getId())
                                         .requestedRole(dto.requestedRole())
                                         .reason(dto.reason() != null ? htmlSanitizerService.stripHtml(dto.reason()) : null)
-                                        .status("PENDING")
+                                        .status(RoleUpgradeRequestStatus.PENDING)
                                         .createdAt(LocalDateTime.now())
                                         .build();
 
@@ -118,13 +121,13 @@ public class RoleUpgradeRequestService {
                 .flatMap(admin -> roleUpgradeRequestRepository.findById(requestId)
                         .switchIfEmpty(Mono.error(new ResourceNotFoundException("Role upgrade request not found")))
                         .flatMap(request -> {
-                            if (!"PENDING".equals(request.getStatus())) {
+                            if (request.getStatus() != RoleUpgradeRequestStatus.PENDING) {
                                 return Mono.error(new ResponseStatusException(
-                                        HttpStatus.BAD_REQUEST, "Request is already " + request.getStatus().toLowerCase()));
+                                        HttpStatus.BAD_REQUEST, "Request is already " + request.getStatus().name().toLowerCase()));
                             }
 
                             // Update request status
-                            request.setStatus("APPROVED");
+                            request.setStatus(RoleUpgradeRequestStatus.APPROVED);
                             request.setReviewedBy(admin.getId());
                             request.setReviewedAt(LocalDateTime.now());
                             request.setNewRecord(false);
@@ -165,12 +168,12 @@ public class RoleUpgradeRequestService {
                 .flatMap(admin -> roleUpgradeRequestRepository.findById(requestId)
                         .switchIfEmpty(Mono.error(new ResourceNotFoundException("Role upgrade request not found")))
                         .flatMap(request -> {
-                            if (!"PENDING".equals(request.getStatus())) {
+                            if (request.getStatus() != RoleUpgradeRequestStatus.PENDING) {
                                 return Mono.error(new ResponseStatusException(
-                                        HttpStatus.BAD_REQUEST, "Request is already " + request.getStatus().toLowerCase()));
+                                        HttpStatus.BAD_REQUEST, "Request is already " + request.getStatus().name().toLowerCase()));
                             }
 
-                            request.setStatus("REJECTED");
+                            request.setStatus(RoleUpgradeRequestStatus.REJECTED);
                             request.setReviewedBy(admin.getId());
                             request.setReviewedAt(LocalDateTime.now());
                             request.setNewRecord(false);
@@ -201,7 +204,7 @@ public class RoleUpgradeRequestService {
     }
 
     private Mono<Void> notifyAdminsOfRequest(String userName, String userEmail, String requestedRole, String reason) {
-        return userRepository.findByRole(UserRole.ADMIN.name())
+        return userRepository.findByRole(UserRole.ADMIN.name(), paginationConfig.getBulkQueryMax())
                 .flatMap(admin -> emailService.sendRoleUpgradeNotification(
                         admin.getEmail(), userName, userEmail, requestedRole, reason))
                 .onErrorResume(err -> {

@@ -3,6 +3,7 @@ package dev.catananti.service;
 import dev.catananti.dto.ContactRequest;
 import dev.catananti.dto.ContactResponse;
 import dev.catananti.dto.PageResponse;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.entity.Contact;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ContactRepository;
@@ -25,6 +26,7 @@ public class ContactService {
     private final HtmlSanitizerService htmlSanitizerService;
     private final IdService idService;
     private final NotificationEventService notificationEventService;
+    private final PaginationConfig paginationConfig;
     private final String notificationEmail;
 
     public ContactService(ContactRepository contactRepository,
@@ -32,12 +34,14 @@ public class ContactService {
                           HtmlSanitizerService htmlSanitizerService,
                           IdService idService,
                           NotificationEventService notificationEventService,
+                          PaginationConfig paginationConfig,
                           @Value("${app.contact.notification-email}") String notificationEmail) {
         this.contactRepository = contactRepository;
         this.emailService = emailService;
         this.htmlSanitizerService = htmlSanitizerService;
         this.idService = idService;
         this.notificationEventService = notificationEventService;
+        this.paginationConfig = paginationConfig;
         this.notificationEmail = notificationEmail;
     }
 
@@ -104,7 +108,7 @@ public class ContactService {
     }
 
     public Flux<ContactResponse> getAllContacts() {
-        return contactRepository.findAllByOrderByCreatedAtDesc()
+        return contactRepository.findAllByOrderByCreatedAtDesc(paginationConfig.getContactListMax())
                 .map(this::mapToResponse);
     }
 

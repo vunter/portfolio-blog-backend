@@ -226,5 +226,44 @@ class BlogMetricsTest {
             assertThat(counter).isNotNull();
             assertThat(counter.count()).isEqualTo(1.0);
         }
+
+        // Q12.3: Security & operational metrics tests
+        @Test
+        @DisplayName("incrementLoginSuccess should increment login success counter")
+        void shouldIncrementLoginSuccess() {
+            blogMetrics.incrementLoginSuccess();
+            blogMetrics.incrementLoginSuccess();
+
+            Counter counter = meterRegistry.find("blog.auth.login").tag("result", "success").counter();
+            assertThat(counter).isNotNull();
+            assertThat(counter.count()).isEqualTo(2.0);
+        }
+
+        @Test
+        @DisplayName("incrementLoginFailure should increment login failure counter")
+        void shouldIncrementLoginFailure() {
+            blogMetrics.incrementLoginFailure();
+
+            Counter counter = meterRegistry.find("blog.auth.login").tag("result", "failure").counter();
+            assertThat(counter).isNotNull();
+            assertThat(counter.count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("incrementPdfGenerated should increment PDF counter")
+        void shouldIncrementPdfGenerated() {
+            blogMetrics.incrementPdfGenerated();
+
+            Counter counter = meterRegistry.find("blog.pdf.generated").counter();
+            assertThat(counter).isNotNull();
+            assertThat(counter.count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("getPdfGenerationTimer should return registered timer")
+        void shouldReturnPdfGenerationTimer() {
+            assertThat(blogMetrics.getPdfGenerationTimer()).isNotNull();
+            assertThat(meterRegistry.find("blog.pdf.generation.duration").timer()).isNotNull();
+        }
     }
 }

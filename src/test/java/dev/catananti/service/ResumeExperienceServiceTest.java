@@ -18,6 +18,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -157,6 +158,67 @@ class ResumeExperienceServiceTest {
             StepVerifier.create(experienceService.findByProfileId(profileId))
                     .assertNext(list -> assertThat(list).isEmpty())
                     .verifyComplete();
+        }
+    }
+
+    @Nested
+    @DisplayName("mergeExperiences")
+    class MergeExperiences {
+
+        @Test
+        @DisplayName("should return empty for null input")
+        void shouldReturnEmptyForNull() {
+            StepVerifier.create(experienceService.mergeExperiences(profileId, null))
+                    .verifyComplete();
+            verifyNoInteractions(experienceRepository);
+        }
+
+        @Test
+        @DisplayName("should delete all for empty list")
+        void shouldDeleteAllForEmpty() {
+            when(experienceRepository.deleteByProfileId(profileId)).thenReturn(Mono.empty());
+            StepVerifier.create(experienceService.mergeExperiences(profileId, List.of()))
+                    .verifyComplete();
+            verify(experienceRepository).deleteByProfileId(profileId);
+        }
+
+        @Test
+        @DisplayName("should insert new entries")
+        void shouldInsertNew() {
+            when(experienceRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.empty());
+            when(idService.nextId()).thenReturn(800L);
+            when(experienceRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.ExperienceEntry.builder().company("New Corp").position("Dev")
+                            .startDate("2024-01").bullets(List.of("Built things")).build()
+            );
+            StepVerifier.create(experienceService.mergeExperiences(profileId, incoming))
+                    .verifyComplete();
+            verify(experienceRepository).saveAll(anyIterable());
+        }
+
+        @Test
+        @DisplayName("should update existing and delete removed")
+        void shouldUpdateAndDelete() {
+            var existing = ResumeExperience.builder().id(10L).profileId(profileId).company("Old").position("Dev")
+                    .startDate("2020-01").bullets("[]").sortOrder(0)
+                    .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+            var toRemove = ResumeExperience.builder().id(20L).profileId(profileId).company("Remove").position("QA")
+                    .startDate("2019-01").bullets("[]").sortOrder(1)
+                    .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+
+            when(experienceRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.just(existing, toRemove));
+            when(experienceRepository.deleteAllById(anyIterable())).thenReturn(Mono.empty());
+            when(experienceRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.ExperienceEntry.builder().id("10").company("Updated").position("Lead")
+                            .startDate("2020-01").bullets(List.of("Updated bullet")).build()
+            );
+            StepVerifier.create(experienceService.mergeExperiences(profileId, incoming))
+                    .verifyComplete();
+            verify(experienceRepository).deleteAllById(anyIterable());
         }
     }
 

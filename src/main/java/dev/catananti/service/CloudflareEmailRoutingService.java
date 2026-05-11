@@ -2,6 +2,9 @@ package dev.catananti.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import dev.catananti.config.ResilienceConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
@@ -34,9 +37,11 @@ public class CloudflareEmailRoutingService {
     private final String zoneId;
     private final String domain;
     private final boolean enabled;
+    private final CircuitBreaker circuitBreaker;
 
     public CloudflareEmailRoutingService(
             WebClient.Builder webClientBuilder,
+            ResilienceConfig resilience,
             @Value("${cloudflare.api-token:}") String apiToken,
             @Value("${cloudflare.zone-id:}") String zoneId,
             @Value("${cloudflare.email-routing.domain:catananti.dev}") String domain,
@@ -44,6 +49,7 @@ public class CloudflareEmailRoutingService {
         this.zoneId = zoneId;
         this.domain = domain;
         this.enabled = enabled;
+        this.circuitBreaker = resilience.getCloudflareCircuitBreaker();
         this.webClient = webClientBuilder
                 .baseUrl(CF_API_BASE)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiToken)
@@ -90,6 +96,7 @@ public class CloudflareEmailRoutingService {
                 .retrieve()
                 .bodyToMono(CfRuleResponse.class)
                 .timeout(Duration.ofSeconds(15))
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .flatMap(resp -> {
                     if (resp.success() && resp.result() != null) {
                         String ruleId = resp.result().id();
@@ -124,6 +131,7 @@ public class CloudflareEmailRoutingService {
                 .retrieve()
                 .bodyToMono(CfRuleResponse.class)
                 .timeout(Duration.ofSeconds(15))
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .doOnSuccess(resp -> {
                     if (resp != null && resp.success()) {
                         log.info("CF email routing rule deleted: {}", ruleId);

@@ -6,6 +6,7 @@ import dev.catananti.dto.ResumeTemplateRequest;
 import dev.catananti.dto.ResumeTemplateResponse;
 import dev.catananti.entity.LocalizedText;
 import dev.catananti.entity.ResumeTemplate;
+import dev.catananti.entity.ResumeTemplateStatus;
 import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ResumeTemplateRepository;
@@ -77,7 +78,7 @@ public class ResumeTemplateService {
                                                 ? LocalizedText.ofEnglish(request.getDescription()) : null)
                                         .htmlContent(request.getHtmlContent())
                                         .cssContent(request.getCssContent())
-                                        .status(request.getStatus() != null ? request.getStatus() : "DRAFT")
+                                        .status(ResumeTemplateStatus.fromString(request.getStatus(), ResumeTemplateStatus.DRAFT))
                                         .ownerId(ownerId)
                                         .version(1)
                                         .isDefault(request.getIsDefault() != null && request.getIsDefault())
@@ -158,7 +159,7 @@ public class ResumeTemplateService {
                         template.setCssContent(request.getCssContent());
                     }
                     if (request.getStatus() != null) {
-                        template.setStatus(request.getStatus());
+                        template.setStatus(ResumeTemplateStatus.fromString(request.getStatus(), template.getStatus()));
                     }
                     if (request.getPaperSize() != null) {
                         template.setPaperSize(request.getPaperSize());
@@ -202,7 +203,7 @@ public class ResumeTemplateService {
                                         : jsonValue("{}"))
                                 .bind("html", template.getHtmlContent())
                                 .bind("css", template.getCssContent() != null ? template.getCssContent() : "")
-                                .bind("status", template.getStatus())
+                                .bind("status", template.getStatus().name())
                                 .bind("paperSize", template.getPaperSize())
                                 .bind("orientation", template.getOrientation());
 
@@ -423,7 +424,7 @@ public class ResumeTemplateService {
                 .descriptions(template.getDescription() != null ? template.getDescription().getTranslations() : null)
                 .htmlContent(template.getHtmlContent())
                 .cssContent(template.getCssContent())
-                .status(template.getStatus())
+                .status(template.getStatus().name())
                 .ownerId(String.valueOf(template.getOwnerId()))
                 .ownerName(ownerName)
                 .version(template.getVersion())

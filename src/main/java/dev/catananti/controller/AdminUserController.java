@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.MessageResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.ProfileUpdateRequest;
@@ -38,6 +39,7 @@ public class AdminUserController {
 
     private final UserService userService;
     private final RoleUpgradeRequestService roleUpgradeRequestService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping
     @Operation(summary = "List all users", description = "Get paginated list of all users, optionally filtered by search query")
@@ -48,6 +50,7 @@ public class AdminUserController {
             @RequestParam(defaultValue = "20") int size,
             @Parameter(description = "Search by name, email or role")
             @RequestParam(required = false, defaultValue = "") String search) {
+        size = paginationConfig.clampPageSize(size);
         log.debug("Admin fetching users: page={}, size={}, search={}", page, size, search);
 
         int safePage = Math.max(0, page);
@@ -214,25 +217,17 @@ public class AdminUserController {
     }
 
     /**
-     * F-140: Get user activity summary.
-     * Note: Full activity tracking (last_login_at, action_count columns) requires a schema migration.
-     * Currently returns data available from audit logs.
+     * F-140: Activity summary endpoint. Currently unimplemented — needs a schema migration to add
+     * last_login_at / action_count columns plus an audit-log aggregation. Returns 501 to make this
+     * explicit instead of shipping a misleading placeholder body.
      */
     @GetMapping("/{id}/activity")
-    @Operation(summary = "Get user activity", description = "Get user activity summary from audit logs")
+    @Operation(summary = "Get user activity (not yet implemented)", description = "Returns 501 until activity tracking is added")
     public Mono<ResponseEntity<java.util.Map<String, Object>>> getUserActivity(@PathVariable Long id) {
-        log.debug("Fetching activity for user: id={}", id);
-        return userService.getUserById(id)
-                .flatMap(user -> {
-                    // Derive activity from audit logs
-                    var result = new java.util.HashMap<String, Object>();
-                    result.put("userId", user.getId());
-                    result.put("email", user.getEmail());
-                    result.put("active", user.getActive());
-                    result.put("createdAt", user.getCreatedAt());
-                    result.put("note", "Full activity tracking (last_login_at, action_count) requires schema migration to add columns to users table");
-                    return Mono.just(ResponseEntity.ok((java.util.Map<String, Object>) result));
-                });
+        return Mono.just(ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
+                .body(java.util.Map.of(
+                        "error", "Not Implemented",
+                        "message", "User activity tracking is not yet available")));
     }
 
     // ============================================

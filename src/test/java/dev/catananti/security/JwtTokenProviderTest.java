@@ -9,6 +9,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Date;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -19,6 +20,7 @@ class JwtTokenProviderTest {
     private JwtTokenProvider tokenProvider;
     private static final String SECRET = "this-is-a-very-long-secret-key-that-is-at-least-256-bits-long-for-hs512";
     private static final long EXPIRATION = 86400000L; // 24 hours
+    private static final Long USER_ID = 42L;
 
     @BeforeEach
     void setUp() {
@@ -31,100 +33,102 @@ class JwtTokenProviderTest {
     @Test
     @DisplayName("Should generate valid JWT token")
     void generateToken_ShouldCreateValidToken() {
-        // When
-        String token = tokenProvider.generateToken("test@example.com", "ADMIN");
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
 
-        // Then
         assertThat(token).isNotNull();
         assertThat(token).isNotEmpty();
         assertThat(token.split("\\.")).hasSize(3); // JWT has 3 parts
     }
 
     @Test
-    @DisplayName("Should extract email from token")
-    void getEmailFromToken_ShouldReturnEmail() {
-        // Given
-        String token = tokenProvider.generateToken("test@example.com", "ADMIN");
+    @DisplayName("Should put user id in subject and not leak email")
+    void generateToken_ShouldUseUserIdInSubject() {
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
 
-        // When
-        String email = tokenProvider.getEmailFromToken(token);
+        Long extracted = tokenProvider.getUserIdFromToken(token);
 
-        // Then
-        assertThat(email).isEqualTo("test@example.com");
+        assertThat(extracted).isEqualTo(USER_ID);
+        // Subject must be the numeric id, never an email
+        assertThat(tokenProvider.parseClaims(token).orElseThrow().getSubject())
+                .isEqualTo(String.valueOf(USER_ID))
+                .doesNotContain("@");
     }
 
     @Test
     @DisplayName("Should extract role from token")
     void getRoleFromToken_ShouldReturnRole() {
-        // Given
-        String token = tokenProvider.generateToken("test@example.com", "ADMIN");
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
 
-        // When
         String role = tokenProvider.getRoleFromToken(token);
 
-        // Then
         assertThat(role).isEqualTo("ADMIN");
+    }
+
+    @Test
+    @DisplayName("Should include auth_time claim equal to iat on first issue")
+    void generateToken_ShouldIncludeAuthTime() {
+        Instant before = Instant.now().minusSeconds(1);
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
+        Instant after = Instant.now().plusSeconds(1);
+
+        Instant authTime = tokenProvider.getAuthTimeFromToken(token);
+
+        assertThat(authTime).isNotNull();
+        assertThat(authTime).isAfterOrEqualTo(before).isBeforeOrEqualTo(after);
+    }
+
+    @Test
+    @DisplayName("Should preserve auth_time across refresh-rotated tokens")
+    void generateToken_ShouldPreserveAuthTimeOnRefresh() {
+        Instant originalAuthTime = Instant.now().minusSeconds(120);
+
+        String rotated = tokenProvider.generateToken(USER_ID, "ADMIN", originalAuthTime);
+
+        assertThat(tokenProvider.getAuthTimeFromToken(rotated).getEpochSecond())
+                .isEqualTo(originalAuthTime.getEpochSecond());
     }
 
     @Test
     @DisplayName("Should validate valid token")
     void validateToken_ShouldReturnTrue_WhenTokenValid() {
-        // Given
-        String token = tokenProvider.generateToken("test@example.com", "ADMIN");
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
 
-        // When
-        boolean isValid = tokenProvider.validateToken(token);
-
-        // Then
-        assertThat(isValid).isTrue();
+        assertThat(tokenProvider.validateToken(token)).isTrue();
     }
 
     @Test
     @DisplayName("Should invalidate expired token")
     void validateToken_ShouldReturnFalse_WhenTokenExpired() {
-        // Given - Create an expired token manually
         SecretKey key = Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
         String expiredToken = Jwts.builder()
-                .subject("test@example.com")
+                .subject(String.valueOf(USER_ID))
                 .claim("role", "ADMIN")
+                .issuer("portfolio-blog")
+                .audience().add("portfolio-blog-api").and()
                 .issuedAt(new Date(System.currentTimeMillis() - 100000))
                 .expiration(new Date(System.currentTimeMillis() - 50000)) // Already expired
                 .signWith(key, Jwts.SIG.HS512)
                 .compact();
 
-        // When
-        boolean isValid = tokenProvider.validateToken(expiredToken);
-
-        // Then
-        assertThat(isValid).isFalse();
+        assertThat(tokenProvider.validateToken(expiredToken)).isFalse();
     }
 
     @Test
     @DisplayName("Should invalidate malformed token")
     void validateToken_ShouldReturnFalse_WhenTokenMalformed() {
-        // When
-        boolean isValid = tokenProvider.validateToken("invalid.token.here");
-
-        // Then
-        assertThat(isValid).isFalse();
+        assertThat(tokenProvider.validateToken("invalid.token.here")).isFalse();
     }
 
     @Test
     @DisplayName("Should invalidate null token")
     void validateToken_ShouldReturnFalse_WhenTokenNull() {
-        // When
-        boolean isValid = tokenProvider.validateToken(null);
-
-        // Then
-        assertThat(isValid).isFalse();
+        assertThat(tokenProvider.validateToken(null)).isFalse();
     }
-
-    // ==================== Additional Coverage Tests ====================
 
     @Test
     @DisplayName("Should extract JTI from valid token")
     void getJtiFromToken_ShouldReturnJti() {
-        String token = tokenProvider.generateToken("test@example.com", "ADMIN");
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
         String jti = tokenProvider.getJtiFromToken(token);
         assertThat(jti).isNotNull().isNotEmpty();
     }
@@ -132,14 +136,13 @@ class JwtTokenProviderTest {
     @Test
     @DisplayName("Should return null JTI from invalid token")
     void getJtiFromToken_ShouldReturnNull_WhenTokenInvalid() {
-        String jti = tokenProvider.getJtiFromToken("invalid.token.here");
-        assertThat(jti).isNull();
+        assertThat(tokenProvider.getJtiFromToken("invalid.token.here")).isNull();
     }
 
     @Test
     @DisplayName("Should return positive remaining lifetime for valid token")
     void getRemainingLifetimeMs_ShouldReturnPositive_WhenTokenValid() {
-        String token = tokenProvider.generateToken("test@example.com", "ADMIN");
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
         long remaining = tokenProvider.getRemainingLifetimeMs(token);
         assertThat(remaining).isGreaterThan(0);
         assertThat(remaining).isLessThanOrEqualTo(EXPIRATION);
@@ -150,29 +153,29 @@ class JwtTokenProviderTest {
     void getRemainingLifetimeMs_ShouldReturnZero_WhenTokenExpired() {
         SecretKey key = Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
         String expiredToken = Jwts.builder()
-                .subject("test@example.com")
+                .subject(String.valueOf(USER_ID))
+                .issuer("portfolio-blog")
+                .audience().add("portfolio-blog-api").and()
                 .issuedAt(new Date(System.currentTimeMillis() - 100000))
                 .expiration(new Date(System.currentTimeMillis() - 50000))
                 .signWith(key, Jwts.SIG.HS512)
                 .compact();
-        long remaining = tokenProvider.getRemainingLifetimeMs(expiredToken);
-        assertThat(remaining).isZero();
+        assertThat(tokenProvider.getRemainingLifetimeMs(expiredToken)).isZero();
     }
 
     @Test
     @DisplayName("Should return zero remaining lifetime for invalid token")
     void getRemainingLifetimeMs_ShouldReturnZero_WhenTokenInvalid() {
-        long remaining = tokenProvider.getRemainingLifetimeMs("completely.invalid.token");
-        assertThat(remaining).isZero();
+        assertThat(tokenProvider.getRemainingLifetimeMs("completely.invalid.token")).isZero();
     }
 
     @Test
     @DisplayName("Should parse claims from valid token")
     void parseClaims_ShouldReturnClaims_WhenTokenValid() {
-        String token = tokenProvider.generateToken("test@example.com", "ADMIN");
+        String token = tokenProvider.generateToken(USER_ID, "ADMIN");
         var claims = tokenProvider.parseClaims(token);
         assertThat(claims).isPresent();
-        assertThat(claims.get().getSubject()).isEqualTo("test@example.com");
+        assertThat(claims.get().getSubject()).isEqualTo(String.valueOf(USER_ID));
     }
 
     @Test
@@ -180,7 +183,9 @@ class JwtTokenProviderTest {
     void parseClaims_ShouldReturnEmpty_WhenTokenExpired() {
         SecretKey key = Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
         String expiredToken = Jwts.builder()
-                .subject("test@example.com")
+                .subject(String.valueOf(USER_ID))
+                .issuer("portfolio-blog")
+                .audience().add("portfolio-blog-api").and()
                 .issuedAt(new Date(System.currentTimeMillis() - 100000))
                 .expiration(new Date(System.currentTimeMillis() - 50000))
                 .signWith(key, Jwts.SIG.HS512)
@@ -193,7 +198,9 @@ class JwtTokenProviderTest {
     void validateAndParseClaims_ShouldReturnExpired() {
         SecretKey key = Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
         String expiredToken = Jwts.builder()
-                .subject("test@example.com")
+                .subject(String.valueOf(USER_ID))
+                .issuer("portfolio-blog")
+                .audience().add("portfolio-blog-api").and()
                 .issuedAt(new Date(System.currentTimeMillis() - 100000))
                 .expiration(new Date(System.currentTimeMillis() - 50000))
                 .signWith(key, Jwts.SIG.HS512)
@@ -212,7 +219,10 @@ class JwtTokenProviderTest {
                 "another-very-long-secret-key-that-is-at-least-64-characters-for-hs512!!"
                         .getBytes(StandardCharsets.UTF_8));
         String token = Jwts.builder()
-                .subject("test@example.com")
+                .subject(String.valueOf(USER_ID))
+                .issuer("portfolio-blog")
+                .audience().add("portfolio-blog-api").and()
+                .expiration(new Date(System.currentTimeMillis() + 60000))
                 .signWith(otherKey, Jwts.SIG.HS512)
                 .compact();
         var result = tokenProvider.validateAndParseClaims(token);
@@ -230,12 +240,12 @@ class JwtTokenProviderTest {
     @Test
     @DisplayName("Should return success result with claims for valid token")
     void validateAndParseClaims_ShouldReturnSuccess_WhenValid() {
-        String token = tokenProvider.generateToken("test@example.com", "EDITOR");
+        String token = tokenProvider.generateToken(USER_ID, "EDITOR");
         var result = tokenProvider.validateAndParseClaims(token);
         assertThat(result.valid()).isTrue();
         assertThat(result.expired()).isFalse();
         assertThat(result.claims()).isNotNull();
-        assertThat(result.claims().getSubject()).isEqualTo("test@example.com");
+        assertThat(result.claims().getSubject()).isEqualTo(String.valueOf(USER_ID));
         assertThat(result.claims().get("role", String.class)).isEqualTo("EDITOR");
         assertThat(result.error()).isNull();
     }
@@ -265,9 +275,24 @@ class JwtTokenProviderTest {
     }
 
     @Test
-    @DisplayName("Should return null email from invalid token")
-    void getEmailFromToken_ShouldReturnNull_WhenInvalid() {
-        assertThat(tokenProvider.getEmailFromToken("bad.token.here")).isNull();
+    @DisplayName("Should return null user id from invalid token")
+    void getUserIdFromToken_ShouldReturnNull_WhenInvalid() {
+        assertThat(tokenProvider.getUserIdFromToken("bad.token.here")).isNull();
+    }
+
+    @Test
+    @DisplayName("Should return null user id when subject is non-numeric")
+    void getUserIdFromToken_ShouldReturnNull_WhenSubjectNotNumeric() {
+        SecretKey key = Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
+        String tokenWithEmailSubject = Jwts.builder()
+                .subject("not-a-number@example.com")
+                .claim("role", "ADMIN")
+                .issuer("portfolio-blog")
+                .audience().add("portfolio-blog-api").and()
+                .expiration(new Date(System.currentTimeMillis() + 60000))
+                .signWith(key, Jwts.SIG.HS512)
+                .compact();
+        assertThat(tokenProvider.getUserIdFromToken(tokenWithEmailSubject)).isNull();
     }
 
     @Test
@@ -279,8 +304,8 @@ class JwtTokenProviderTest {
     @Test
     @DisplayName("Generated tokens should have unique JTIs")
     void generateToken_ShouldHaveUniqueJtis() {
-        String token1 = tokenProvider.generateToken("test@example.com", "ADMIN");
-        String token2 = tokenProvider.generateToken("test@example.com", "ADMIN");
+        String token1 = tokenProvider.generateToken(USER_ID, "ADMIN");
+        String token2 = tokenProvider.generateToken(USER_ID, "ADMIN");
         String jti1 = tokenProvider.getJtiFromToken(token1);
         String jti2 = tokenProvider.getJtiFromToken(token2);
         assertThat(jti1).isNotEqualTo(jti2);

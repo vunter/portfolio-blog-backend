@@ -67,7 +67,7 @@ public class Article implements Persistable<Long>, NewRecordAware {
     private String authorAvatarUrl;
     
     @Builder.Default
-    private String status = "DRAFT";
+    private ArticleStatus status = ArticleStatus.DRAFT;
     
     @Column("published_at")
     private LocalDateTime publishedAt;
@@ -122,7 +122,7 @@ public class Article implements Persistable<Long>, NewRecordAware {
     }
     
     public boolean isScheduled() {
-        return "SCHEDULED".equals(this.status) && this.scheduledAt != null;
+        return this.status == ArticleStatus.SCHEDULED && this.scheduledAt != null;
     }
     
     public boolean shouldPublishNow() {

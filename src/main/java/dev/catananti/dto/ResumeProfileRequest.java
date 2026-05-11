@@ -85,8 +85,12 @@ public class ResumeProfileRequest {
         private String endDate;
         @Size(max = 2000)
         private String description;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -106,8 +110,12 @@ public class ResumeProfileRequest {
         @Size(max = 20)
         private String endDate;
         private List<String> bullets;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -122,8 +130,12 @@ public class ResumeProfileRequest {
         @NotBlank(message = "Content is required")
         @Size(max = 2000)
         private String content;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -137,8 +149,12 @@ public class ResumeProfileRequest {
         private String name;
         @Size(max = 50)
         private String proficiency;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -158,8 +174,12 @@ public class ResumeProfileRequest {
         private String credentialUrl;
         @Size(max = 2000)
         private String description;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -173,8 +193,12 @@ public class ResumeProfileRequest {
         private String label;
         @Size(max = 2000)
         private String content;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -188,8 +212,12 @@ public class ResumeProfileRequest {
         private String label;
         @Size(max = 2000)
         private String content;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -212,8 +240,12 @@ public class ResumeProfileRequest {
         private String text;
         @Size(max = 20)
         private String accentColor;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -231,8 +263,12 @@ public class ResumeProfileRequest {
         private Integer percentage;
         @Size(max = 100)
         private String icon;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -254,8 +290,12 @@ public class ResumeProfileRequest {
         private String repoUrl;
         private List<String> techTags;
         private Boolean featured;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 
     @Data
@@ -273,7 +313,11 @@ public class ResumeProfileRequest {
         private String description;
         @Size(max = 50)
         private String colorTheme;
-        @Builder.Default
-        private Integer sortOrder = 0;
+        // Nullable on purpose — services treat null as "use insertion index"
+        // so the client can omit sortOrder and still get a deterministic order.
+        // A default of 0 here would collide on every entry and break the
+        // index-based fallback in Resume*Service.saveX/mergeX (e.g.
+        // ResumeSkillService.java:47).
+        private Integer sortOrder;
     }
 }

@@ -3,7 +3,6 @@ package dev.catananti.service;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import dev.catananti.entity.User;
-import dev.catananti.util.PiiMasker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -12,36 +11,35 @@ import java.time.Duration;
 /**
  * Centralized user cache extracted from JwtAuthenticationFilter.
  * Allows services (e.g. UserService) to evict users without depending on the filter.
- * F-046: 60s TTL is a security/performance tradeoff -- deactivated users locked out within 1 minute.
+ *
+ * <p>Keyed by user ID (the {@code sub} claim of the JWT). 60s TTL is a security/performance
+ * tradeoff — deactivated users are locked out within 1 minute even without explicit eviction.
  */
 @Service
 @Slf4j
 public class UserCacheService {
 
-    private final Cache<String, User> userCache = Caffeine.newBuilder()
+    private final Cache<Long, User> userCache = Caffeine.newBuilder()
             .maximumSize(1_000)
             .expireAfterWrite(Duration.ofSeconds(60))
             .build();
 
-    /**
-     * Get a cached user by email, or null if not present.
-     */
-    public User getIfPresent(String email) {
-        return userCache.getIfPresent(email);
+    public User getIfPresent(Long userId) {
+        return userId != null ? userCache.getIfPresent(userId) : null;
+    }
+
+    public void put(Long userId, User user) {
+        if (userId != null && user != null) {
+            userCache.put(userId, user);
+        }
     }
 
     /**
-     * Put a user into the cache.
+     * Evict a user from the cache (e.g. on deactivation, role change, or password reset).
      */
-    public void put(String email, User user) {
-        userCache.put(email, user);
-    }
-
-    /**
-     * Evict a user from the cache (e.g. on deactivation or role change).
-     */
-    public void evict(String email) {
-        userCache.invalidate(email);
-        log.debug("Evicted user from auth cache: {}", PiiMasker.maskEmail(email));
+    public void evict(Long userId) {
+        if (userId == null) return;
+        userCache.invalidate(userId);
+        log.debug("Evicted userId={} from auth cache", userId);
     }
 }

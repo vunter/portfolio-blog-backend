@@ -1,5 +1,7 @@
 package dev.catananti.service;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import jakarta.mail.internet.MimeMessage;
 import lombok.extern.slf4j.Slf4j;
 import dev.catananti.config.ResilienceConfig;
@@ -22,10 +24,13 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import jakarta.annotation.PreDestroy;
+
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
@@ -41,6 +46,7 @@ public class EmailService {
 
     private final JavaMailSender mailSender;
     private final ResilienceConfig resilience;
+    private final CircuitBreaker circuitBreaker;
     private final MessageSource messageSource;
     private final EmailTemplateService templateService;
     private final DatabaseClient db;
@@ -62,6 +68,7 @@ public class EmailService {
             @Value("${app.email.resend.api-key:}") String resendApiKey) {
         this.mailSender = mailSender;
         this.resilience = resilience;
+        this.circuitBreaker = resilience.getEmailCircuitBreaker();
         this.messageSource = messageSource;
         this.templateService = templateService;
         this.db = databaseClient;
@@ -80,11 +87,18 @@ public class EmailService {
     }
     
     /**
-     * Virtual thread executor for efficient blocking I/O (Java 21+ Project Loom).
-     * Virtual threads are lightweight and ideal for blocking operations like email sending.
+     * Virtual thread executor for blocking I/O (Java 21+ Project Loom).
+     * Uses Schedulers.boundedElastic() semantics: the underlying executor creates virtual threads
+     * on demand, but the Reactor Scheduler wrapper is managed and shut down with the bean lifecycle.
      */
-    private static final reactor.core.scheduler.Scheduler VIRTUAL_THREAD_SCHEDULER = 
-            Schedulers.fromExecutor(Executors.newVirtualThreadPerTaskExecutor());
+    private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final reactor.core.scheduler.Scheduler virtualThreadScheduler =
+            Schedulers.fromExecutor(virtualThreadExecutor);
+
+    @PreDestroy
+    void shutdownScheduler() {
+        virtualThreadExecutor.close();
+    }
 
     @Value("${app.email.from:noreply@localhost}")
     private String fromEmail;
@@ -174,8 +188,9 @@ public class EmailService {
                 sendViaSmtp(to, subject, text, false);
             }
             return (Void) null;
-        }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
+        }).subscribeOn(virtualThreadScheduler)
                 .timeout(resilience.getExternalTimeout())
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .then());
     }
 
@@ -191,8 +206,9 @@ public class EmailService {
                 sendViaSmtp(to, subject, htmlContent, true);
             }
             return (Void) null;
-        }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
+        }).subscribeOn(virtualThreadScheduler)
                 .timeout(resilience.getExternalTimeout())
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .then());
     }
 
@@ -331,8 +347,9 @@ public class EmailService {
                 sendViaSmtpWithHeaders(to, subject, htmlContent, unsubscribeUrl);
             }
             return (Void) null;
-        }).subscribeOn(VIRTUAL_THREAD_SCHEDULER)
+        }).subscribeOn(virtualThreadScheduler)
                 .timeout(resilience.getExternalTimeout())
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .then());
     }
 

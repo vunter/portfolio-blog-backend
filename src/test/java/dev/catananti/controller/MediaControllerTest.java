@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.entity.MediaAsset;
 import dev.catananti.entity.User;
 import dev.catananti.repository.UserRepository;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -33,6 +35,9 @@ class MediaControllerTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Spy
+    private PaginationConfig paginationConfig = new PaginationConfig();
 
     @InjectMocks
     private MediaController controller;

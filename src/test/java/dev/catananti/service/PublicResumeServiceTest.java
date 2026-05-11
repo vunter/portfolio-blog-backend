@@ -3,6 +3,7 @@ package dev.catananti.service;
 import dev.catananti.dto.ResumeProfileResponse;
 import dev.catananti.entity.LocalizedText;
 import dev.catananti.entity.ResumeTemplate;
+import dev.catananti.entity.ResumeTemplateStatus;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ResumeTemplateRepository;
 import dev.catananti.repository.UserRepository;
@@ -58,7 +59,7 @@ class PublicResumeServiceTest {
                 .name(name)
                 .htmlContent("<!doctype html><html><head></head><body><h1>Resume</h1>" + "x".repeat(200) + "</body></html>")
                 .cssContent("body { font-size: 14px; }")
-                .status("ACTIVE")
+                .status(ResumeTemplateStatus.ACTIVE)
                 .ownerId(ownerId)
                 .build();
 
@@ -173,7 +174,7 @@ class PublicResumeServiceTest {
                     .slug("short")
                     .alias("short")
                     .htmlContent("<p>Tiny</p>") // less than 200 chars
-                    .status("ACTIVE")
+                    .status(ResumeTemplateStatus.ACTIVE)
                     .ownerId(ownerId)
                     .build();
             when(resumeTemplateRepository.findByAlias("short")).thenReturn(Mono.just(shortHtmlTemplate));
@@ -222,7 +223,7 @@ class PublicResumeServiceTest {
                     .id(3L)
                     .slug("orphan")
                     .alias("orphan")
-                    .status("ACTIVE")
+                    .status(ResumeTemplateStatus.ACTIVE)
                     .ownerId(null)
                     .build();
             when(resumeTemplateRepository.findByAlias("orphan")).thenReturn(Mono.just(noOwnerTemplate));

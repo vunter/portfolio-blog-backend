@@ -29,7 +29,7 @@ public class SubscriberResponse {
                 .id(String.valueOf(subscriber.getId()))
                 .email(subscriber.getEmail())
                 .name(subscriber.getName())
-                .status(subscriber.getStatus())
+                .status(subscriber.getStatus().name())
                 .subscribedAt(subscriber.getCreatedAt())
                 .confirmedAt(subscriber.getConfirmedAt())
                 .unsubscribedAt(subscriber.getUnsubscribedAt())
