@@ -37,17 +37,25 @@ RUN --mount=type=cache,target=/root/.m2/repository \
 RUN cp target/*.jar application.jar && \
     java -Djarmode=tools -jar application.jar extract --layers --destination /app/extracted
 
-# Download Datadog agent in build stage (keeps wget out of runtime)
-RUN wget -q -O /tmp/dd-java-agent.jar https://dtdg.co/latest-java-tracer
+# Download Datadog agent with version pinning and checksum verification (Q5.1)
+ARG DD_JAVA_AGENT_VERSION=1.45.1
+ARG DD_JAVA_AGENT_SHA256=a71eb47a3ea30d0c0fb19b4da3483cf7bb5ce18b89a8b1e7e08b6c0f33476c5e
+RUN wget -q -O /tmp/dd-java-agent.jar \
+      "https://github.com/DataDog/dd-trace-java/releases/download/v${DD_JAVA_AGENT_VERSION}/dd-java-agent-${DD_JAVA_AGENT_VERSION}.jar" && \
+    echo "${DD_JAVA_AGENT_SHA256}  /tmp/dd-java-agent.jar" | sha256sum -c -
 
 # Stage 2: Runtime (Debian — Playwright's Chromium requires glibc)
 FROM eclipse-temurin:25-jre-noble AS runtime
 
-LABEL maintainer="Leonardo Catananti <leonardo.catananti@gmail.com>" \
-      version="2.0.0" \
-      description="Portfolio Blog API"
+LABEL org.opencontainers.image.title="Portfolio Blog API" \
+      org.opencontainers.image.version="2.0.0" \
+      org.opencontainers.image.source="https://github.com/catananti/portfolio-blog"
 
-# Node.js for Playwright PDF generation
+# Q5.15: PLAYWRIGHT_REMOTE=true skips Chromium install (~500MB savings).
+# Chromium then runs in a sidecar container (deploy/cloud/playwright/).
+ARG PLAYWRIGHT_REMOTE=false
+
+# Node.js for Playwright PDF generation (driver always needed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       nodejs \
       npm \
@@ -55,8 +63,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Playwright's compatible Chromium + all system dependencies
+# Skipped when using remote browser sidecar (PLAYWRIGHT_REMOTE=true)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npx -y playwright@1.51.0 install --with-deps chromium
+RUN if [ "$PLAYWRIGHT_REMOTE" = "false" ]; then \
+      npx -y playwright@1.51.0 install --with-deps chromium; \
+    else \
+      echo "Skipping Chromium install (PLAYWRIGHT_REMOTE=true — using sidecar)"; \
+      mkdir -p /ms-playwright; \
+    fi
 
 # Datadog APM agent (copied from builder — no curl needed at runtime)
 COPY --from=builder /tmp/dd-java-agent.jar /opt/datadog/dd-java-agent.jar
@@ -96,7 +110,7 @@ ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+UseZGC" \
     DD_ENV=production \
     DD_VERSION=2.0.0 \
     DD_LOGS_INJECTION=true \
-    DD_TRACE_SAMPLE_RATE=1.0 \
+    DD_TRACE_SAMPLE_RATE=0.1 \
     DD_PROFILING_ENABLED=false
 
 ENTRYPOINT ["sh", "-c", "if [ \"$DD_AGENT_ENABLED\" = \"true\" ]; then exec java $JAVA_OPTS -javaagent:/opt/datadog/dd-java-agent.jar -jar application.jar; else exec java $JAVA_OPTS -jar application.jar; fi"]
