@@ -12,6 +12,26 @@
 | **User**         | `vunter`                                     |
 | **Docker**       | 28.2.2                                       |
 | **Doppler CLI**  | v3.75.3                                      |
+| **cosign**       | required (image signature verification)      |
+| **oras**         | required (config bundle pull from GHCR)      |
+
+### Required CLI tools on the droplet
+
+The deploy script refuses to run unverified images. Install once:
+
+```bash
+# cosign — verifies GHCR images signed via OIDC keyless
+sudo curl -L -o /usr/local/bin/cosign \
+  https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+sudo chmod +x /usr/local/bin/cosign
+
+# oras — pulls config bundles from GHCR (OCI artifacts)
+sudo curl -L -o /tmp/oras.tar.gz \
+  https://github.com/oras-project/oras/releases/latest/download/oras_1.2.3_linux_amd64.tar.gz
+sudo tar -xzf /tmp/oras.tar.gz -C /usr/local/bin oras
+sudo chmod +x /usr/local/bin/oras
+rm /tmp/oras.tar.gz
+```
 
 ---
 

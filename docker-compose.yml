@@ -67,11 +67,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # Q10.2: Memory limit to prevent unbounded heap growth
+    # Q10.2: Memory limit to prevent unbounded heap growth.
+    # CPU limit prevents a runaway PDF generation or reactive backpressure
+    # stall from starving Postgres/Redis on a 2-vCPU host.
     deploy:
       resources:
         limits:
           memory: 2G
+          cpus: '1.5'
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
       interval: 30s
@@ -131,7 +134,7 @@ services:
     container_name: blog-redis
     # ports:
     #   - "6379:6379"  # Uncomment for local development access
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD:-redis}
+    command: redis-server --appendonly no --save "" --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD:-redis}
     read_only: true
     tmpfs:
       - /tmp:size=64M
@@ -161,7 +164,7 @@ services:
 
   # MinIO — S3-compatible object storage (local dev CDN alternative)
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
     container_name: blog-minio
     ports:
       - "9000:9000"   # S3 API
@@ -194,7 +197,7 @@ services:
 
   # Prometheus (Metrics) — INFRA-04: Access via nginx reverse proxy only
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.2.1
     container_name: blog-prometheus
     # Q10.5: Read-only filesystem with tmpfs for runtime data
     read_only: true
@@ -230,7 +233,7 @@ services:
   # Grafana (Dashboards)
   # SEC-06: Removed direct port exposure; access via nginx reverse proxy
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.4.0
     container_name: blog-grafana
     # Q10.5: Read-only filesystem with tmpfs for runtime data
     read_only: true
@@ -268,7 +271,7 @@ services:
   # Frontend (Angular)
   frontend:
     build:
-      context: ./frontend
+      context: ../portfolio-blog-frontend
       dockerfile: Dockerfile
     container_name: portfolio-blog-frontend
     read_only: true
@@ -305,7 +308,7 @@ services:
   # INFRA-03: Nginx Reverse Proxy — SSL/TLS termination, serves frontend,
   # proxies API and Prometheus with basic auth
   nginx:
-    image: nginx:alpine
+    image: nginx:1.27-alpine
     container_name: blog-nginx
     read_only: true
     tmpfs:
@@ -357,8 +360,10 @@ services:
       - DD_CONTAINER_EXCLUDE="name:datadog-agent"
       - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
       - DD_PROCESS_AGENT_ENABLED=true
-      - DD_TAGS=env:development,service:portfolio-blog,team:catananti
-      - DD_HOSTNAME=dev-localhost
+      # Set DD_ENV via .env (or compose override) so prod traces aren't tagged "development".
+      - DD_ENV=${DD_ENV:-development}
+      - DD_TAGS=env:${DD_ENV:-development},service:portfolio-blog,team:catananti
+      - DD_HOSTNAME=${DD_HOSTNAME:-dev-localhost}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro

@@ -32,7 +32,9 @@ services:
       - SPRING_DATA_REDIS_PORT=6379
       - SPRING_CACHE_TYPE=redis
       # ── JWT cookie config (non-secret) ──
-      - JWT_COOKIE_SECURE=${JWT_COOKIE_SECURE:-false}
+      # Secure-by-default. Only override to false locally if you intentionally
+      # serve over plain HTTP — this exposes JWT cookies to network sniffing.
+      - JWT_COOKIE_SECURE=${JWT_COOKIE_SECURE:-true}
       - JWT_COOKIE_DOMAIN=${JWT_COOKIE_DOMAIN:-}
       # ── CORS ──
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://192.168.1.214,http://localhost}
@@ -99,9 +101,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: blog-redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redis_data:/data
+    command: redis-server --appendonly no --save "" --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD}
     healthcheck:
       # F-413: Use REDISCLI_AUTH env var to hide password from ps
       test: ["CMD-SHELL", "REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping"]
@@ -163,7 +163,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
 
   # Nginx Reverse Proxy
   nginx:
@@ -307,7 +307,6 @@ networks:
     driver: bridge
 
 volumes:
-  redis_data:
   prometheus_data:
   grafana_data:
   uploads_data:
