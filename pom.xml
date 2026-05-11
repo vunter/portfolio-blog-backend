@@ -225,7 +225,7 @@
 		<dependency>
 			<groupId>com.resend</groupId>
 			<artifactId>resend-java</artifactId>
-			<version>4.4.0</version>
+			<version>4.13.0</version>
 		</dependency>
 
 		<!-- F-172: Thymeleaf for HTML email templates -->
