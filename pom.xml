@@ -37,7 +37,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 		<lombok.version>1.18.42</lombok.version>
-		<jjwt.version>0.13.1</jjwt.version>
+		<jjwt.version>0.13.0</jjwt.version>
 		<testcontainers.version>1.21.0</testcontainers.version>
 		<spring-cloud.version>2025.1.0</spring-cloud.version>
 	</properties>
@@ -375,19 +375,23 @@
 		<dependency>
 			<groupId>io.r2dbc</groupId>
 			<artifactId>r2dbc-h2</artifactId>
-			<scope>test</scope>
-			<optional>true</optional>
+			<scope>runtime</scope>
 		</dependency>
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>
-			<scope>test</scope>
-			<optional>true</optional>
+			<scope>runtime</scope>
 		</dependency>
 		<dependency>
 			<groupId>com.maxmind.geoip2</groupId>
 			<artifactId>geoip2</artifactId>
 			<version>4.2.1</version>
+		</dependency>
+		<!-- Q13.1: Structured JSON logging for production (log aggregation: ELK, Datadog, CloudWatch) -->
+		<dependency>
+			<groupId>net.logstash.logback</groupId>
+			<artifactId>logstash-logback-encoder</artifactId>
+			<version>8.0</version>
 		</dependency>
 	</dependencies>
 
@@ -412,17 +416,17 @@
 		</pluginRepository>
 	</pluginRepositories>
 
-	<!-- Deploy artifacts to local Nexus — HTTPS required when Nexus TLS is configured -->
+	<!-- Deploy artifacts to Nexus — URLs configured via CI/CD secrets or Maven settings.xml -->
 	<distributionManagement>
 		<snapshotRepository>
 			<id>nexus-snapshots</id>
 			<name>Nexus Snapshots</name>
-			<url>https://192.168.1.214:30081/repository/maven-snapshots/</url>
+			<url>${env.NEXUS_SNAPSHOTS_URL:https://nexus.internal/repository/maven-snapshots/}</url>
 		</snapshotRepository>
 		<repository>
 			<id>nexus-releases</id>
 			<name>Nexus Releases</name>
-			<url>https://192.168.1.214:30081/repository/maven-releases/</url>
+			<url>${env.NEXUS_RELEASES_URL:https://nexus.internal/repository/maven-releases/}</url>
 		</repository>
 	</distributionManagement>
 
