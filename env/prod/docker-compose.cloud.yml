@@ -167,9 +167,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ../../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx-cloud.conf:/etc/nginx/conf.d/default.conf:ro
-      - ../../nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./.htpasswd:/etc/nginx/.htpasswd:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
     depends_on:
@@ -177,8 +176,6 @@ services:
         condition: service_healthy
       frontend:
         condition: service_healthy
-      prometheus:
-        condition: service_started
     networks:
       - blog-network
     restart: unless-stopped
@@ -197,35 +194,6 @@ services:
           memory: 256M
     labels:
       com.datadoghq.ad.logs: '[{"source":"nginx","service":"blog-nginx"}]'
-
-  # Prometheus (metrics)
-  prometheus:
-    image: prom/prometheus:v3.2.1
-    container_name: blog-prometheus
-    volumes:
-      - ../../prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    ports:
-      - "127.0.0.1:9090:9090"
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.enable-lifecycle'
-      - '--web.external-url=/prometheus'
-      - '--web.route-prefix=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-    networks:
-      - blog-network
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "3"
 
   # Datadog Agent (APM + log collection + infrastructure metrics)
   datadog-agent:
@@ -272,7 +240,6 @@ networks:
     name: blog-infra
 
 volumes:
-  prometheus_data:
   uploads_data:
   app_logs:
   certbot_webroot:
