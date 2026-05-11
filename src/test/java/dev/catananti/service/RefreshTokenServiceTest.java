@@ -44,9 +44,8 @@ class RefreshTokenServiceTest {
     class CreateRefreshToken {
 
         @Test
-        @DisplayName("Should create new refresh token and revoke old ones")
+        @DisplayName("Should create new refresh token without touching other devices' tokens")
         void shouldCreateToken() {
-            when(refreshTokenRepository.revokeAllByUserId(1001L)).thenReturn(Mono.empty());
             when(idService.nextId()).thenReturn(7001L);
             when(refreshTokenRepository.save(any(RefreshToken.class)))
                     .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
@@ -61,7 +60,8 @@ class RefreshTokenServiceTest {
                     })
                     .verifyComplete();
 
-            verify(refreshTokenRepository).revokeAllByUserId(1001L);
+            // Multi-device sessions: createRefreshToken must NOT revoke other tokens.
+            verify(refreshTokenRepository, never()).revokeAllByUserId(any());
         }
     }
 
@@ -81,6 +81,8 @@ class RefreshTokenServiceTest {
                     .createdAt(LocalDateTime.now().minusDays(2))
                     .build();
 
+            when(refreshTokenRepository.revokeByTokenIfActive(anyString()))
+                    .thenReturn(Mono.just(1L));
             when(refreshTokenRepository.findByToken(anyString()))
                     .thenReturn(Mono.just(existing));
             when(refreshTokenRepository.save(any(RefreshToken.class)))
@@ -106,6 +108,8 @@ class RefreshTokenServiceTest {
                     .revoked(true)
                     .build();
 
+            when(refreshTokenRepository.revokeByTokenIfActive(anyString()))
+                    .thenReturn(Mono.just(0L));
             when(refreshTokenRepository.findByToken(anyString()))
                     .thenReturn(Mono.just(revoked));
             when(refreshTokenRepository.findActiveByUserId(1001L))
@@ -128,6 +132,8 @@ class RefreshTokenServiceTest {
                     .createdAt(LocalDateTime.now().minusDays(10))
                     .build();
 
+            when(refreshTokenRepository.revokeByTokenIfActive(anyString()))
+                    .thenReturn(Mono.just(1L));
             when(refreshTokenRepository.findByToken(anyString()))
                     .thenReturn(Mono.just(expired));
 
@@ -139,6 +145,8 @@ class RefreshTokenServiceTest {
         @Test
         @DisplayName("Should throw for nonexistent token")
         void shouldThrowForNonexistentToken() {
+            when(refreshTokenRepository.revokeByTokenIfActive(anyString()))
+                    .thenReturn(Mono.just(0L));
             when(refreshTokenRepository.findByToken(anyString()))
                     .thenReturn(Mono.empty());
 

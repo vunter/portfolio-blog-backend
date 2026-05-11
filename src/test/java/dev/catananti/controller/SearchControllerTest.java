@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.SearchRequest;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -29,6 +31,9 @@ class SearchControllerTest {
 
     @Mock
     private SearchService searchService;
+
+    @Spy
+    private PaginationConfig paginationConfig = new PaginationConfig();
 
     @InjectMocks
     private SearchController controller;

@@ -1,5 +1,7 @@
 package dev.catananti.controller;
 
+import dev.catananti.entity.ArticleStatus;
+import dev.catananti.entity.CommentStatus;
 import dev.catananti.entity.UserRole;
 import dev.catananti.repository.*;
 import io.swagger.v3.oas.annotations.Operation;
@@ -69,10 +71,10 @@ public class AdminDashboardController {
     private Mono<Map<String, Object>> getGlobalStats() {
         return Mono.zip(
                 articleRepository.count(),
-                articleRepository.countByStatus("PUBLISHED"),
-                articleRepository.countByStatus("DRAFT"),
+                articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()),
+                articleRepository.countByStatus(ArticleStatus.DRAFT.name()),
                 commentRepository.count(),
-                commentRepository.countByStatus("PENDING"),
+                commentRepository.countByStatus(CommentStatus.PENDING.name()),
                 userRepository.count(),
                 subscriberRepository.countConfirmed(),
                 articleRepository.sumViewsCount()
@@ -98,10 +100,10 @@ public class AdminDashboardController {
     private Mono<Map<String, Object>> getScopedStats(Long authorId) {
         return Mono.zip(
                 articleRepository.countByAuthorId(authorId),
-                articleRepository.countByAuthorIdAndStatus(authorId, "PUBLISHED"),
-                articleRepository.countByAuthorIdAndStatus(authorId, "DRAFT"),
+                articleRepository.countByAuthorIdAndStatus(authorId, ArticleStatus.PUBLISHED.name()),
+                articleRepository.countByAuthorIdAndStatus(authorId, ArticleStatus.DRAFT.name()),
                 commentRepository.countByArticleAuthorId(authorId),
-                commentRepository.countByArticleAuthorIdAndStatus(authorId, "PENDING"),
+                commentRepository.countByArticleAuthorIdAndStatus(authorId, CommentStatus.PENDING.name()),
                 articleRepository.sumViewsCountByAuthorId(authorId),
                 tagRepository.countByAuthorId(authorId)
         ).map(tuple -> {
@@ -135,7 +137,7 @@ public class AdminDashboardController {
     }
 
     private Map<String, Object> mapActivityItem(dev.catananti.entity.Article article) {
-        String action = "PUBLISHED".equals(article.getStatus()) ? "published" : "updated";
+        String action = article.getStatus() == ArticleStatus.PUBLISHED ? "published" : "updated";
         String title = article.getTitle();
         String createdAt = (article.getUpdatedAt() != null ? article.getUpdatedAt() : article.getCreatedAt()).toString();
         return Map.of(

@@ -40,6 +40,14 @@ public class SearchService {
     private static final String ALIAS_ARTICLE_TAGS = "at";
     private static final String ALIAS_TAGS = "t";
 
+    /** Allowlist of sort-key → SQL ORDER BY fragment. New keys must be added here, not built dynamically. */
+    private static final java.util.Map<String, String> SORT_OPTIONS = java.util.Map.of(
+            "date",  "a.published_at DESC",
+            "views", "a.views_count DESC",
+            "likes", "a.likes_count DESC",
+            "title", "a.title ASC"
+    );
+
     private final ArticleRepository articleRepository;
     private final TagRepository tagRepository;
     private final UserRepository userRepository;
@@ -59,18 +67,51 @@ public class SearchService {
 
     /**
      * Generates the SQL condition for text search.
-     * Uses PostgreSQL FTS (to_tsvector/plainto_tsquery) when useFts is true,
-     * falls back to ILIKE for H2 compatibility.
+     * Q4.2: Multi-language search — matches against both the base article columns
+     * AND any article_i18n translation. This lets users search in any language
+     * and still find articles, regardless of their selected frontend locale.
+     *
+     * Uses PostgreSQL FTS with 'simple' config (no language-specific stemming)
+     * so Portuguese/Italian/Spanish terms work as well as English.
+     * Falls back to ILIKE for H2 compatibility (tests / dev).
      */
+    /** Allow only short alphanumeric aliases — defensive guard against SQL-injection regressions. */
+    private static final java.util.regex.Pattern SAFE_ALIAS = java.util.regex.Pattern.compile("[a-zA-Z_][a-zA-Z0-9_]{0,15}|");
+    /** Param refs must be R2DBC positional placeholders (e.g. $1, $2). */
+    private static final java.util.regex.Pattern SAFE_PARAM_REF = java.util.regex.Pattern.compile("\\$\\d{1,3}");
+
     private String ftsCondition(String tableAlias, String paramRef) {
-        if (useFts) {
-            String prefix = tableAlias.isEmpty() ? "" : tableAlias + ".";
-            return "to_tsvector('english', coalesce(%stitle, '') || ' ' || coalesce(%sexcerpt, '') || ' ' || coalesce(%scontent, '')) @@ plainto_tsquery('english', %s)"
-                    .formatted(prefix, prefix, prefix, paramRef);
+        if (tableAlias == null || !SAFE_ALIAS.matcher(tableAlias).matches()) {
+            throw new IllegalArgumentException("Unsafe SQL table alias rejected");
         }
-        String prefix = tableAlias.isEmpty() ? "" : tableAlias + ".";
-        return "(LOWER(%stitle) LIKE LOWER('%%' || %s || '%%') OR LOWER(%scontent) LIKE LOWER('%%' || %s || '%%') OR LOWER(%sexcerpt) LIKE LOWER('%%' || %s || '%%'))"
-                .formatted(prefix, paramRef, prefix, paramRef, prefix, paramRef);
+        if (paramRef == null || !SAFE_PARAM_REF.matcher(paramRef).matches()) {
+            throw new IllegalArgumentException("Unsafe SQL parameter reference rejected");
+        }
+        String alias = tableAlias.isEmpty() ? "" : tableAlias;
+        String aliasRef = alias.isEmpty() ? "" : alias + ".";
+        String idRef = alias.isEmpty() ? "id" : alias + ".id";
+
+        if (useFts) {
+            return ("""
+                    (
+                        to_tsvector('simple', coalesce(%stitle, '') || ' ' || coalesce(%sexcerpt, '') || ' ' || coalesce(%scontent, ''))
+                            @@ plainto_tsquery('simple', %s)
+                        OR EXISTS (
+                            SELECT 1 FROM article_i18n i18n
+                            WHERE i18n.article_id = %s
+                              AND to_tsvector('simple', coalesce(i18n.title, '') || ' ' || coalesce(i18n.excerpt, '') || ' ' || coalesce(i18n.content, ''))
+                                  @@ plainto_tsquery('simple', %s)
+                        )
+                    )
+                    """).formatted(aliasRef, aliasRef, aliasRef, paramRef, idRef, paramRef);
+        }
+        return ("""
+                (
+                    LOWER(%stitle) LIKE LOWER('%%' || %s || '%%')
+                    OR LOWER(%scontent) LIKE LOWER('%%' || %s || '%%')
+                    OR LOWER(%sexcerpt) LIKE LOWER('%%' || %s || '%%')
+                )
+                """).formatted(aliasRef, paramRef, aliasRef, paramRef, aliasRef, paramRef);
     }
 
     public Mono<PageResponse<ArticleResponse>> searchArticles(SearchRequest request) {
@@ -101,13 +142,22 @@ public class SearchService {
             articlesFlux = searchByQueryAndTags(sanitizedQuery, request.getTags(), request.getSize(), offset, request.getSortBy(), from, to);
             countMono = countByQueryAndTags(sanitizedQuery, request.getTags(), from, to);
         } else if (hasDateFilter) {
-            // Search with date range (using dynamic SQL)
+            // Search with date range (using dynamic SQL). ftsCondition() inside already
+            // covers article_i18n, so this path is multi-language.
             articlesFlux = searchByQueryAndDateRange(sanitizedQuery, from, to, request.getSize(), offset);
             countMono = countByQueryAndDateRange(sanitizedQuery, from, to);
+        } else if (useFts) {
+            // Q4.2: Query-only + Postgres — use FTS variant that also matches article_i18n translations.
+            articlesFlux = articleRepository.searchByStatusAndQueryFts(
+                    ArticleStatus.PUBLISHED.name(), sanitizedQuery, request.getSize(), offset);
+            countMono = articleRepository.countSearchByStatusAndQueryFts(
+                    ArticleStatus.PUBLISHED.name(), sanitizedQuery);
         } else {
-            // Search only by query
-            articlesFlux = articleRepository.searchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery, request.getSize(), offset);
-            countMono = articleRepository.countSearchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery);
+            // H2 dev / test fallback — LIKE-based search on base columns only.
+            articlesFlux = articleRepository.searchByStatusAndQuery(
+                    ArticleStatus.PUBLISHED.name(), sanitizedQuery, request.getSize(), offset);
+            countMono = articleRepository.countSearchByStatusAndQuery(
+                    ArticleStatus.PUBLISHED.name(), sanitizedQuery);
         }
 
         return articlesFlux
@@ -141,12 +191,9 @@ public class SearchService {
             return Flux.empty();
         }
 
-        String orderBy = switch (sortBy != null ? sortBy.toLowerCase() : "date") {
-            case "views" -> "a.views_count DESC";
-            case "likes" -> "a.likes_count DESC";
-            case "title" -> "a.title ASC";
-            default -> "a.published_at DESC";
-        };
+        String orderBy = SORT_OPTIONS.getOrDefault(
+                sortBy != null ? sortBy.toLowerCase() : "date",
+                SORT_OPTIONS.get("date"));
 
         // Build parameterized query with positional parameters for tags
         StringBuilder sql = new StringBuilder("""
@@ -416,7 +463,7 @@ public class SearchService {
                 .excerpt(row.get("excerpt", String.class))
                 .coverImageUrl(row.get("cover_image_url", String.class))
                 .authorId(row.get("author_id", Long.class))
-                .status(row.get("status", String.class))
+                .status(ArticleStatus.fromString(row.get("status", String.class), ArticleStatus.DRAFT))
                 .publishedAt(row.get("published_at", java.time.LocalDateTime.class))
                 .readingTimeMinutes(row.get("reading_time_minutes", Integer.class))
                 .viewsCount(row.get("views_count", Integer.class))
@@ -441,7 +488,7 @@ public class SearchService {
                         .id(String.valueOf(article.getAuthorId()))
                         .name(article.getAuthorName() != null ? article.getAuthorName() : "Unknown")
                         .build())
-                .status(article.getStatus())
+                .status(article.getStatus().name())
                 .publishedAt(article.getPublishedAt())
                 .readingTimeMinutes(article.getReadingTimeMinutes())
                 .viewCount(article.getViewsCount())
@@ -497,13 +544,14 @@ public class SearchService {
                     WHERE status = 'PUBLISHED'
                     AND LOWER(title) LIKE LOWER($1)
                     ORDER BY views_count DESC
-                    LIMIT %d
+                    LIMIT $2
                 ) AS subq
-                """.formatted(maxSuggestions);
+                """;
 
         return r2dbcTemplate.getDatabaseClient()
                 .sql(sql)
                 .bind("$1", DigestUtils.escapeLikePattern(prefix) + "%")
+                .bind("$2", maxSuggestions)
                 .map((row, metadata) -> row.get("title", String.class))
                 .all();
     }

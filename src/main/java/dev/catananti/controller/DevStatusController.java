@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +57,7 @@ public class DevStatusController {
     private Mono<Map<String, Object>> getBlogStats() {
         return Mono.zip(
                 articleRepository.countAll().defaultIfEmpty(0L),
-                articleRepository.countByStatus("PUBLISHED").defaultIfEmpty(0L),
+                articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()).defaultIfEmpty(0L),
                 commentRepository.count().defaultIfEmpty(0L)
         ).map(tuple -> Map.<String, Object>of(
                 "totalArticles", tuple.getT1(),

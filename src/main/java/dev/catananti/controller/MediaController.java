@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.entity.MediaAsset;
 import dev.catananti.service.MediaService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -31,6 +32,7 @@ public class MediaController {
 
     private final MediaService mediaService;
     private final dev.catananti.repository.UserRepository userRepository;
+    private final PaginationConfig paginationConfig;
 
     /**
      * Upload a media file.
@@ -67,8 +69,9 @@ public class MediaController {
             @RequestParam(value = "page", defaultValue = "0") int page,
             @RequestParam(value = "size", defaultValue = "20") int size,
             @RequestParam(value = "purpose", required = false) String purpose) {
+        size = paginationConfig.clampPageSize(size);
 
-        int clampedSize = Math.min(Math.max(size, 1), 100);
+        int clampedSize = size;
 
         Mono<List<MediaAssetResponse>> assetsMono;
         Mono<Long> countMono;

@@ -5,7 +5,7 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.service.BookmarkService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -29,6 +29,7 @@ import reactor.core.publisher.Mono;
 public class BookmarkController {
 
     private final BookmarkService bookmarkService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping
     @Operation(summary = "Get bookmarked articles", description = "Get all bookmarked articles for the current visitor")
@@ -37,7 +38,8 @@ public class BookmarkController {
             @Pattern(regexp = "^[a-zA-Z0-9-]+$", message = "Visitor ID must contain only alphanumeric characters and dashes")
             String visitorId,
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "10") @Min(1) @Max(50) int size) {
+            @RequestParam(defaultValue = "20") @Min(1) int size) {
+        size = paginationConfig.clampPageSize(size);
         log.debug("Fetching bookmarks: page={}, size={}", page, size);
         return bookmarkService.getBookmarks(visitorId, page, size);
     }

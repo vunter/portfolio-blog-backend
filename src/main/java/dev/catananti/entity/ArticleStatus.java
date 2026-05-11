@@ -2,8 +2,7 @@ package dev.catananti.entity;
 
 /**
  * Status values for articles.
- * Entity fields remain as String for R2DBC compatibility.
- * Use these constants instead of hardcoded strings for type-safe comparisons.
+ * Used directly as entity field type — R2DBC handles enum ↔ String conversion.
  */
 public enum ArticleStatus {
     DRAFT,
@@ -13,9 +12,14 @@ public enum ArticleStatus {
     ARCHIVED;
 
     /**
-     * Check if the given status string matches this enum value.
+     * Parse a status string, returning the given default if null or invalid.
      */
-    public boolean matches(String status) {
-        return this.name().equals(status);
+    public static ArticleStatus fromString(String status, ArticleStatus defaultStatus) {
+        if (status == null || status.isBlank()) return defaultStatus;
+        try {
+            return valueOf(status.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return defaultStatus;
+        }
     }
 }

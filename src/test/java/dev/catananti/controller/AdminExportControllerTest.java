@@ -106,7 +106,8 @@ class AdminExportControllerTest {
                         assertThat(response.getStatusCode().value()).isEqualTo(200);
                         assertThat(response.getBody()).contains("\"version\"");
                         assertThat(response.getHeaders().getFirst("Content-Disposition"))
-                                .startsWith("attachment; filename=\"blog-export-");
+                                .contains("blog-export-")
+                                .contains(".json");
                     })
                     .verifyComplete();
         }

@@ -5,12 +5,14 @@ import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleReview;
+import dev.catananti.entity.ArticleReviewStatus;
 import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.Tag;
 import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
 import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.exception.ResourceNotFoundException;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
@@ -27,6 +29,7 @@ import org.springframework.security.core.context.SecurityContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -57,13 +60,15 @@ public class ArticleAdminService {
     private final NotificationEventService notificationEventService;
     private final HtmlSanitizerService htmlSanitizerService;
     private final ArticleService articleService;
+    private final PaginationConfig paginationConfig;
+    private final TransactionalOperator transactionalOperator;
 
     private static final String RSS_CACHE_KEY = "rss:feed";
     private static final String SITEMAP_CACHE_KEY = "sitemap:xml";
 
     // ==================== ADMIN CRUD ====================
 
-    public Mono<PageResponse<ArticleResponse>> getAllArticles(int page, int size, String status) {
+    public Mono<PageResponse<ArticleResponse>> getAllArticles(int page, int size, String status, String sort) {
         int offset = page * size;
 
         return getCurrentUser().flatMap(user -> {
@@ -73,14 +78,15 @@ public class ArticleAdminService {
             if (isAdmin(user)) {
                 // ADMIN sees all articles
                 if (status != null && !status.isEmpty()) {
-                    articlesFlux = articleRepository.findByStatusOrderByCreatedAtDesc(status.toUpperCase(), size, offset);
-                    countMono = articleRepository.countByStatus(status.toUpperCase());
+                    String s = status.toUpperCase();
+                    articlesFlux = findByStatusSorted(s, sort, size, offset);
+                    countMono = articleRepository.countByStatus(s);
                 } else {
-                    articlesFlux = articleRepository.findAllOrderByCreatedAtDesc(size, offset);
+                    articlesFlux = findAllSorted(sort, size, offset);
                     countMono = articleRepository.countAll();
                 }
             } else {
-                // DEV see only their own articles
+                // DEV see only their own articles (sort not supported for author-scoped queries)
                 if (status != null && !status.isEmpty()) {
                     articlesFlux = articleRepository.findByAuthorIdAndStatusOrderByCreatedAtDesc(user.getId(), status.toUpperCase(), size, offset);
                     countMono = articleRepository.countByAuthorIdAndStatus(user.getId(), status.toUpperCase());
@@ -102,6 +108,26 @@ public class ArticleAdminService {
         });
     }
 
+    private Flux<Article> findByStatusSorted(String status, String sort, int limit, int offset) {
+        return switch (sort) {
+            case "oldest" -> articleRepository.findByStatusOrderByCreatedAtAsc(status, limit, offset);
+            case "title" -> articleRepository.findByStatusOrderByTitleAsc(status, limit, offset);
+            case "views" -> articleRepository.findByStatusOrderByViewsDesc(status, limit, offset);
+            case "likes" -> articleRepository.findByStatusOrderByLikesDesc(status, limit, offset);
+            default -> articleRepository.findByStatusOrderByCreatedAtDesc(status, limit, offset);
+        };
+    }
+
+    private Flux<Article> findAllSorted(String sort, int limit, int offset) {
+        return switch (sort) {
+            case "oldest" -> articleRepository.findAllOrderByCreatedAtAsc(limit, offset);
+            case "title" -> articleRepository.findAllOrderByTitleAsc(limit, offset);
+            case "views" -> articleRepository.findAllOrderByViewsDesc(limit, offset);
+            case "likes" -> articleRepository.findAllOrderByLikesDesc(limit, offset);
+            default -> articleRepository.findAllOrderByCreatedAtDesc(limit, offset);
+        };
+    }
+
     public Mono<ArticleResponse> getArticleById(Long id) {
         return articleRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
@@ -115,13 +141,14 @@ public class ArticleAdminService {
                 .map(articleService::mapToResponse);
     }
 
-    @Transactional
     public Mono<ArticleResponse> publishArticle(Long id) {
-        return articleRepository.findById(id)
+        // Wrap only the DB writes in a transaction so the connection is released before
+        // the subscriber email fan-out (which can be thousands of sends with concurrency=10).
+        Mono<Article> publish = articleRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
-                    article.setStatus(ArticleStatus.PUBLISHED.name());
+                    article.setStatus(ArticleStatus.PUBLISHED);
                     article.setPublishedAt(LocalDateTime.now());
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
@@ -129,7 +156,8 @@ public class ArticleAdminService {
                 .doOnSuccess(a -> {
                     log.info("Article published: {}", a.getSlug());
                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
-                })
+                });
+        return transactionalOperator.transactional(publish)
                 .flatMap(article -> invalidateFeedCaches()
                         .then(notifySubscribersAboutNewArticle(article))
                         .thenReturn(article))
@@ -143,7 +171,7 @@ public class ArticleAdminService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
-                    article.setStatus(ArticleStatus.DRAFT.name());
+                    article.setStatus(ArticleStatus.DRAFT);
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
                 })
@@ -159,7 +187,7 @@ public class ArticleAdminService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
-                    article.setStatus(ArticleStatus.ARCHIVED.name());
+                    article.setStatus(ArticleStatus.ARCHIVED);
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
                 })
@@ -177,15 +205,14 @@ public class ArticleAdminService {
                     return getCurrentUser()
                             .map(User::getId)
                             .switchIfEmpty(Mono.error(new IllegalStateException("No authenticated user")))
-                            .flatMap(userId -> {
-                                Long authorId = userId;
+                            .flatMap(authorId -> {
                                 return fetchOrCreateTags(request.getTagSlugs())
                                         .collectList()
                                         .flatMap(tags -> {
-                                            String status = request.getStatus() != null ? request.getStatus().toUpperCase() : ArticleStatus.DRAFT.name();
+                                            ArticleStatus status = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
 
-                                            if (request.getScheduledAt() != null && !ArticleStatus.PUBLISHED.matches(status)) {
-                                                status = ArticleStatus.SCHEDULED.name();
+                                            if (request.getScheduledAt() != null && status != ArticleStatus.PUBLISHED) {
+                                                status = ArticleStatus.SCHEDULED;
                                             }
 
                                             Article article = Article.builder()
@@ -207,7 +234,7 @@ public class ArticleAdminService {
                                                     .updatedAt(LocalDateTime.now())
                                                     .build();
 
-                                            if (ArticleStatus.PUBLISHED.matches(article.getStatus())) {
+                                            if (article.getStatus() == ArticleStatus.PUBLISHED) {
                                                 article.setPublishedAt(LocalDateTime.now());
                                             }
 
@@ -223,7 +250,7 @@ public class ArticleAdminService {
                                                     })
                                                     .doOnSuccess(a -> {
                                                         log.info("Article created: {} (status: {})", a.getSlug(), a.getStatus());
-                                                        if (ArticleStatus.PUBLISHED.matches(a.getStatus())) {
+                                                        if (a.getStatus() == ArticleStatus.PUBLISHED) {
                                                             notificationEventService.articlePublished(a.getTitle(), a.getSlug());
                                                         } else {
                                                             notificationEventService.articleCreated(a.getTitle(), a.getSlug());
@@ -279,27 +306,32 @@ public class ArticleAdminService {
                                         : Mono.empty());
                     }
 
-                    String newStatus = request.getStatus() != null ? request.getStatus().toUpperCase() : ArticleStatus.DRAFT.name();
-                    String oldStatus = article.getStatus();
+                    // Defer all entity mutations until after the slug check passes.
+                    // Otherwise an error path can leave the entity in a partially-mutated
+                    // state that a retry could persist.
+                    return slugCheck.then(Mono.defer(() -> {
+                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
+                        ArticleStatus oldStatus = article.getStatus();
 
-                    article.setSlug(request.getSlug());
-                    article.setTitle(htmlSanitizerService.stripHtml(request.getTitle()));
-                    article.setSubtitle(htmlSanitizerService.stripHtml(request.getSubtitle()));
-                    article.setContent(htmlSanitizerService.sanitize(request.getContent()));
-                    article.setExcerpt(htmlSanitizerService.stripHtml(request.getExcerpt()));
-                    article.setCoverImageUrl(request.getCoverImageUrl());
-                    article.setStatus(newStatus);
-                    article.setReadingTimeMinutes(calculateReadingTime(request.getContent()));
-                    article.setSeoTitle(htmlSanitizerService.stripHtml(request.getSeoTitle()));
-                    article.setSeoDescription(htmlSanitizerService.stripHtml(request.getSeoDescription()));
-                    article.setSeoKeywords(htmlSanitizerService.stripHtml(request.getSeoKeywords()));
-                    article.setUpdatedAt(LocalDateTime.now());
+                        article.setSlug(request.getSlug());
+                        article.setTitle(htmlSanitizerService.stripHtml(request.getTitle()));
+                        article.setSubtitle(htmlSanitizerService.stripHtml(request.getSubtitle()));
+                        article.setContent(htmlSanitizerService.sanitize(request.getContent()));
+                        article.setExcerpt(htmlSanitizerService.stripHtml(request.getExcerpt()));
+                        article.setCoverImageUrl(request.getCoverImageUrl());
+                        article.setStatus(newStatus);
+                        article.setReadingTimeMinutes(calculateReadingTime(request.getContent()));
+                        article.setSeoTitle(htmlSanitizerService.stripHtml(request.getSeoTitle()));
+                        article.setSeoDescription(htmlSanitizerService.stripHtml(request.getSeoDescription()));
+                        article.setSeoKeywords(htmlSanitizerService.stripHtml(request.getSeoKeywords()));
+                        article.setUpdatedAt(LocalDateTime.now());
 
-                    if (!ArticleStatus.PUBLISHED.matches(oldStatus) && ArticleStatus.PUBLISHED.matches(newStatus)) {
-                        article.setPublishedAt(LocalDateTime.now());
-                    }
+                        if (oldStatus != ArticleStatus.PUBLISHED && newStatus == ArticleStatus.PUBLISHED) {
+                            article.setPublishedAt(LocalDateTime.now());
+                        }
 
-                    return slugCheck.then(articleRepository.save(article))
+                        return articleRepository.save(article);
+                    }))
                             .onErrorResume(DataIntegrityViolationException.class, ex ->
                                     Mono.error(new DuplicateResourceException("Article", "slug", request.getSlug())))
                             .flatMap(saved -> {
@@ -331,18 +363,20 @@ public class ArticleAdminService {
             return Mono.error(new IllegalArgumentException("error.invalid_status"));
         }
 
+        // R2DBC transactions are bound to a single connection, so concurrent flatMap
+        // would not be atomic. Use concatMap to serialize updates within the tx.
         return getCurrentUser()
                 .flatMap(user -> Flux.fromIterable(ids)
-                        .flatMap(id -> articleRepository.findById(id)
+                        .concatMap(id -> articleRepository.findById(id)
                                 .filter(article -> isAdmin(user) || isOwner(article, user))
                                 .flatMap(article -> {
-                                    article.setStatus(targetStatus.name());
+                                    article.setStatus(targetStatus);
                                     article.setUpdatedAt(LocalDateTime.now());
                                     if (targetStatus == ArticleStatus.PUBLISHED && article.getPublishedAt() == null) {
                                         article.setPublishedAt(LocalDateTime.now());
                                     }
                                     return articleRepository.save(article);
-                                }), 8)
+                                }))
                         .count())
                 .flatMap(count -> invalidateFeedCaches().thenReturn(count))
                 .doOnSuccess(count -> log.info("Bulk status update: {} articles → {}", count, status));
@@ -350,17 +384,18 @@ public class ArticleAdminService {
 
     @Transactional
     public Mono<Void> deleteArticle(Long id) {
+        // Q3.2: All article_id FKs have ON DELETE CASCADE (verified in V1 schema).
+        // Deleting the article atomically removes tags, comments, bookmarks, versions,
+        // analytics, translations, reviews, and reading history in a single transaction.
+        // Cache invalidation runs outside the transaction boundary — stale entries are
+        // harmless (re-populated on next read) and must not block the delete.
         return articleRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
-                .flatMap(article -> deleteArticleTags(id)
-                        .then(deleteArticleComments(id))
-                        .then(deleteArticleBookmarks(id))
-                        .then(deleteArticleVersions(id))
-                        .then(articleRepository.deleteById(id))
-                        .then(invalidateFeedCaches())
+                .flatMap(article -> articleRepository.deleteById(id)
                         .doOnSuccess(v -> log.info("Article deleted: {} (slug={})", id, article.getSlug()))
                 )
-                .then();
+                .then(invalidateFeedCaches());
     }
 
     // ==================== REVIEW WORKFLOW ====================
@@ -371,10 +406,10 @@ public class ArticleAdminService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
-                    if (!ArticleStatus.DRAFT.matches(article.getStatus())) {
+                    if (article.getStatus() != ArticleStatus.DRAFT) {
                         return Mono.error(new IllegalStateException("Only DRAFT articles can be submitted for review"));
                     }
-                    article.setStatus(ArticleStatus.REVIEW.name());
+                    article.setStatus(ArticleStatus.REVIEW);
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
                 })
@@ -394,10 +429,10 @@ public class ArticleAdminService {
                     if (!isAdmin(user)) {
                         return Mono.error(new org.springframework.security.access.AccessDeniedException("Only admins can approve reviews"));
                     }
-                    if (!ArticleStatus.REVIEW.matches(article.getStatus())) {
+                    if (article.getStatus() != ArticleStatus.REVIEW) {
                         return Mono.error(new IllegalStateException("Only articles in REVIEW status can be approved"));
                     }
-                    article.setStatus(ArticleStatus.PUBLISHED.name());
+                    article.setStatus(ArticleStatus.PUBLISHED);
                     article.setPublishedAt(LocalDateTime.now());
                     article.setUpdatedAt(LocalDateTime.now());
 
@@ -405,7 +440,7 @@ public class ArticleAdminService {
                             .id(idService.nextId())
                             .articleId(id)
                             .reviewerId(user.getId())
-                            .status("APPROVED")
+                            .status(ArticleReviewStatus.APPROVED)
                             .createdAt(LocalDateTime.now())
                             .updatedAt(LocalDateTime.now())
                             .build();
@@ -432,17 +467,17 @@ public class ArticleAdminService {
                     if (!isAdmin(user)) {
                         return Mono.error(new org.springframework.security.access.AccessDeniedException("Only admins can request changes"));
                     }
-                    if (!ArticleStatus.REVIEW.matches(article.getStatus())) {
+                    if (article.getStatus() != ArticleStatus.REVIEW) {
                         return Mono.error(new IllegalStateException("Only articles in REVIEW status can have changes requested"));
                     }
-                    article.setStatus(ArticleStatus.DRAFT.name());
+                    article.setStatus(ArticleStatus.DRAFT);
                     article.setUpdatedAt(LocalDateTime.now());
 
                     ArticleReview review = ArticleReview.builder()
                             .id(idService.nextId())
                             .articleId(id)
                             .reviewerId(user.getId())
-                            .status("CHANGES_REQUESTED")
+                            .status(ArticleReviewStatus.CHANGES_REQUESTED)
                             .feedback(feedback)
                             .createdAt(LocalDateTime.now())
                             .updatedAt(LocalDateTime.now())
@@ -470,7 +505,7 @@ public class ArticleAdminService {
     }
 
     private Mono<Void> notifySubscribersAboutNewArticle(Article article) {
-        return subscriberRepository.findAllConfirmed()
+        return subscriberRepository.findAllConfirmed(paginationConfig.getBulkQueryMax())
                 // PERF-01: Limit concurrency to prevent SMTP overload
                 .flatMap(subscriber -> emailService.sendNewArticleNotification(
                         subscriber.getEmail(),
@@ -510,36 +545,13 @@ public class ArticleAdminService {
                 .then();
     }
 
+    // Q3.2: deleteArticle* helper methods removed — DB ON DELETE CASCADE handles the cleanup
+    // atomically when the article is deleted. deleteArticleTags is kept because it's used
+    // during article UPDATE to clear the tag mapping before re-inserting the new set.
+
     private Mono<Void> deleteArticleTags(Long articleId) {
         return r2dbcTemplate.getDatabaseClient()
                 .sql("DELETE FROM article_tags WHERE article_id = :articleId")
-                .bind("articleId", articleId)
-                .fetch()
-                .rowsUpdated()
-                .then();
-    }
-
-    private Mono<Void> deleteArticleComments(Long articleId) {
-        return r2dbcTemplate.getDatabaseClient()
-                .sql("DELETE FROM comments WHERE article_id = :articleId")
-                .bind("articleId", articleId)
-                .fetch()
-                .rowsUpdated()
-                .then();
-    }
-
-    private Mono<Void> deleteArticleBookmarks(Long articleId) {
-        return r2dbcTemplate.getDatabaseClient()
-                .sql("DELETE FROM bookmarks WHERE article_id = :articleId")
-                .bind("articleId", articleId)
-                .fetch()
-                .rowsUpdated()
-                .then();
-    }
-
-    private Mono<Void> deleteArticleVersions(Long articleId) {
-        return r2dbcTemplate.getDatabaseClient()
-                .sql("DELETE FROM article_versions WHERE article_id = :articleId")
                 .bind("articleId", articleId)
                 .fetch()
                 .rowsUpdated()

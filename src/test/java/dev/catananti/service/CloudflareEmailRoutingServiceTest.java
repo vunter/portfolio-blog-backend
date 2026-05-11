@@ -2,6 +2,7 @@ package dev.catananti.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.catananti.config.ResilienceConfig;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.*;
@@ -22,6 +23,8 @@ class CloudflareEmailRoutingServiceTest {
     private MockWebServer mockServer;
     private CloudflareEmailRoutingService service;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ResilienceConfig resilienceConfig = new ResilienceConfig(
+            10, 3, 100, 1000, 5, 30, 50, 30, 10, 5, 50, 60, 10, 3);
 
     @BeforeEach
     void setUp() throws IOException {
@@ -40,7 +43,7 @@ class CloudflareEmailRoutingServiceTest {
         WebClient.Builder builder = WebClient.builder().filter(redirectFilter);
 
         service = new CloudflareEmailRoutingService(
-                builder, "test-token", "zone123", "catananti.dev", true);
+                builder, resilienceConfig, "test-token", "zone123", "catananti.dev", true);
     }
 
     @AfterEach
@@ -102,7 +105,7 @@ class CloudflareEmailRoutingServiceTest {
         @DisplayName("should return empty when CF is disabled")
         void shouldReturnEmptyWhenDisabled() {
             var disabledService = new CloudflareEmailRoutingService(
-                    WebClient.builder(), "token", "zone", "catananti.dev", false);
+                    WebClient.builder(), resilienceConfig, "token", "zone", "catananti.dev", false);
 
             StepVerifier.create(disabledService.createForwardingRule("john", "john@example.com"))
                     .verifyComplete();

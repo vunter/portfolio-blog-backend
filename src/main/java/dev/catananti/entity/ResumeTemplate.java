@@ -80,7 +80,7 @@ public class ResumeTemplate implements Persistable<Long>, NewRecordAware {
      * Template status: DRAFT, ACTIVE, ARCHIVED
      */
     @Builder.Default
-    private String status = "DRAFT";
+    private ResumeTemplateStatus status = ResumeTemplateStatus.DRAFT;
 
     /**
      * Owner of this template.

@@ -2,6 +2,8 @@ package dev.catananti.config;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.catananti.entity.ArticleStatus;
+import dev.catananti.entity.ResumeTemplateStatus;
 import dev.catananti.entity.User;
 import dev.catananti.repository.ResumeTemplateRepository;
 import dev.catananti.repository.UserRepository;
@@ -68,7 +70,8 @@ public class DevDataInitializer {
                         .then(initializeResumeProfile(adminId))
                         .then(initializeTags())
                         .then(initializeBlogPosts(adminId))
-                        .then(initializeComments()))
+                        .then(initializeComments())
+                        .then(initializeTranslations()))
                 .subscribe(
                         result -> log.info("Development data initialization completed (including blog posts, tags, comments)"),
                         error -> log.error("Failed to initialize development data: {}", error.getMessage(), error));
@@ -86,9 +89,9 @@ public class DevDataInitializer {
             LocalDateTime now = LocalDateTime.now();
             return Mono.fromCallable(() -> passwordEncoder.encode(devAdminPassword))
                     .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                    .flatMap(encodedPassword -> databaseClient.sql("INSERT INTO users (id, email, password_hash, name, role, created_at, updated_at) VALUES (:id, :email, :passwordHash, :name, :role, :createdAt, :updatedAt)")
+                    .flatMap(encodedPassword -> databaseClient.sql("INSERT INTO users (id, email, password_hash, name, role, terms_accepted, terms_accepted_at, created_at, updated_at) VALUES (:id, :email, :passwordHash, :name, :role, :termsAccepted, :termsAcceptedAt, :createdAt, :updatedAt)")
                     .bind("id", userId).bind("email", DEV_ADMIN_EMAIL).bind("passwordHash", encodedPassword)
-                    .bind("name", DEV_ADMIN_NAME).bind("role", "ADMIN").bind("createdAt", now).bind("updatedAt", now)
+                    .bind("name", DEV_ADMIN_NAME).bind("role", "ADMIN").bind("termsAccepted", true).bind("termsAcceptedAt", now).bind("createdAt", now).bind("updatedAt", now)
                     .fetch().rowsUpdated().doOnSuccess(r -> log.info("Dev admin user created: {}***@{}",
                             DEV_ADMIN_EMAIL.substring(0, Math.min(3, DEV_ADMIN_EMAIL.indexOf('@'))),
                             DEV_ADMIN_EMAIL.substring(DEV_ADMIN_EMAIL.indexOf('@') + 1))).thenReturn(userId));
@@ -105,7 +108,7 @@ public class DevDataInitializer {
                         .bind("id", templateId).bind("slug", RESUME_SLUG).bind("urlAlias", RESUME_SLUG).bind("name", RESUME_NAME)
                         .bind("description", "Professional resume for Senior Backend Engineer position")
                         .bind("htmlContent", loadResource("dev/resume-template.html")).bind("cssContent", "")
-                        .bind("status", "ACTIVE").bind("ownerId", admin.getId()).bind("version", 1).bind("isDefault", true)
+                        .bind("status", ResumeTemplateStatus.ACTIVE.name()).bind("ownerId", admin.getId()).bind("version", 1).bind("isDefault", true)
                         .bind("paperSize", "A4").bind("orientation", "PORTRAIT").bind("downloadCount", 0)
                         .bind("createdAt", now).bind("updatedAt", now).fetch().rowsUpdated()
                         .doOnSuccess(r -> log.info("Resume template created: {} (status: ACTIVE)", RESUME_SLUG)).thenReturn(templateId);
@@ -194,7 +197,7 @@ public class DevDataInitializer {
         return Flux.fromIterable(articles).concatMap(a -> {
             long articleId = idService.nextId();
             String content = loadResource("dev/" + a.path("contentFile").asText());
-            boolean isDraft = "DRAFT".equals(a.path("status").asText());
+            boolean isDraft = ArticleStatus.DRAFT.name().equals(a.path("status").asText());
             LocalDateTime publishedAt = isDraft ? now : now.minusDays(a.path("publishedDaysAgo").asInt());
             String coverUrl = a.path("coverImageUrl").isNull() ? "" : a.path("coverImageUrl").asText("");
             return databaseClient.sql("INSERT INTO articles (id,slug,title,subtitle,content,excerpt,cover_image_url,author_id,status,published_at,reading_time_minutes,views_count,likes_count,created_at,updated_at) VALUES (:id,:slug,:title,:subtitle,:content,:excerpt,:coverUrl,:authorId,:status,:pubAt,:rt,:views,:likes,:ca,:ua)")
@@ -245,6 +248,54 @@ public class DevDataInitializer {
                             return sql.bind("ca",createdAt).fetch().rowsUpdated();
                         }).then().doOnSuccess(v -> log.info("Created {} dev comments", comments.size()));
                     });
+        });
+    }
+
+    private Mono<Void> initializeTranslations() {
+        return databaseClient.sql("SELECT COUNT(*) AS cnt FROM ui_translations").fetch().one().flatMap(row -> {
+            if (((Number) row.get("cnt")).longValue() > 0) { log.info("Translations already exist, skipping"); return Mono.empty(); }
+
+            String sqlContent;
+            try {
+                sqlContent = loadResource("dev/seed-translations.sql");
+            } catch (Exception e) {
+                log.warn("seed-translations.sql not found, skipping translations: {}", e.getMessage());
+                return Mono.empty();
+            }
+
+            // Parse INSERT lines and use parameterized queries to avoid semicolon issues
+            record TranslationRow(long id, String key, String locale, String value, String namespace, String visibility) {}
+            List<TranslationRow> rows = new java.util.ArrayList<>();
+            java.util.regex.Pattern pat = java.util.regex.Pattern.compile(
+                    "VALUES\\s*\\((\\d+),\\s*'([^']*(?:''[^']*)*)',\\s*'([^']+)',\\s*'((?:[^']|'')*)',\\s*'([^']+)',\\s*'([^']+)'\\)");
+            for (String line : sqlContent.split("\\r?\\n")) {
+                String trimmed = line.trim();
+                if (!trimmed.startsWith("INSERT INTO ui_translations")) continue;
+                java.util.regex.Matcher m = pat.matcher(trimmed);
+                if (m.find()) {
+                    rows.add(new TranslationRow(
+                            Long.parseLong(m.group(1)),
+                            m.group(2).replace("''", "'"),
+                            m.group(3),
+                            m.group(4).replace("''", "'"),
+                            m.group(5),
+                            m.group(6)));
+                }
+            }
+
+            log.info("Seeding {} translations from seed-translations.sql ...", rows.size());
+            String insertSql = "INSERT INTO ui_translations (id, translation_key, locale, \"value\", namespace, visibility) VALUES (:id, :key, :locale, :val, :ns, :vis)";
+            return Flux.fromIterable(rows)
+                    .concatMap(r -> databaseClient.sql(insertSql)
+                            .bind("id", r.id()).bind("key", r.key()).bind("locale", r.locale())
+                            .bind("val", r.value()).bind("ns", r.namespace()).bind("vis", r.visibility())
+                            .fetch().rowsUpdated()
+                            .onErrorResume(e -> {
+                                log.debug("Skipping duplicate translation: {}", e.getMessage());
+                                return Mono.just(0L);
+                            }))
+                    .then()
+                    .doOnSuccess(v -> log.info("Seeded {} translations (all locales)", rows.size()));
         });
     }
 }

@@ -7,10 +7,12 @@ import dev.catananti.entity.Comment;
 import dev.catananti.entity.CommentStatus;
 import dev.catananti.entity.UserRole;
 import dev.catananti.exception.ResourceNotFoundException;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
@@ -39,6 +41,7 @@ public class CommentService {
     private final IdService idService;
     private final NotificationEventService notificationEventService;
     private final BlogMetrics blogMetrics;
+    private final PaginationConfig paginationConfig;
 
     private static final long TRUSTED_COMMENTER_THRESHOLD = 3;
 
@@ -47,20 +50,10 @@ public class CommentService {
     public Flux<CommentResponse> getApprovedCommentsByArticleSlug(String slug) {
         return articleRepository.findBySlug(slug)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
-                .flatMapMany(article -> commentRepository.findAllApprovedByArticleId(article.getId()))
+                .flatMapMany(article -> commentRepository.findApprovedByArticleId(article.getId(), paginationConfig.getCommentTreeMax()))
                 .collectList()
-                .flatMapMany(allComments -> {
-                    // Build tree in memory to avoid N+1 queries
-                    var rootComments = allComments.stream()
-                            .filter(c -> c.getParentId() == null)
-                            .toList();
-                    var repliesByParentId = allComments.stream()
-                            .filter(c -> c.getParentId() != null)
-                            .collect(java.util.stream.Collectors.groupingBy(Comment::getParentId));
-                    rootComments.forEach(root -> root.setReplies(
-                            repliesByParentId.getOrDefault(root.getId(), Collections.emptyList())));
-                    return Flux.fromIterable(rootComments);
-                })
+                .flatMap(this::batchEnrichWithReplies)
+                .flatMapIterable(rootComments -> rootComments)
                 .map(this::toPublicResponse);
     }
 
@@ -98,12 +91,16 @@ public class CommentService {
                 .flatMap(article -> commentRepository.countApprovedByArticleId(article.getId()));
     }
 
-    public Mono<Void> likeComment(Long commentId) {
-        return commentRepository.incrementLikesById(commentId);
+    public Mono<Integer> likeCommentAndReturnCount(Long commentId) {
+        return commentRepository.incrementLikes(commentId)
+                .then(commentRepository.getLikesCount(commentId))
+                .defaultIfEmpty(0);
     }
 
-    public Mono<Void> unlikeComment(Long commentId) {
-        return commentRepository.decrementLikesById(commentId);
+    public Mono<Integer> unlikeCommentAndReturnCount(Long commentId) {
+        return commentRepository.decrementLikes(commentId)
+                .then(commentRepository.getLikesCount(commentId))
+                .defaultIfEmpty(0);
     }
 
     public Mono<Integer> getCommentLikeCount(Long commentId) {
@@ -118,12 +115,20 @@ public class CommentService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
                 .flatMap(article -> {
                     // Validate parent comment if it's a reply
+                    // YouTube Shorts style: max 1 level of nesting.
+                    // Replies to replies are flattened to point at the root comment.
                     Mono<Void> parentValidation = Mono.empty();
                     if (request.getParentId() != null) {
                         parentValidation = commentRepository.findById(request.getParentId())
                                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Parent comment", "id", request.getParentId())))
                                 .filter(parent -> parent.getArticleId().equals(article.getId()))
                                 .switchIfEmpty(Mono.error(new IllegalArgumentException("error.comment_wrong_article")))
+                                .flatMap(parent -> {
+                                    if (parent.getParentId() != null) {
+                                        request.setParentId(parent.getParentId());
+                                    }
+                                    return Mono.just(parent);
+                                })
                                 .then();
                     }
 
@@ -148,7 +153,7 @@ public class CommentService {
                                 .defaultIfEmpty(0L)
                                 .flatMap(approvedCount -> {
                                     boolean isTrusted = approvedCount >= TRUSTED_COMMENTER_THRESHOLD;
-                                    String status = determineCommentStatus(modResult, isTrusted);
+                                    CommentStatus status = determineCommentStatus(modResult, isTrusted);
                                     String moderationNote = modResult.getReasons().isEmpty() ? null
                                             : String.join("; ", modResult.getReasons());
 
@@ -167,7 +172,7 @@ public class CommentService {
                                     return commentRepository.save(comment)
                                             .flatMap(savedComment -> {
                                                 // Notify article author only for pending comments
-                                                if (CommentStatus.PENDING.name().equals(status) && article.getAuthorId() != null) {
+                                                if (status == CommentStatus.PENDING && article.getAuthorId() != null) {
                                                     return userRepository.findById(article.getAuthorId())
                                                             .flatMap(author -> emailService.sendCommentNotification(
                                                                     author.getEmail(),
@@ -178,7 +183,7 @@ public class CommentService {
                                                                     savedComment.getContent()
                                                             ).onErrorResume(e -> {
                                                                 log.warn("Failed to send comment notification to {}: {}",
-                                                                        author.getEmail(), e.getMessage());
+                                                                        PiiMasker.maskEmail(author.getEmail()), e.getMessage());
                                                                 return Mono.empty();
                                                             }))
                                                             .thenReturn(savedComment);
@@ -187,8 +192,8 @@ public class CommentService {
                                             })
                                             .doOnSuccess(c -> {
                                                 log.info("Comment created for article {} by {} ({}) status={}: {}",
-                                                        slug, c.getAuthorName(), c.getAuthorEmail(), c.getStatus(), c.getId());
-                                                if (!CommentStatus.REJECTED.name().equals(c.getStatus())) {
+                                                        slug, c.getAuthorName(), PiiMasker.maskEmail(c.getAuthorEmail()), c.getStatus(), c.getId());
+                                                if (c.getStatus() != CommentStatus.REJECTED) {
                                                     notificationEventService.commentReceived(slug, c.getAuthorName());
                                                 }
                                                 blogMetrics.incrementCommentCreated();
@@ -246,23 +251,23 @@ public class CommentService {
     }
 
     public Flux<CommentResponse> getAllCommentsByArticleId(Long articleId) {
-        return commentRepository.findAllByArticleId(articleId)
+        return commentRepository.findAllByArticleId(articleId, paginationConfig.getCommentTreeMax())
                 .map(this::toResponse);
     }
 
     @Transactional
     public Mono<CommentResponse> approveComment(Long id) {
-        return updateCommentStatus(id, CommentStatus.APPROVED.name());
+        return updateCommentStatus(id, CommentStatus.APPROVED);
     }
 
     @Transactional
     public Mono<CommentResponse> rejectComment(Long id) {
-        return updateCommentStatus(id, CommentStatus.REJECTED.name());
+        return updateCommentStatus(id, CommentStatus.REJECTED);
     }
 
     @Transactional
     public Mono<CommentResponse> markAsSpam(Long id) {
-        return updateCommentStatus(id, CommentStatus.SPAM.name());
+        return updateCommentStatus(id, CommentStatus.SPAM);
     }
 
     @Transactional
@@ -371,7 +376,7 @@ public class CommentService {
 
     // ==================== HELPER METHODS ====================
 
-    private Mono<CommentResponse> updateCommentStatus(Long id, String status) {
+    private Mono<CommentResponse> updateCommentStatus(Long id, CommentStatus status) {
         return commentRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Comment", "id", id)))
                 .flatMap(comment -> {
@@ -381,7 +386,7 @@ public class CommentService {
                 })
                 .doOnSuccess(c -> {
                     log.info("Comment {} status updated to: {}", id, status);
-                    if (CommentStatus.APPROVED.matches(status)) {
+                    if (status == CommentStatus.APPROVED) {
                         notificationEventService.commentApproved(id);
                     }
                 })
@@ -405,7 +410,7 @@ public class CommentService {
         if (rootComments.isEmpty()) {
             return Mono.just(rootComments);
         }
-        var parentIds = rootComments.stream().map(Comment::getId).toList();
+        var parentIds = rootComments.stream().map(Comment::getId).toArray(Long[]::new);
         return commentRepository.findApprovedRepliesByParentIds(parentIds)
                 .collectList()
                 .map(allReplies -> {
@@ -426,11 +431,11 @@ public class CommentService {
                 .articleId(String.valueOf(comment.getArticleId()))
                 .authorName(comment.getAuthorName())
                 .content(comment.getContent())
-                .status(comment.getStatus())
+                .status(comment.getStatus().name())
                 .parentId(comment.getParentId() != null ? String.valueOf(comment.getParentId()) : null)
                 .likesCount(comment.getLikesCount() != null ? comment.getLikesCount() : 0)
-                .replies(comment.getReplies() != null ? 
-                        comment.getReplies().stream().map(this::toPublicResponse).toList() : 
+                .replies(comment.getReplies() != null ?
+                        comment.getReplies().stream().map(this::toPublicResponse).toList() :
                         Collections.emptyList())
                 .createdAt(comment.getCreatedAt())
                 .updatedAt(comment.getUpdatedAt() != null ? comment.getUpdatedAt() : comment.getCreatedAt())
@@ -447,7 +452,7 @@ public class CommentService {
                 .authorName(comment.getAuthorName())
                 .authorEmail(comment.getAuthorEmail())
                 .content(comment.getContent())
-                .status(comment.getStatus())
+                .status(comment.getStatus().name())
                 .moderationNote(comment.getModerationNote())
                 .parentId(comment.getParentId() != null ? String.valueOf(comment.getParentId()) : null)
                 .likesCount(comment.getLikesCount() != null ? comment.getLikesCount() : 0)
@@ -484,11 +489,11 @@ public class CommentService {
         return false;
     }
 
-    private String determineCommentStatus(ContentModerationService.ModerationResult result, boolean isTrusted) {
+    private CommentStatus determineCommentStatus(ContentModerationService.ModerationResult result, boolean isTrusted) {
         return switch (result.getSeverity()) {
-            case HIGH -> CommentStatus.REJECTED.name();
-            case MEDIUM -> isTrusted ? CommentStatus.APPROVED.name() : CommentStatus.PENDING.name();
-            case LOW, NONE -> CommentStatus.APPROVED.name();
+            case HIGH -> CommentStatus.REJECTED;
+            case MEDIUM -> isTrusted ? CommentStatus.APPROVED : CommentStatus.PENDING;
+            case LOW, NONE -> CommentStatus.APPROVED;
         };
     }
 

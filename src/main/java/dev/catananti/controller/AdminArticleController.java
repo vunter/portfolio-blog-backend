@@ -4,13 +4,15 @@ import dev.catananti.config.LocaleConstants;
 import dev.catananti.dto.ArticleI18nResponse;
 import dev.catananti.dto.ArticleRequest;
 import dev.catananti.dto.ArticleResponse;
+import dev.catananti.dto.BulkStatusRequest;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.ArticleReview;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.service.ArticleAdminService;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.ArticleTranslationService;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,7 @@ public class AdminArticleController {
     private final ArticleAdminService articleAdminService;
     private final ArticleService articleService;
     private final ArticleTranslationService articleTranslationService;
+    private final PaginationConfig paginationConfig;
 
     // CQ-03: Use centralized locale constants
     private static final Set<String> SUPPORTED_LOCALES = LocaleConstants.SUPPORTED_LOCALE_CODES;
@@ -46,14 +49,16 @@ public class AdminArticleController {
     @GetMapping
     public Mono<PageResponse<ArticleResponse>> getAllArticles(
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size,
+            @RequestParam(defaultValue = "20") @Min(1) int size,
             @RequestParam(required = false) @Pattern(regexp = "^(DRAFT|PUBLISHED|ARCHIVED|SCHEDULED|REVIEW)?$", message = "Invalid status") String status,
-            @RequestParam(required = false) String search) {
-        log.debug("Admin fetching articles: page={}, size={}, status={}", page, size, status);
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "newest") @Pattern(regexp = "^(newest|oldest|title|views|likes)$", message = "Invalid sort") String sort) {
+        size = paginationConfig.clampPageSize(size);
+        log.debug("Admin fetching articles: page={}, size={}, status={}, sort={}", page, size, status, sort);
         if (search != null && !search.isBlank()) {
             return articleService.searchArticles(search.trim(), page, size);
         }
-        return articleAdminService.getAllArticles(page, size, status);
+        return articleAdminService.getAllArticles(page, size, status, sort);
     }
 
     @GetMapping("/{id}")
@@ -100,27 +105,19 @@ public class AdminArticleController {
         return articleAdminService.archiveArticle(id);
     }
 
-    private static final Set<String> VALID_STATUSES = Set.of("DRAFT", "PUBLISHED", "ARCHIVED", "SCHEDULED", "REVIEW");
+    private static final Set<String> VALID_STATUSES = java.util.Arrays.stream(ArticleStatus.values())
+            .map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
     @Value("${app.articles.max-bulk-size:100}")
     private int maxBulkSize;
 
     @PutMapping("/bulk-status")
-    public Mono<ResponseEntity<Long>> bulkUpdateStatus(@RequestBody java.util.Map<String, Object> body) {
-        Object idsObj = body.get("ids");
-        String status = (String) body.get("status");
-        if (idsObj == null || !(idsObj instanceof List<?>) || status == null || status.isBlank()) {
+    public Mono<ResponseEntity<Long>> bulkUpdateStatus(@Valid @RequestBody BulkStatusRequest request) {
+        if (!VALID_STATUSES.contains(request.getStatus())) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        if (!VALID_STATUSES.contains(status)) {
-            return Mono.just(ResponseEntity.badRequest().build());
-        }
-        @SuppressWarnings("unchecked")
-        List<Long> ids = ((List<Number>) idsObj).stream().map(Number::longValue).limit(maxBulkSize).toList();
-        if (ids.isEmpty()) {
-            return Mono.just(ResponseEntity.badRequest().build());
-        }
-        log.info("Bulk status update: {} articles → {}", ids.size(), status);
-        return articleAdminService.bulkUpdateStatus(ids, status)
+        List<Long> ids = request.getIds().stream().limit(maxBulkSize).toList();
+        log.info("Bulk status update: {} articles → {}", ids.size(), request.getStatus());
+        return articleAdminService.bulkUpdateStatus(ids, request.getStatus())
                 .map(ResponseEntity::ok);
     }
 

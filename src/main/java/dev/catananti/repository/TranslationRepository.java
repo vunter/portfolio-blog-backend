@@ -1,5 +1,6 @@
 package dev.catananti.repository;
 
+import dev.catananti.util.DigestUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.stereotype.Repository;
@@ -16,13 +17,23 @@ public class TranslationRepository {
 
     /**
      * Get all frontend translations for a locale filtered by visibility tiers.
+     * Uses dynamic IN clause for H2 compatibility (ANY(array) is PostgreSQL-only).
      */
     public Flux<Map<String, String>> findByLocaleAndVisibility(String locale, List<String> visibilities) {
-        return r2dbcTemplate.getDatabaseClient()
-            .sql("SELECT translation_key, value FROM ui_translations WHERE locale = :locale AND namespace = 'frontend' AND visibility = ANY(:vis)")
-            .bind("locale", locale)
-            .bind("vis", visibilities.toArray(new String[0]))
-            .map((row, meta) -> Map.of(
+        StringBuilder sql = new StringBuilder(
+            "SELECT translation_key, \"value\" FROM ui_translations WHERE locale = :locale AND namespace = 'frontend' AND visibility IN (");
+        for (int i = 0; i < visibilities.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append(":vis").append(i);
+        }
+        sql.append(")");
+
+        var query = r2dbcTemplate.getDatabaseClient().sql(sql.toString()).bind("locale", locale);
+        for (int i = 0; i < visibilities.size(); i++) {
+            query = query.bind("vis" + i, visibilities.get(i));
+        }
+
+        return query.map((row, meta) -> Map.of(
                 "key", row.get("translation_key", String.class),
                 "value", row.get("value", String.class)
             ))
@@ -34,7 +45,7 @@ public class TranslationRepository {
      */
     public Flux<Map<String, String>> findBackendByLocale(String locale) {
         return r2dbcTemplate.getDatabaseClient()
-            .sql("SELECT translation_key, value FROM ui_translations WHERE locale = :locale AND namespace = 'backend'")
+            .sql("SELECT translation_key, \"value\" FROM ui_translations WHERE locale = :locale AND namespace = 'backend'")
             .bind("locale", locale)
             .map((row, meta) -> Map.of(
                 "key", row.get("translation_key", String.class),
@@ -49,11 +60,11 @@ public class TranslationRepository {
     public Flux<Map<String, Object>> findAllPaginated(String locale, String namespace, String search, int offset, int limit) {
         String sql;
         if (search != null && !search.isBlank()) {
-            sql = "SELECT id, translation_key, locale, value, namespace, visibility, updated_at FROM ui_translations " +
-                  "WHERE locale = :locale AND namespace = :ns AND (translation_key ILIKE :search OR value ILIKE :search) " +
+            sql = "SELECT id, translation_key, locale, \"value\", namespace, visibility, updated_at FROM ui_translations " +
+                  "WHERE locale = :locale AND namespace = :ns AND (LOWER(translation_key) LIKE LOWER(:search) OR LOWER(\"value\") LIKE LOWER(:search)) " +
                   "ORDER BY translation_key LIMIT :limit OFFSET :offset";
         } else {
-            sql = "SELECT id, translation_key, locale, value, namespace, visibility, updated_at FROM ui_translations " +
+            sql = "SELECT id, translation_key, locale, \"value\", namespace, visibility, updated_at FROM ui_translations " +
                   "WHERE locale = :locale AND namespace = :ns ORDER BY translation_key LIMIT :limit OFFSET :offset";
         }
         var query = r2dbcTemplate.getDatabaseClient().sql(sql)
@@ -63,7 +74,7 @@ public class TranslationRepository {
             .bind("offset", offset);
 
         if (search != null && !search.isBlank()) {
-            query = query.bind("search", "%" + search + "%");
+            query = query.bind("search", "%" + DigestUtils.escapeLikePattern(search) + "%");
         }
 
         return query.map((row, meta) -> {
@@ -82,7 +93,7 @@ public class TranslationRepository {
     public Mono<Long> countAll(String locale, String namespace, String search) {
         String sql;
         if (search != null && !search.isBlank()) {
-            sql = "SELECT COUNT(*) FROM ui_translations WHERE locale = :locale AND namespace = :ns AND (translation_key ILIKE :search OR value ILIKE :search)";
+            sql = "SELECT COUNT(*) FROM ui_translations WHERE locale = :locale AND namespace = :ns AND (LOWER(translation_key) LIKE LOWER(:search) OR LOWER(\"value\") LIKE LOWER(:search))";
         } else {
             sql = "SELECT COUNT(*) FROM ui_translations WHERE locale = :locale AND namespace = :ns";
         }
@@ -91,7 +102,7 @@ public class TranslationRepository {
             .bind("ns", namespace);
 
         if (search != null && !search.isBlank()) {
-            query = query.bind("search", "%" + search + "%");
+            query = query.bind("search", "%" + DigestUtils.escapeLikePattern(search) + "%");
         }
 
         return query.map((row, meta) -> row.get(0, Long.class)).one();
@@ -99,7 +110,7 @@ public class TranslationRepository {
 
     public Mono<Integer> updateValue(Long id, String value) {
         return r2dbcTemplate.getDatabaseClient()
-            .sql("UPDATE ui_translations SET value = :value, updated_at = NOW() WHERE id = :id")
+            .sql("UPDATE ui_translations SET \"value\" = :value, updated_at = NOW() WHERE id = :id")
             .bind("value", value)
             .bind("id", id)
             .fetch().rowsUpdated()
@@ -108,15 +119,15 @@ public class TranslationRepository {
 
     public Mono<Long> insert(long id, String key, String locale, String value, String namespace, String visibility) {
         return r2dbcTemplate.getDatabaseClient()
-            .sql("INSERT INTO ui_translations (id, translation_key, locale, value, namespace, visibility) VALUES (:id, :key, :locale, :value, :ns, :vis) RETURNING id")
+            .sql("INSERT INTO ui_translations (id, translation_key, locale, \"value\", namespace, visibility) VALUES (:id, :key, :locale, :value, :ns, :vis)")
             .bind("id", id)
             .bind("key", key)
             .bind("locale", locale)
             .bind("value", value)
             .bind("ns", namespace)
             .bind("vis", visibility)
-            .map((row, meta) -> row.get("id", Long.class))
-            .one();
+            .fetch().rowsUpdated()
+            .thenReturn(id);
     }
 
     public Mono<Integer> deleteById(Long id) {

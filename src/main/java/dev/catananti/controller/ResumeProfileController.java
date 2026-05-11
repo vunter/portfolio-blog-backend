@@ -41,7 +41,6 @@ public class ResumeProfileController {
 
     private static final Pattern NON_SLUG_CHARS = Pattern.compile("[^a-z0-9]+");
     private static final Pattern LEADING_TRAILING_HYPHENS = Pattern.compile("^-|-$");
-    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
     private static final Set<String> RESPONSE_ONLY_FIELDS = Set.of("id", "ownerId", "locale", "avatarUrl", "createdAt", "updatedAt");
 
     /** F-093: Caffeine cache for email→userId to avoid DB lookup per request (TTL 5 min). */
@@ -50,6 +49,7 @@ public class ResumeProfileController {
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .build();
 
+    private final tools.jackson.databind.ObjectMapper objectMapper;
     private final ResumeProfileService profileService;
     private final PdfGenerationService pdfGenerationService;
     private final PublicResumeService publicResumeService;
@@ -149,10 +149,10 @@ public class ResumeProfileController {
                             try {
                                 // Convert existing response to map, overlay with updates, strip response-only fields
                                 @SuppressWarnings("unchecked")
-                                java.util.Map<String, Object> base = MAPPER.convertValue(existing, java.util.Map.class);
+                                java.util.Map<String, Object> base = objectMapper.convertValue(existing, java.util.Map.class);
                                 base.putAll(updates);
                                 RESPONSE_ONLY_FIELDS.forEach(base::remove);
-                                ResumeProfileRequest merged = MAPPER.convertValue(base, ResumeProfileRequest.class);
+                                ResumeProfileRequest merged = objectMapper.convertValue(base, ResumeProfileRequest.class);
                                 return profileService.saveProfile(userId, merged, locale);
                             } catch (Exception e) {
                                 return Mono.error(new org.springframework.web.server.ResponseStatusException(

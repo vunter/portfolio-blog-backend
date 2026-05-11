@@ -38,6 +38,7 @@ public class PasswordResetService {
     private final IdService idService;
     private final RefreshTokenService refreshTokenService;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
+    private final dev.catananti.scheduler.SchedulerLock schedulerLock;
 
     private static final int TOKEN_LENGTH = 32;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -59,7 +60,8 @@ public class PasswordResetService {
                                  AuditService auditService,
                                  IdService idService,
                                  RefreshTokenService refreshTokenService,
-                                 @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate) {
+                                 @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate,
+                                 dev.catananti.scheduler.SchedulerLock schedulerLock) {
         this.tokenRepository = tokenRepository;
         this.userRepository = userRepository;
         this.emailService = emailService;
@@ -68,6 +70,7 @@ public class PasswordResetService {
         this.idService = idService;
         this.refreshTokenService = refreshTokenService;
         this.redisTemplate = redisTemplate;
+        this.schedulerLock = schedulerLock;
     }
 
     /**
@@ -238,12 +241,14 @@ public class PasswordResetService {
      */
     @Scheduled(fixedRateString = "${scheduling.password-reset-cleanup-ms:21600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public void cleanupExpiredTokens() {
-        try {
-            LocalDateTime cutoff = LocalDateTime.now().minusDays(1);
-            tokenRepository.deleteExpiredTokens(cutoff).block();
-            log.info("Cleaned up expired password reset tokens");
-        } catch (Exception e) {
-            log.error("Failed to cleanup expired password reset tokens: {}", e.getMessage(), e);
-        }
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(1);
+        schedulerLock.executeWithLock("password-reset-cleanup", Duration.ofMinutes(5),
+                tokenRepository.deleteExpiredTokens(cutoff)
+                        .timeout(Duration.ofSeconds(30))
+                        .doOnSuccess(count -> log.info("Cleaned up expired password reset tokens"))
+                        .doOnError(e -> log.error("Failed to cleanup expired password reset tokens: {}", e.getMessage(), e))
+                        .onErrorComplete()
+                        .then()
+        ).subscribe();
     }
 }

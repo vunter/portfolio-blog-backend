@@ -10,11 +10,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Base64;
 
@@ -27,6 +27,7 @@ public class RefreshTokenService {
     private final UserRepository userRepository;
     private final IdService idService;
     private final AuditService auditService;
+    private final dev.catananti.scheduler.SchedulerLock schedulerLock;
 
     @Value("${jwt.refresh-expiration:604800000}") // 7 days default
     private long refreshTokenExpirationMs;
@@ -41,30 +42,30 @@ public class RefreshTokenService {
 
     @Transactional
     public Mono<RefreshToken> createRefreshToken(Long userId, String ipAddress, String userAgent) {
-        return refreshTokenRepository.revokeAllByUserId(userId)
-                .then(Mono.defer(() -> {
-                    String plainToken = generateSecureToken();
-                    String hashedToken = hashToken(plainToken);
-                    
-                    RefreshToken refreshToken = RefreshToken.builder()
-                            .id(idService.nextId())
-                            .userId(userId)
-                            .token(hashedToken)
-                            .expiresAt(LocalDateTime.now().plusSeconds(refreshTokenExpirationMs / 1000))
-                            .createdAt(LocalDateTime.now())
-                            .revoked(false)
-                            .ipAddress(ipAddress)
-                            .userAgent(userAgent != null ? userAgent.substring(0, Math.min(userAgent.length(), 500)) : null)
-                            .deviceName(parseDeviceName(userAgent))
-                            .lastUsedAt(LocalDateTime.now())
-                            .build();
+        // Don't revoke other devices' tokens here — multi-device sessions are a feature, not a bug.
+        // verifyAndRotate() handles per-token rotation safely; the explicit "sign out everywhere"
+        // action is revokeAllUserTokens(), which users can trigger from the security settings page.
+        String plainToken = generateSecureToken();
+        String hashedToken = hashToken(plainToken);
 
-                    return refreshTokenRepository.save(refreshToken)
-                            .map(saved -> {
-                                saved.setToken(plainToken);
-                                return saved;
-                            });
-                }))
+        RefreshToken refreshToken = RefreshToken.builder()
+                .id(idService.nextId())
+                .userId(userId)
+                .token(hashedToken)
+                .expiresAt(LocalDateTime.now().plusSeconds(refreshTokenExpirationMs / 1000))
+                .createdAt(LocalDateTime.now())
+                .revoked(false)
+                .ipAddress(ipAddress)
+                .userAgent(userAgent != null ? userAgent.substring(0, Math.min(userAgent.length(), 500)) : null)
+                .deviceName(parseDeviceName(userAgent))
+                .lastUsedAt(LocalDateTime.now())
+                .build();
+
+        return refreshTokenRepository.save(refreshToken)
+                .map(saved -> {
+                    saved.setToken(plainToken);
+                    return saved;
+                })
                 .doOnSuccess(rt -> log.info("Refresh token created for user: {}", userId));
     }
 
@@ -72,7 +73,7 @@ public class RefreshTokenService {
         return refreshTokenRepository.findByTokenAndRevokedFalse(hashToken(token));
     }
 
-    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    @Transactional
     public Mono<RefreshToken> verifyAndRotate(String token) {
         return verifyAndRotate(token, null, null);
     }
@@ -80,28 +81,37 @@ public class RefreshTokenService {
     @Value("${jwt.refresh-rotation-grace-seconds:10}")
     private int rotationGracePeriodSeconds;
 
-    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    @Transactional
     public Mono<RefreshToken> verifyAndRotate(String token, String ipAddress, String userAgent) {
         String hashedToken = hashToken(token);
         String hashPrefix = hashedToken.substring(0, Math.min(12, hashedToken.length()));
-        return refreshTokenRepository.findByToken(hashedToken)
-                .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.unauthorized")))
-                .flatMap(refreshToken -> {
-                    if (refreshToken.isRevoked()) {
-                        log.warn("Refresh attempt with revoked token hash={}... for user={}", hashPrefix, refreshToken.getUserId());
-                        return handleRevokedTokenReuse(refreshToken, ipAddress, userAgent);
-                    }
 
+        // Revoke the token (returns row count), then fetch it.
+        // Only one concurrent request can win the update; losers get 0 rows.
+        return refreshTokenRepository.revokeByTokenIfActive(hashedToken)
+                .filter(updated -> updated > 0)
+                .flatMap(updated -> refreshTokenRepository.findByToken(hashedToken))
+                .flatMap(refreshToken -> {
                     if (refreshToken.isExpired()) {
                         log.warn("Refresh attempt with expired token hash={}... for user={}", hashPrefix, refreshToken.getUserId());
                         return Mono.error(new SecurityException("error.unauthorized"));
                     }
 
-                    log.info("Token rotation: revoking hash={}... for user={}", hashPrefix, refreshToken.getUserId());
-                    refreshToken.setRevoked(true);
-                    return refreshTokenRepository.save(refreshToken)
-                            .then(rotateRefreshToken(refreshToken, ipAddress, userAgent));
-                });
+                    log.info("Token rotation: revoked hash={}... for user={}", hashPrefix, refreshToken.getUserId());
+                    return rotateRefreshToken(refreshToken, ipAddress, userAgent);
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    // Token was already revoked or doesn't exist — check for grace period reuse
+                    return refreshTokenRepository.findByToken(hashedToken)
+                            .flatMap(revokedToken -> {
+                                if (revokedToken.isRevoked()) {
+                                    log.warn("Refresh attempt with revoked token hash={}... for user={}", hashPrefix, revokedToken.getUserId());
+                                    return handleRevokedTokenReuse(revokedToken, ipAddress, userAgent);
+                                }
+                                return Mono.error(new ResourceNotFoundException("error.unauthorized"));
+                            })
+                            .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.unauthorized")));
+                }));
     }
 
     /**
@@ -208,12 +218,14 @@ public class RefreshTokenService {
 
     @Scheduled(fixedRateString = "${scheduling.refresh-token-cleanup-ms:3600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public void cleanupExpiredTokens() {
-        try {
-            refreshTokenRepository.deleteExpired(LocalDateTime.now()).block();
-            log.info("Expired refresh tokens cleaned up");
-        } catch (Exception e) {
-            log.error("Failed to cleanup expired refresh tokens", e);
-        }
+        schedulerLock.executeWithLock("refresh-token-cleanup", Duration.ofMinutes(5),
+                refreshTokenRepository.deleteExpired(LocalDateTime.now())
+                        .timeout(Duration.ofSeconds(30))
+                        .doOnSuccess(count -> log.info("Expired refresh tokens cleaned up"))
+                        .doOnError(e -> log.error("Failed to cleanup expired refresh tokens", e))
+                        .onErrorComplete()
+                        .then()
+        ).subscribe();
     }
 
     private String generateSecureToken() {

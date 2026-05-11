@@ -42,7 +42,8 @@ class LinkedInImportControllerTest {
 
     @BeforeEach
     void setUp() {
-        LinkedInImportController controller = new LinkedInImportController(portabilityService, oAuth2Service);
+        LinkedInImportController controller = new LinkedInImportController(
+                new tools.jackson.databind.ObjectMapper(), portabilityService, oAuth2Service);
 
         var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
                 List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));

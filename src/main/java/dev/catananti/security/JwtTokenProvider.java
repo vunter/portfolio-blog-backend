@@ -1,6 +1,5 @@
 package dev.catananti.security;
 
-import dev.catananti.util.PiiMasker;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
 import jakarta.annotation.PostConstruct;
@@ -51,15 +50,38 @@ public class JwtTokenProvider {
         log.info("JWT token provider initialized with HS512 algorithm");
     }
 
-    public String generateToken(String email, String role) {
-        log.debug("Generated JWT token for user: {}", PiiMasker.maskEmail(email));
+    /**
+     * Generate a signed JWT for the given user.
+     *
+     * <p>Standard claims:
+     * <ul>
+     *   <li>{@code sub} — opaque user ID (Long), avoiding PII exposure in the token payload</li>
+     *   <li>{@code role} — authorization role, validated against a server-side whitelist on use</li>
+     *   <li>{@code iss} / {@code aud} — issuer/audience, enforced by the parser at validation time</li>
+     *   <li>{@code iat} / {@code exp} — issued-at and immutable expiration (seconds since epoch)</li>
+     *   <li>{@code jti} — random UUID for revocation via blacklist</li>
+     *   <li>{@code auth_time} — original authentication timestamp (matches {@code iat} on first issue;
+     *       carries forward across refresh rotations to support future step-up auth flows)</li>
+     * </ul>
+     */
+    public String generateToken(Long userId, String role) {
+        return generateToken(userId, role, Instant.now());
+    }
+
+    /**
+     * Internal generator that allows preserving an original {@code auth_time} across refresh-rotated tokens.
+     */
+    public String generateToken(Long userId, String role, Instant authTime) {
+        log.debug("Generated JWT token for userId={}", userId);
         var now = Instant.now();
         var expiryDate = now.plusMillis(expiration);
 
         return Jwts.builder()
+                .header().type("JWT").and()
                 .id(UUID.randomUUID().toString())
-                .subject(email)
+                .subject(String.valueOf(userId))
                 .claim("role", role)
+                .claim("auth_time", authTime.getEpochSecond())
                 .issuer("portfolio-blog")
                 .audience().add("portfolio-blog-api").and()
                 .issuedAt(Date.from(now))
@@ -120,12 +142,37 @@ public class JwtTokenProvider {
         return result.valid() ? Optional.ofNullable(result.claims()) : Optional.empty();
     }
 
-    public String getEmailFromToken(String token) {
-        return parseClaims(token).map(Claims::getSubject).orElse(null);
+    /**
+     * Extract the user ID from the {@code sub} claim.
+     * Returns {@code null} if the token is invalid or the subject is not a numeric ID.
+     */
+    public Long getUserIdFromToken(String token) {
+        return parseClaims(token).map(Claims::getSubject).map(s -> {
+            try {
+                return Long.parseLong(s);
+            } catch (NumberFormatException e) {
+                log.warn("JWT subject is not a numeric user id");
+                return null;
+            }
+        }).orElse(null);
     }
 
     public String getRoleFromToken(String token) {
         return parseClaims(token).map(c -> c.get("role", String.class)).orElse(null);
+    }
+
+    /**
+     * Extract the original authentication timestamp ({@code auth_time}, seconds since epoch).
+     * Used by step-up auth flows to decide whether to require re-authentication.
+     * Falls back to {@code iat} for tokens issued before {@code auth_time} was introduced.
+     */
+    public Instant getAuthTimeFromToken(String token) {
+        return parseClaims(token).map(c -> {
+            Long secs = c.get("auth_time", Long.class);
+            if (secs != null) return Instant.ofEpochSecond(secs);
+            var iat = c.getIssuedAt();
+            return iat != null ? iat.toInstant() : null;
+        }).orElse(null);
     }
 
     public boolean validateToken(String token) {

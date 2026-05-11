@@ -3,6 +3,7 @@ package dev.catananti.service;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.Bookmark;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.BookmarkRepository;
@@ -60,7 +61,7 @@ class BookmarkServiceTest {
                 .slug(articleSlug)
                 .title("Test Article")
                 .content("Some content")
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .build();
 
         testBookmark = Bookmark.builder()

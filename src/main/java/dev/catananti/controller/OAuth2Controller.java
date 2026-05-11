@@ -108,8 +108,11 @@ public class OAuth2Controller {
                         }
                         httpResponse.addCookie(accessBuilder.build());
                         httpResponse.addCookie(refreshBuilder.build());
+                        // Coerce to a non-negative long so a malformed expiresIn cannot inject CR/LF
+                        // into the Location header or build a malformed redirect target.
+                        long expiresIn = Math.max(0L, tokenResponse.getExpiresIn());
                         return ResponseEntity.status(HttpStatus.FOUND)
-                                .location(URI.create("/auth/oauth-callback?expires_in=" + tokenResponse.getExpiresIn()))
+                                .location(URI.create("/auth/oauth-callback?expires_in=" + expiresIn))
                                 .<Void>build();
                     });
                 });

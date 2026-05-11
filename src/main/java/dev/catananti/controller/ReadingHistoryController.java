@@ -5,7 +5,7 @@ import dev.catananti.service.ReadingHistoryService;
 import dev.catananti.service.ReadingHistoryService.ReadingHistoryResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
@@ -30,13 +30,15 @@ import reactor.core.publisher.Mono;
 public class ReadingHistoryController {
 
     private final ReadingHistoryService readingHistoryService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping
     @Operation(summary = "Get reading history", description = "Get paginated reading history for the authenticated user")
     public Mono<PageResponse<ReadingHistoryResponse>> getReadingHistory(
             @AuthenticationPrincipal String email,
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
+            @RequestParam(defaultValue = "20") @Min(1) int size) {
+        size = paginationConfig.clampPageSize(size);
         log.debug("Fetching reading history for user: {}", PiiMasker.maskEmail(email));
         return readingHistoryService.getReadingHistory(email, page, size);
     }

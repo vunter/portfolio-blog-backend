@@ -38,7 +38,15 @@ public class User implements Persistable<Long>, NewRecordAware {
     }
     
     private String email;
-    
+
+    /**
+     * Normalize email to lowercase and trim whitespace on set.
+     * Lombok will not generate a setter for this field since one is defined.
+     */
+    public void setEmail(String email) {
+        this.email = email != null ? email.strip().toLowerCase() : null;
+    }
+
     @Column("password_hash")
     private String passwordHash;
     

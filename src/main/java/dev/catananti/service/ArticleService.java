@@ -6,6 +6,7 @@ import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.Tag;
 import dev.catananti.entity.User;
 import dev.catananti.exception.ResourceNotFoundException;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.config.ResilienceConfig;
 import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.repository.ArticleRepository;
@@ -17,6 +18,7 @@ import dev.catananti.repository.UserRepository;
 import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +44,24 @@ public class ArticleService {
     private final CommentRepository commentRepository;
     private final BlogMetrics blogMetrics;
     private final ResilienceConfig resilience;
+    private final PaginationConfig paginationConfig;
+
+    // Q4.2: Route search through Postgres FTS + article_i18n (multi-language) when enabled.
+    // H2 dev/test fall back to LIKE-based methods.
+    @Value("${app.search.use-fts:false}")
+    private boolean useFts;
+
+    private Flux<Article> runSearchQuery(String status, String query, int limit, int offset) {
+        return useFts
+                ? articleRepository.searchByStatusAndQueryFts(status, query, limit, offset)
+                : articleRepository.searchByStatusAndQuery(status, query, limit, offset);
+    }
+
+    private Mono<Long> runSearchCount(String status, String query) {
+        return useFts
+                ? articleRepository.countSearchByStatusAndQueryFts(status, query)
+                : articleRepository.countSearchByStatusAndQuery(status, query);
+    }
 
     // ==================== PUBLIC ENDPOINTS ====================
 
@@ -77,8 +97,8 @@ public class ArticleService {
 
         if (hasSearch) {
             String query = search.trim();
-            articleFlux = articleRepository.searchByStatusAndQuery(status, query, size, offset);
-            countMono = articleRepository.countSearchByStatusAndQuery(status, query);
+            articleFlux = runSearchQuery(status, query, size, offset);
+            countMono = runSearchCount(status, query);
         } else if (hasDateFilter) {
             articleFlux = articleRepository.findByStatusAndDateRangeOrderByPublishedAtDesc(status, from, to, size, offset);
             countMono = articleRepository.countByStatusAndDateRange(status, from, to);
@@ -159,11 +179,11 @@ public class ArticleService {
         // F-291: Sanitize LIKE pattern to prevent wildcard injection
         String sanitizedQuery = DigestUtils.escapeLikePattern(query);
 
-        return articleRepository.searchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery, size, offset)
+        return runSearchQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery, size, offset)
                 .flatMap(article -> applyLocale(article, locale))
                 .collectList()
                 .flatMap(this::enrichArticlesWithMetadata)
-                .zipWith(articleRepository.countSearchByStatusAndQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery))
+                .zipWith(runSearchCount(ArticleStatus.PUBLISHED.name(), sanitizedQuery))
                 .map(tuple -> {
                     var content = tuple.getT1().stream().map(this::mapToResponse).toList();
                     var total = tuple.getT2();
@@ -337,7 +357,7 @@ public class ArticleService {
                         .name(article.getAuthorName() != null ? article.getAuthorName() : "Unknown")
                         .avatarUrl(article.getAuthorAvatarUrl())
                         .build())
-                .status(article.getStatus())
+                .status(article.getStatus().name())
                 .publishedAt(article.getPublishedAt())
                 .scheduledAt(article.getScheduledAt())
                 .readingTimeMinutes(article.getReadingTimeMinutes())
@@ -404,6 +424,6 @@ public class ArticleService {
      * Returns raw Article entities for published articles, ordered by publishedAt desc.
      */
     public Flux<Article> findAllPublishedForFeed() {
-        return articleRepository.findAllPublishedOrderByPublishedAtDesc();
+        return articleRepository.findAllPublishedOrderByPublishedAtDesc(paginationConfig.getFeedMaxItems());
     }
 }

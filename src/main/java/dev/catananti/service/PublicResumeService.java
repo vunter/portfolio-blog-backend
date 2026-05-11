@@ -5,6 +5,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import dev.catananti.config.LocaleConstants;
 import dev.catananti.dto.ResumeProfileResponse;
 import dev.catananti.entity.ResumeTemplate;
+import dev.catananti.entity.ResumeTemplateStatus;
 import dev.catananti.entity.User;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ResumeTemplateRepository;
@@ -233,10 +234,10 @@ public class PublicResumeService {
      */
     private Mono<ResumeTemplate> resolveTemplate(String aliasOrSlug) {
         return resumeTemplateRepository.findByAlias(aliasOrSlug)
-                .filter(t -> "ACTIVE".equals(t.getStatus()))
-                .switchIfEmpty(Mono.defer(() -> 
+                .filter(t -> t.getStatus() == ResumeTemplateStatus.ACTIVE)
+                .switchIfEmpty(Mono.defer(() ->
                     resumeTemplateRepository.findBySlug(aliasOrSlug)
-                            .filter(t -> "ACTIVE".equals(t.getStatus()))
+                            .filter(t -> t.getStatus() == ResumeTemplateStatus.ACTIVE)
                 ));
     }
     

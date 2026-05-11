@@ -4,7 +4,9 @@ import dev.catananti.dto.CommentRequest;
 import dev.catananti.dto.CommentResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.Comment;
+import dev.catananti.entity.CommentStatus;
 import dev.catananti.entity.User;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.metrics.BlogMetrics;
@@ -58,6 +60,9 @@ class CommentServiceTest {
     @Mock
     private ContentModerationService contentModerationService;
 
+    @Mock
+    private dev.catananti.config.PaginationConfig paginationConfig;
+
     @InjectMocks
     private CommentService commentService;
 
@@ -76,7 +81,7 @@ class CommentServiceTest {
                 .slug("test-article")
                 .title("Test Article")
                 .content("Content")
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .build();
 
         testComment = Comment.builder()
@@ -85,9 +90,12 @@ class CommentServiceTest {
                 .authorName("John Doe")
                 .authorEmail("john@example.com")
                 .content("Great article!")
-                .status("APPROVED")
+                .status(CommentStatus.APPROVED)
                 .createdAt(LocalDateTime.now())
                 .build();
+
+        lenient().when(paginationConfig.getCommentTreeMax()).thenReturn(500);
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
     }
 
     @Test
@@ -96,8 +104,10 @@ class CommentServiceTest {
         // Given
         when(articleRepository.findBySlug("test-article"))
                 .thenReturn(Mono.just(testArticle));
-        when(commentRepository.findAllApprovedByArticleId(articleId))
+        when(commentRepository.findApprovedByArticleId(eq(articleId), anyInt()))
                 .thenReturn(Flux.just(testComment));
+        when(commentRepository.findApprovedRepliesByParentIds(any(Long[].class)))
+                .thenReturn(Flux.empty());
 
         // When
         Flux<CommentResponse> result = commentService.getApprovedCommentsByArticleSlug("test-article");
@@ -144,7 +154,7 @@ class CommentServiceTest {
                 .authorName("Jane Doe")
                 .authorEmail("jane@example.com")
                 .content("Nice post!")
-                .status("APPROVED")
+                .status(CommentStatus.APPROVED)
                 .createdAt(LocalDateTime.now())
                 .build();
 
@@ -182,7 +192,7 @@ class CommentServiceTest {
                 .authorName("John Doe")
                 .authorEmail("john@example.com")
                 .content("Great article!")
-                .status("PENDING")
+                .status(CommentStatus.PENDING)
                 .createdAt(LocalDateTime.now())
                 .build();
 
@@ -192,7 +202,7 @@ class CommentServiceTest {
                 .authorName("John Doe")
                 .authorEmail("john@example.com")
                 .content("Great article!")
-                .status("APPROVED")
+                .status(CommentStatus.APPROVED)
                 .createdAt(LocalDateTime.now())
                 .build();
 
@@ -218,7 +228,7 @@ class CommentServiceTest {
         // Given
         Comment rejectedComment = Comment.builder()
                 .id(commentId)
-                .status("REJECTED")
+                .status(CommentStatus.REJECTED)
                 .build();
 
         when(commentRepository.findById(commentId))
@@ -274,7 +284,7 @@ class CommentServiceTest {
     void markAsSpam_ShouldUpdateStatus() {
         Comment spamComment = Comment.builder()
                 .id(commentId).articleId(articleId).authorName("Spammer")
-                .content("Buy stuff").status("SPAM").createdAt(LocalDateTime.now()).build();
+                .content("Buy stuff").status(CommentStatus.SPAM).createdAt(LocalDateTime.now()).build();
 
         when(commentRepository.findById(commentId)).thenReturn(Mono.just(testComment));
         when(commentRepository.save(any(Comment.class))).thenReturn(Mono.just(spamComment));
@@ -328,7 +338,7 @@ class CommentServiceTest {
     @Test
     @DisplayName("Should get all comments by article ID")
     void getAllCommentsByArticleId_ShouldReturnComments() {
-        when(commentRepository.findAllByArticleId(articleId)).thenReturn(Flux.just(testComment));
+        when(commentRepository.findAllByArticleId(eq(articleId), anyInt())).thenReturn(Flux.just(testComment));
 
         StepVerifier.create(commentService.getAllCommentsByArticleId(articleId).collectList())
                 .assertNext(list -> {
@@ -392,7 +402,7 @@ class CommentServiceTest {
         when(commentRepository.findApprovedByArticleIdSortedByLikes(articleId, 10, 0))
                 .thenReturn(Flux.just(testComment));
         when(commentRepository.countApprovedByArticleId(articleId)).thenReturn(Mono.just(1L));
-        when(commentRepository.findApprovedRepliesByParentIds(anyList())).thenReturn(Flux.empty());
+        when(commentRepository.findApprovedRepliesByParentIds(any(Long[].class))).thenReturn(Flux.empty());
 
         StepVerifier.create(commentService.getApprovedCommentsByArticleSlugPaginated("test-article", 0, 10))
                 .assertNext(page -> {
@@ -418,7 +428,7 @@ class CommentServiceTest {
     void createComment_AsReply_ShouldSetParentId() {
         Comment parentComment = Comment.builder()
                 .id(100L).articleId(articleId).authorName("Parent Author")
-                .status("APPROVED").createdAt(LocalDateTime.now()).build();
+                .status(CommentStatus.APPROVED).createdAt(LocalDateTime.now()).build();
 
         CommentRequest request = CommentRequest.builder()
                 .authorName("Reply Author").authorEmail("reply@example.com")
@@ -427,7 +437,7 @@ class CommentServiceTest {
         Comment savedReply = Comment.builder()
                 .id(200L).articleId(articleId).authorName("Reply Author")
                 .authorEmail("reply@example.com").content("This is a reply")
-                .status("APPROVED").parentId(100L).createdAt(LocalDateTime.now()).build();
+                .status(CommentStatus.APPROVED).parentId(100L).createdAt(LocalDateTime.now()).build();
 
         when(articleRepository.findBySlug("test-article")).thenReturn(Mono.just(testArticle));
         when(commentRepository.findById(100L)).thenReturn(Mono.just(parentComment));
@@ -476,7 +486,7 @@ class CommentServiceTest {
         Comment savedComment = Comment.builder()
                 .id(300L).articleId(articleId).authorName("Commenter")
                 .authorEmail("c@example.com").content("Nice!")
-                .status("PENDING").createdAt(LocalDateTime.now()).build();
+                .status(CommentStatus.PENDING).createdAt(LocalDateTime.now()).build();
 
         when(articleRepository.findBySlug("test-article")).thenReturn(Mono.just(testArticle));
         when(commentRepository.save(any(Comment.class))).thenReturn(Mono.just(savedComment));

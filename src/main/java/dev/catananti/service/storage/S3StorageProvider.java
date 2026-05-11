@@ -1,5 +1,8 @@
 package dev.catananti.service.storage;
 
+import dev.catananti.config.ResilienceConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -8,6 +11,8 @@ import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+
+import java.time.Duration;
 
 /**
  * S3-compatible storage provider.
@@ -19,16 +24,21 @@ public class S3StorageProvider implements StorageProvider {
     private final S3AsyncClient s3Client;
     private final String bucket;
     private final String publicUrl;
+    private final Duration timeout;
+    private final CircuitBreaker circuitBreaker;
 
     /**
      * @param s3Client  the async S3 client (configured for MinIO, R2, or AWS S3)
      * @param bucket    the bucket name
      * @param publicUrl the public base URL for accessing objects (e.g., CDN URL or MinIO public endpoint)
+     * @param resilience the resilience configuration for timeouts and circuit breakers
      */
-    public S3StorageProvider(S3AsyncClient s3Client, String bucket, String publicUrl) {
+    public S3StorageProvider(S3AsyncClient s3Client, String bucket, String publicUrl, ResilienceConfig resilience) {
         this.s3Client = s3Client;
         this.bucket = bucket;
         this.publicUrl = publicUrl.endsWith("/") ? publicUrl.substring(0, publicUrl.length() - 1) : publicUrl;
+        this.timeout = resilience.getExternalTimeout();
+        this.circuitBreaker = resilience.getStorageCircuitBreaker();
         log.info("S3StorageProvider initialized: bucket={}, publicUrl={}", bucket, this.publicUrl);
     }
 
@@ -48,7 +58,9 @@ public class S3StorageProvider implements StorageProvider {
                     log.info("File stored in S3: bucket={}, key={}, size={} bytes", bucket, key, data.length);
                     return url;
                 })
-                .subscribeOn(Schedulers.boundedElastic());
+                .subscribeOn(Schedulers.boundedElastic())
+                .timeout(timeout)
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker));
     }
 
     @Override
@@ -61,7 +73,9 @@ public class S3StorageProvider implements StorageProvider {
         return Mono.fromFuture(() -> s3Client.deleteObject(request))
                 .doOnSuccess(_ -> log.info("File deleted from S3: bucket={}, key={}", bucket, key))
                 .then()
-                .subscribeOn(Schedulers.boundedElastic());
+                .subscribeOn(Schedulers.boundedElastic())
+                .timeout(timeout)
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker));
     }
 
     @Override

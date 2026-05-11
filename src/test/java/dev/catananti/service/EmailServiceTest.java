@@ -1,6 +1,7 @@
 package dev.catananti.service;
 
 import dev.catananti.config.ResilienceConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +46,7 @@ class EmailServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(resilience.getEmailCircuitBreaker()).thenReturn(CircuitBreaker.ofDefaults("test-email"));
         emailService = new EmailService(mailSender, resilience, messageSource, templateService, databaseClient, redisTemplate, "smtp", "");
 
         // Stub template rendering – return a minimal HTML for all templates (2-arg and 3-arg overloads)

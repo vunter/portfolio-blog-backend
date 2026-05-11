@@ -1,5 +1,6 @@
 package dev.catananti.service;
 
+import dev.catananti.config.ResilienceConfig;
 import dev.catananti.dto.TokenResponse;
 import dev.catananti.entity.RefreshToken;
 import dev.catananti.entity.User;
@@ -58,6 +59,9 @@ class OAuth2ServiceTest {
     @Mock
     private ReactiveValueOperations<String, String> valueOperations;
 
+    @Mock
+    private ResilienceConfig resilienceConfig;
+
     private OAuth2Service oAuth2Service;
 
     private User testUser;
@@ -67,7 +71,8 @@ class OAuth2ServiceTest {
     void setUp() {
         oAuth2Service = new OAuth2Service(
                 userRepository, socialAccountRepository, refreshTokenService,
-                tokenProvider, idService, auditService, redisTemplate);
+                tokenProvider, idService, auditService, redisTemplate, resilienceConfig,
+                new tools.jackson.databind.ObjectMapper());
 
         // Set @Value fields via reflection
         setField("googleClientId", "google-client-id");

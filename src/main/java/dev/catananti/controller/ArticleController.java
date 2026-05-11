@@ -1,11 +1,14 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
+import dev.catananti.config.LocaleConstants;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.AnalyticsService;
 import dev.catananti.service.ArticleService;
 import dev.catananti.service.InteractionDeduplicationService;
 import dev.catananti.service.ReadingHistoryService;
+import org.springframework.core.env.Environment;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -15,12 +18,15 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDate;
@@ -41,6 +47,21 @@ public class ArticleController {
     private final Optional<InteractionDeduplicationService> deduplicationService;
     private final ReadingHistoryService readingHistoryService;
     private final AnalyticsService analyticsService;
+    private final PaginationConfig paginationConfig;
+    private final Environment environment;
+
+    @PostConstruct
+    void logDeduplicationStatus() {
+        if (deduplicationService.isEmpty()) {
+            if (List.of(environment.getActiveProfiles()).contains("prod")) {
+                throw new IllegalStateException(
+                        "InteractionDeduplicationService is required in production but not available. "
+                        + "Ensure Redis (spring.cache.type=redis) is configured.");
+            }
+            log.warn("InteractionDeduplicationService is NOT available — view/like deduplication is DISABLED. "
+                    + "Enable Redis (spring.cache.type=redis) for production use.");
+        }
+    }
 
     @GetMapping
     @Operation(summary = "Get published articles", description = "Get paginated list of published articles")
@@ -50,12 +71,14 @@ public class ArticleController {
     })
     public Mono<PageResponse<ArticleResponse>> getPublishedArticles(
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size,
+            @RequestParam(defaultValue = "20") @Min(1) int size,
             @RequestParam(required = false) String locale,
             @RequestParam(required = false) String sort,
             @RequestParam(required = false) LocalDate dateFrom,
             @RequestParam(required = false) LocalDate dateTo,
             @RequestParam(required = false) String search) {
+        size = paginationConfig.clampPageSize(size);
+        validateLocale(locale);
         log.debug("Fetching published articles: page={}, size={}, locale={}, search={}", page, size, locale, search);
         return articleService.getPublishedArticles(page, size, locale, sort, dateFrom, dateTo, search);
     }
@@ -69,6 +92,7 @@ public class ArticleController {
     public Mono<ArticleResponse> getArticleBySlug(
             @PathVariable @Size(min = 1, max = 255) @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
             @RequestParam(required = false) String locale) {
+        validateLocale(locale);
         log.info("Fetching article by slug='{}'", slug);
         return articleService.getPublishedArticleBySlug(slug, locale);
     }
@@ -160,8 +184,17 @@ public class ArticleController {
     public Mono<PageResponse<ArticleResponse>> getArticlesByTag(
             @PathVariable @Size(min = 1, max = 100) @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String tagSlug,
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size,
+            @RequestParam(defaultValue = "20") @Min(1) int size,
             @RequestParam(required = false) String locale) {
+        size = paginationConfig.clampPageSize(size);
+        validateLocale(locale);
         return articleService.getArticlesByTag(tagSlug, page, size, locale);
+    }
+
+    private void validateLocale(String locale) {
+        if (locale != null && !LocaleConstants.isSupported(locale)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Unsupported locale: " + locale + ". Supported: " + LocaleConstants.SUPPORTED_LOCALE_CODES);
+        }
     }
 }

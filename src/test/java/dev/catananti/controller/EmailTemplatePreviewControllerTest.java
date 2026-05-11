@@ -109,7 +109,7 @@ class EmailTemplatePreviewControllerTest {
         @Test
         @DisplayName("Should save template override")
         void shouldSaveTemplateOverride() {
-            when(templateService.saveOverride(eq("registration-welcome"), eq("<html>custom</html>"), anyString()))
+            when(templateService.saveOverride(eq("registration-welcome"), anyString(), anyString()))
                     .thenReturn(Mono.empty());
 
             webTestClient

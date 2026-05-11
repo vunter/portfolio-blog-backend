@@ -1,10 +1,12 @@
 package dev.catananti.config;
 
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.WebFilter;
+import reactor.util.context.Context;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -34,8 +36,11 @@ public class RequestLoggingConfig {
             }
             exchange.getResponse().getHeaders().set("X-Correlation-Id", correlationId);
             final String cid = correlationId;
+            // Q13.2: Propagate correlation ID into MDC for structured logging
             return chain.filter(exchange)
-                    .contextWrite(ctx -> ctx.put("correlationId", cid));
+                    .contextWrite(ctx -> ctx.put("correlationId", cid))
+                    .doFirst(() -> MDC.put("correlationId", cid))
+                    .doFinally(signal -> MDC.remove("correlationId"));
         };
     }
 

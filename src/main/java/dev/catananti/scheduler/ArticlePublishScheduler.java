@@ -2,6 +2,7 @@ package dev.catananti.scheduler;
 
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleStatus;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.service.CacheService;
@@ -33,6 +34,7 @@ public class ArticlePublishScheduler {
     private final SubscriberRepository subscriberRepository;
     private final EmailService emailService;
     private final ReactiveStringRedisTemplate redisTemplate;
+    private final PaginationConfig paginationConfig;
 
     /**
      * Check for scheduled articles and publish them.
@@ -58,10 +60,16 @@ public class ArticlePublishScheduler {
                             .flatMap(article -> notifySubscribers(article).thenReturn(article))
                             .doOnNext(article -> log.info("Auto-published scheduled article: {} (scheduled for: {})",
                                     article.getSlug(), article.getScheduledAt()))
-                            .then(cacheService.invalidateAllArticles())
-                            .then(redisTemplate.delete(LOCK_KEY)
-                                    .onErrorResume(e -> reactor.core.publisher.Mono.empty())
-                                    .then());
+                            .collectList()
+                            .flatMap(published -> {
+                                if (!published.isEmpty()) {
+                                    log.info("Published {} scheduled article(s), invalidating cache", published.size());
+                                    return cacheService.invalidateAllArticles();
+                                }
+                                return reactor.core.publisher.Mono.just(0L);
+                            })
+                            .doFinally(signal -> releaseLock().subscribe())
+                            .then();
                 })
                 .subscribe(
                         v -> log.debug("Scheduled articles check completed"),
@@ -70,15 +78,25 @@ public class ArticlePublishScheduler {
     }
 
     private reactor.core.publisher.Mono<Article> publishArticle(Article article) {
-        article.setStatus(ArticleStatus.PUBLISHED.name());
+        article.setStatus(ArticleStatus.PUBLISHED);
         article.setPublishedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
         article.setNewRecord(false);
         return articleRepository.save(article);
     }
 
+    private reactor.core.publisher.Mono<Void> releaseLock() {
+        return redisTemplate.delete(LOCK_KEY)
+                .doOnSuccess(v -> log.debug("Released scheduler lock"))
+                .onErrorResume(e -> {
+                    log.warn("Failed to release scheduler lock: {}", e.getMessage());
+                    return reactor.core.publisher.Mono.empty();
+                })
+                .then();
+    }
+
     private reactor.core.publisher.Mono<Void> notifySubscribers(Article article) {
-        return subscriberRepository.findAllConfirmed()
+        return subscriberRepository.findAllConfirmed(paginationConfig.getBulkQueryMax())
                 .buffer(50)
                 .concatMap(batch -> reactor.core.publisher.Flux.fromIterable(batch)
                         .flatMap(subscriber -> emailService.sendNewArticleNotification(

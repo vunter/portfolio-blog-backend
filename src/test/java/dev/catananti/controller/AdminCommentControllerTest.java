@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.CommentResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.CommentService;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -26,6 +28,9 @@ class AdminCommentControllerTest {
 
     @Mock
     private CommentService commentService;
+
+    @Spy
+    private PaginationConfig paginationConfig = new PaginationConfig();
 
     @InjectMocks
     private AdminCommentController controller;

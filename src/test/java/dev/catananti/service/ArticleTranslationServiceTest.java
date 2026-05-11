@@ -2,6 +2,7 @@ package dev.catananti.service;
 
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleI18n;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.ArticleI18nRepository;
 import dev.catananti.repository.ArticleRepository;
@@ -55,7 +56,7 @@ class ArticleTranslationServiceTest {
                 .seoDescription("SEO Description")
                 .seoKeywords("test, article")
                 .originalLocale("en")
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .build();
 
         testI18n = ArticleI18n.builder()

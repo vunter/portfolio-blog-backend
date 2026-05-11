@@ -292,7 +292,7 @@ class RateLimitingFilterTest {
                 String resetHeader = exchange.getResponse().getHeaders().getFirst("X-RateLimit-Reset");
                 assertThat(resetHeader).isNotNull();
                 long resetTime = Long.parseLong(resetHeader);
-                assertThat(resetTime).isGreaterThan(System.currentTimeMillis());
+                assertThat(resetTime).isGreaterThan(System.currentTimeMillis() / 1000);
             }
         }
 

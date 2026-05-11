@@ -126,32 +126,34 @@ class AdminUserInitializerTest {
     }
 
     @Test
-    @DisplayName("Should handle error during admin creation gracefully")
-    void shouldHandleErrorGracefully() {
+    @DisplayName("Should fail-fast when admin creation errors")
+    void shouldFailFastOnSaveError() {
         when(userRepository.existsByEmail("admin@example.com")).thenReturn(Mono.just(false));
         when(passwordEncoder.encode(anyString())).thenReturn("encoded-password");
         when(idService.nextId()).thenReturn(1L);
         when(userRepository.save(any(User.class)))
                 .thenReturn(Mono.error(new RuntimeException("Database error")));
 
-        // Should not throw - error is handled in subscribe
-        initializer.initializeAdminUser();
-
-        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+        // Initialization is fail-fast by design (see AdminUserInitializer comment:
+        // "application will fail to start"). Surface the error so the container exits.
+        org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> initializer.initializeAdminUser()
+        );
 
         verify(userRepository).save(any(User.class));
     }
 
     @Test
-    @DisplayName("Should handle error from existsByEmail gracefully")
-    void shouldHandleExistsByEmailError() {
+    @DisplayName("Should fail-fast when existsByEmail errors")
+    void shouldFailFastOnExistsByEmailError() {
         when(userRepository.existsByEmail("admin@example.com"))
                 .thenReturn(Mono.error(new RuntimeException("Connection refused")));
 
-        // Should not throw
-        initializer.initializeAdminUser();
-
-        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+        org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> initializer.initializeAdminUser()
+        );
 
         verify(userRepository).existsByEmail("admin@example.com");
         verify(userRepository, never()).save(any(User.class));

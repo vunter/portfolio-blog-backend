@@ -137,6 +137,63 @@ class ResumeEducationServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("mergeEducations")
+    class MergeEducations {
+
+        @Test
+        @DisplayName("should return empty for null input")
+        void shouldReturnEmptyForNull() {
+            StepVerifier.create(educationService.mergeEducations(profileId, null))
+                    .verifyComplete();
+            verifyNoInteractions(educationRepository);
+        }
+
+        @Test
+        @DisplayName("should delete all for empty list")
+        void shouldDeleteAllForEmpty() {
+            when(educationRepository.deleteByProfileId(profileId)).thenReturn(Mono.empty());
+            StepVerifier.create(educationService.mergeEducations(profileId, List.of()))
+                    .verifyComplete();
+            verify(educationRepository).deleteByProfileId(profileId);
+        }
+
+        @Test
+        @DisplayName("should insert new entries")
+        void shouldInsertNew() {
+            when(educationRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.empty());
+            when(idService.nextId()).thenReturn(500L);
+            when(educationRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.EducationEntry.builder().institution("MIT").degree("BSc").build()
+            );
+            StepVerifier.create(educationService.mergeEducations(profileId, incoming))
+                    .verifyComplete();
+            verify(educationRepository).saveAll(anyIterable());
+        }
+
+        @Test
+        @DisplayName("should update existing and delete removed")
+        void shouldUpdateAndDelete() {
+            var existing = ResumeEducation.builder().id(10L).profileId(profileId).institution("Old").degree("BSc")
+                    .sortOrder(0).createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+            var toRemove = ResumeEducation.builder().id(20L).profileId(profileId).institution("Remove").degree("MSc")
+                    .sortOrder(1).createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+
+            when(educationRepository.findByProfileIdOrderBySortOrderAsc(profileId)).thenReturn(Flux.just(existing, toRemove));
+            when(educationRepository.deleteAllById(anyIterable())).thenReturn(Mono.empty());
+            when(educationRepository.saveAll(anyIterable())).thenReturn(Flux.empty());
+
+            var incoming = List.of(
+                    ResumeProfileRequest.EducationEntry.builder().id("10").institution("Updated").degree("PhD").build()
+            );
+            StepVerifier.create(educationService.mergeEducations(profileId, incoming))
+                    .verifyComplete();
+            verify(educationRepository).deleteAllById(anyIterable());
+        }
+    }
+
     // ============================
     // findByProfileId
     // ============================

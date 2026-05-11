@@ -47,7 +47,7 @@ class AnalyticsServiceTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        analyticsService = new AnalyticsService(analyticsRepository, articleRepository, objectMapper, idService, databaseClient, geoIPService);
+        analyticsService = new AnalyticsService(analyticsRepository, articleRepository, objectMapper, idService, databaseClient, geoIPService, new dev.catananti.scheduler.SchedulerLock(null));
 
         // Lenient stubs for DatabaseClient chain used by trackEvent and analytics queries
         lenient().when(databaseClient.sql(anyString())).thenReturn(executeSpec);
@@ -114,8 +114,8 @@ class AnalyticsServiceTest {
         }
 
         @Test
-        @DisplayName("Should ignore event with invalid articleId")
-        void shouldIgnoreInvalidArticleId() {
+        @DisplayName("Should reject event with invalid articleId")
+        void shouldRejectInvalidArticleId() {
             AnalyticsEventRequest request = AnalyticsEventRequest.builder()
                     .articleId(999L)
                     .eventType("VIEW")
@@ -125,8 +125,12 @@ class AnalyticsServiceTest {
 
             when(articleRepository.existsById(999L)).thenReturn(Mono.just(false));
 
+            // trackEvent now surfaces "article not found" as an error rather than
+            // silently dropping the event — see AnalyticsService.trackEvent.
             StepVerifier.create(analyticsService.trackEvent(request, httpRequest))
-                    .verifyComplete();
+                    .expectErrorMatches(e -> e instanceof IllegalArgumentException
+                            && "error.article_not_found".equals(e.getMessage()))
+                    .verify();
 
             verify(executeSpec, never()).then();
         }

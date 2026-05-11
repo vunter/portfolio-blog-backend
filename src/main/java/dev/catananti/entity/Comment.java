@@ -51,7 +51,7 @@ public class Comment implements Persistable<Long>, NewRecordAware {
     private String content;
 
     @Builder.Default
-    private String status = "PENDING"; // PENDING, APPROVED, REJECTED, SPAM
+    private CommentStatus status = CommentStatus.PENDING;
 
     @Column("parent_id")
     private Long parentId;

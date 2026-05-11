@@ -10,8 +10,8 @@ public interface ContactRepository extends ReactiveCrudRepository<Contact, Long>
 
     Mono<Contact> findByPublicId(String publicId);
 
-    @Query("SELECT * FROM contacts ORDER BY created_at DESC LIMIT 100")
-    Flux<Contact> findAllByOrderByCreatedAtDesc();
+    @Query("SELECT * FROM contacts ORDER BY created_at DESC LIMIT :limit")
+    Flux<Contact> findAllByOrderByCreatedAtDesc(int limit);
 
     Flux<Contact> findByReadFalseOrderByCreatedAtDesc();
 

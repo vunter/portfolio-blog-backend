@@ -72,21 +72,25 @@ public class IdempotencyKeyFilter implements WebFilter {
                 .setIfAbsent(redisKey, "processing", ttl)
                 .flatMap(wasSet -> {
                     if (Boolean.TRUE.equals(wasSet)) {
-                        // New key — process the request
+                        // New key — process the request, then update Redis in the chain
                         return chain.filter(exchange)
-                                .doOnSuccess(v -> {
-                                    // Mark as completed after successful processing
+                                .then(Mono.defer(() -> {
                                     HttpStatus status = (HttpStatus) exchange.getResponse().getStatusCode();
                                     String value = "done:" + (status != null ? status.value() : 200);
-                                    redisTemplate.opsForValue()
+                                    return redisTemplate.opsForValue()
                                             .set(redisKey, value, ttl)
-                                            .subscribe();
-                                })
-                                .doOnError(e -> {
-                                    // Remove key on error to allow retries
-                                    redisTemplate.delete(redisKey).subscribe();
+                                            .onErrorResume(e -> {
+                                                log.warn("Failed to update idempotency key {}: {}", idempotencyKey, e.getMessage());
+                                                return Mono.empty();
+                                            })
+                                            .then();
+                                }))
+                                .onErrorResume(e -> {
                                     log.debug("Idempotency key {} removed after error: {}",
                                             idempotencyKey, e.getMessage());
+                                    return redisTemplate.delete(redisKey)
+                                            .onErrorResume(ex -> Mono.empty())
+                                            .then(Mono.error(e));
                                 });
                     }
 

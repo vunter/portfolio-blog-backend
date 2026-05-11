@@ -9,6 +9,7 @@ import dev.catananti.dto.BlogExport;
 import dev.catananti.dto.BlogExport.BlogStats;
 import dev.catananti.dto.BlogExport.TagExportData;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.LocalizedText;
 import dev.catananti.entity.Tag;
 import dev.catananti.repository.ArticleRepository;
@@ -134,8 +135,8 @@ public class ExportImportService {
     private Mono<BlogStats> getBlogStats() {
         return Mono.zip(
                 articleRepository.countAll(),
-                articleRepository.countByStatus("PUBLISHED"),
-                articleRepository.countByStatus("DRAFT"),
+                articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()),
+                articleRepository.countByStatus(ArticleStatus.DRAFT.name()),
                 articleRepository.countScheduled(),
                 tagRepository.count(),
                 articleRepository.sumViewsCount(),
@@ -326,7 +327,7 @@ public class ExportImportService {
                 .content(article.getContent())
                 .excerpt(article.getExcerpt())
                 .coverImageUrl(article.getCoverImageUrl())
-                .status(article.getStatus())
+                .status(article.getStatus().name())
                 .publishedAt(article.getPublishedAt())
                 .scheduledAt(article.getScheduledAt())
                 .readingTimeMinutes(article.getReadingTimeMinutes())
@@ -372,7 +373,8 @@ public class ExportImportService {
         return sb.toString();
     }
 
-    private static final Set<String> ALLOWED_STATUSES = Set.of("DRAFT", "PUBLISHED", "ARCHIVED");
+    private static final Set<ArticleStatus> ALLOWED_STATUSES = Set.of(
+            ArticleStatus.DRAFT, ArticleStatus.PUBLISHED, ArticleStatus.ARCHIVED);
 
     private void updateArticleFromExport(Article article, ArticleExportData data) {
         article.setTitle(sanitizeImportField(data.getTitle()));
@@ -381,8 +383,8 @@ public class ExportImportService {
         article.setExcerpt(sanitizeImportField(data.getExcerpt()));
         article.setCoverImageUrl(data.getCoverImageUrl());
         // F-175: Validate imported article status against allowed values
-        String status = data.getStatus();
-        article.setStatus(status != null && ALLOWED_STATUSES.contains(status) ? status : "DRAFT");
+        ArticleStatus status = ArticleStatus.fromString(data.getStatus(), ArticleStatus.DRAFT);
+        article.setStatus(ALLOWED_STATUSES.contains(status) ? status : ArticleStatus.DRAFT);
         article.setSeoTitle(sanitizeImportField(data.getSeoTitle()));
         article.setSeoDescription(sanitizeImportField(data.getSeoDescription()));
         article.setSeoKeywords(sanitizeImportField(data.getSeoKeywords()));
@@ -398,7 +400,7 @@ public class ExportImportService {
                 .content(htmlSanitizerService.sanitize(data.getContent()))
                 .excerpt(sanitizeImportField(data.getExcerpt()))
                 .coverImageUrl(data.getCoverImageUrl())
-                .status(data.getStatus() != null && ALLOWED_STATUSES.contains(data.getStatus()) ? data.getStatus() : "DRAFT")
+                .status(parseImportStatus(data.getStatus()))
                 .publishedAt(data.getPublishedAt())
                 .scheduledAt(data.getScheduledAt())
                 .readingTimeMinutes(data.getReadingTimeMinutes())
@@ -410,6 +412,11 @@ public class ExportImportService {
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();
+    }
+
+    private ArticleStatus parseImportStatus(String status) {
+        ArticleStatus parsed = ArticleStatus.fromString(status, ArticleStatus.DRAFT);
+        return ALLOWED_STATUSES.contains(parsed) ? parsed : ArticleStatus.DRAFT;
     }
 
     /**

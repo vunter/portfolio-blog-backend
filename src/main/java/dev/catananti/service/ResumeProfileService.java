@@ -490,8 +490,8 @@ public class ResumeProfileService {
             "resume_testimonials", "resume_proficiencies", "resume_projects", "resume_learning_topics"
         };
         return profileRepository.findByOwnerId(ownerId)
-                .flatMap(profile -> Flux.fromArray(tables)
-                        .flatMap(table -> databaseClient.sql(
+                .concatMap(profile -> Flux.fromArray(tables)
+                        .concatMap(table -> databaseClient.sql(
                                 "DELETE FROM " + table + " WHERE profile_id = :pid AND source = 'linkedin'")
                                 .bind("pid", profile.getId())
                                 .fetch()
@@ -622,122 +622,121 @@ public class ResumeProfileService {
         return ops.isEmpty() ? Mono.empty() : Mono.when(ops);
     }
 
+    /**
+     * Loads all child entities for a profile and assembles the full response.
+     * Queries are split into two sequential groups (max 6 concurrent connections each)
+     * to avoid exhausting the R2DBC connection pool under concurrent resume requests.
+     */
     private Mono<ResumeProfileResponse> buildFullResponse(ResumeProfile profile) {
-        var educations = educationService.findByProfileId(profile.getId());
-        var experiences = experienceService.findByProfileId(profile.getId());
-        var skills = skillService.findByProfileId(profile.getId());
+        var pid = profile.getId();
 
-        var languages = languageService.findByProfileId(profile.getId());
+        // Group 1: core resume sections (5 concurrent queries — safe within pool bounds)
+        var group1 = Mono.zip(
+                educationService.findByProfileId(pid),
+                experienceService.findByProfileId(pid),
+                skillService.findByProfileId(pid),
+                languageService.findByProfileId(pid),
+                certificationService.findByProfileId(pid)
+        );
 
-        var certifications = certificationService.findByProfileId(profile.getId());
+        // Group 2 runs AFTER group 1 completes — total peak is 6, not 11
+        return group1.flatMap(t1 -> {
+            var group2 = Mono.zip(
+                    additionalInfoRepository.findByProfileIdOrderBySortOrderAsc(pid)
+                            .map(e -> ResumeProfileResponse.AdditionalInfoResponse.builder()
+                                    .id(String.valueOf(e.getId()))
+                                    .label(e.getLabel())
+                                    .content(e.getContent())
+                                    .sortOrder(e.getSortOrder())
+                                    .build())
+                            .collectList(),
+                    homeCustomizationRepository.findByProfileIdOrderBySortOrderAsc(pid)
+                            .map(e -> ResumeProfileResponse.HomeCustomizationResponse.builder()
+                                    .id(String.valueOf(e.getId()))
+                                    .label(e.getLabel())
+                                    .content(e.getContent())
+                                    .sortOrder(e.getSortOrder())
+                                    .build())
+                            .collectList(),
+                    testimonialRepository.findByProfileIdOrderBySortOrderAsc(pid)
+                            .map(e -> ResumeProfileResponse.TestimonialResponse.builder()
+                                    .id(String.valueOf(e.getId()))
+                                    .authorName(e.getAuthorName())
+                                    .authorRole(e.getAuthorRole())
+                                    .authorCompany(e.getAuthorCompany())
+                                    .authorImageUrl(e.getAuthorImageUrl())
+                                    .text(e.getText())
+                                    .accentColor(e.getAccentColor())
+                                    .sortOrder(e.getSortOrder())
+                                    .build())
+                            .collectList(),
+                    proficiencyRepository.findByProfileIdOrderBySortOrderAsc(pid)
+                            .map(e -> ResumeProfileResponse.ProficiencyResponse.builder()
+                                    .id(String.valueOf(e.getId()))
+                                    .category(e.getCategory())
+                                    .skillName(e.getSkillName())
+                                    .percentage(e.getPercentage())
+                                    .icon(e.getIcon())
+                                    .sortOrder(e.getSortOrder())
+                                    .build())
+                            .collectList(),
+                    projectRepository.findByProfileIdOrderBySortOrderAsc(pid)
+                            .map(e -> ResumeProfileResponse.ProjectResponse.builder()
+                                    .id(String.valueOf(e.getId()))
+                                    .title(e.getTitle())
+                                    .description(e.getDescription())
+                                    .imageUrl(e.getImageUrl())
+                                    .projectUrl(e.getProjectUrl())
+                                    .repoUrl(e.getRepoUrl())
+                                    .techTags(fromJsonArray(e.getTechTags()))
+                                    .featured(e.getFeatured())
+                                    .sortOrder(e.getSortOrder())
+                                    .build())
+                            .collectList(),
+                    learningTopicRepository.findByProfileIdOrderBySortOrderAsc(pid)
+                            .map(e -> ResumeProfileResponse.LearningTopicResponse.builder()
+                                    .id(String.valueOf(e.getId()))
+                                    .title(e.getTitle())
+                                    .emoji(e.getEmoji())
+                                    .description(e.getDescription())
+                                    .colorTheme(e.getColorTheme())
+                                    .sortOrder(e.getSortOrder())
+                                    .build())
+                            .collectList()
+            );
 
-        var additional = additionalInfoRepository.findByProfileIdOrderBySortOrderAsc(profile.getId())
-                .map(e -> ResumeProfileResponse.AdditionalInfoResponse.builder()
-                        .id(String.valueOf(e.getId()))
-                        .label(e.getLabel())
-                        .content(e.getContent())
-                        .sortOrder(e.getSortOrder())
-                        .build())
-                .collectList();
-
-        var homeCustomization = homeCustomizationRepository.findByProfileIdOrderBySortOrderAsc(profile.getId())
-                .map(e -> ResumeProfileResponse.HomeCustomizationResponse.builder()
-                        .id(String.valueOf(e.getId()))
-                        .label(e.getLabel())
-                        .content(e.getContent())
-                        .sortOrder(e.getSortOrder())
-                        .build())
-                .collectList();
-
-        var testimonials = testimonialRepository.findByProfileIdOrderBySortOrderAsc(profile.getId())
-                .map(e -> ResumeProfileResponse.TestimonialResponse.builder()
-                        .id(String.valueOf(e.getId()))
-                        .authorName(e.getAuthorName())
-                        .authorRole(e.getAuthorRole())
-                        .authorCompany(e.getAuthorCompany())
-                        .authorImageUrl(e.getAuthorImageUrl())
-                        .text(e.getText())
-                        .accentColor(e.getAccentColor())
-                        .sortOrder(e.getSortOrder())
-                        .build())
-                .collectList();
-
-        var proficiencies = proficiencyRepository.findByProfileIdOrderBySortOrderAsc(profile.getId())
-                .map(e -> ResumeProfileResponse.ProficiencyResponse.builder()
-                        .id(String.valueOf(e.getId()))
-                        .category(e.getCategory())
-                        .skillName(e.getSkillName())
-                        .percentage(e.getPercentage())
-                        .icon(e.getIcon())
-                        .sortOrder(e.getSortOrder())
-                        .build())
-                .collectList();
-
-        var projects = projectRepository.findByProfileIdOrderBySortOrderAsc(profile.getId())
-                .map(e -> ResumeProfileResponse.ProjectResponse.builder()
-                        .id(String.valueOf(e.getId()))
-                        .title(e.getTitle())
-                        .description(e.getDescription())
-                        .imageUrl(e.getImageUrl())
-                        .projectUrl(e.getProjectUrl())
-                        .repoUrl(e.getRepoUrl())
-                        .techTags(fromJsonArray(e.getTechTags()))
-                        .featured(e.getFeatured())
-                        .sortOrder(e.getSortOrder())
-                        .build())
-                .collectList();
-
-        var learningTopics = learningTopicRepository.findByProfileIdOrderBySortOrderAsc(profile.getId())
-                .map(e -> ResumeProfileResponse.LearningTopicResponse.builder()
-                        .id(String.valueOf(e.getId()))
-                        .title(e.getTitle())
-                        .emoji(e.getEmoji())
-                        .description(e.getDescription())
-                        .colorTheme(e.getColorTheme())
-                        .sortOrder(e.getSortOrder())
-                        .build())
-                .collectList();
-
-        // Mono.zip supports up to 8 args; split into two groups
-        var group1 = Mono.zip(educations, experiences, skills, languages, certifications);
-        var group2 = Mono.zip(additional, homeCustomization, testimonials, proficiencies, projects, learningTopics);
-
-        return Mono.zip(group1, group2)
-                .map(tuple -> {
-                    var t1 = tuple.getT1();
-                    var t2 = tuple.getT2();
-                    return ResumeProfileResponse.builder()
-                        .id(String.valueOf(profile.getId()))
-                        .ownerId(String.valueOf(profile.getOwnerId()))
-                        .locale(profile.getLocale())
-                        .fullName(profile.getFullName())
-                        .title(profile.getTitle())
-                        .email(profile.getEmail())
-                        .phone(profile.getPhone())
-                        .linkedin(profile.getLinkedin())
-                        .github(profile.getGithub())
-                        .website(profile.getWebsite())
-                        .location(profile.getLocation())
-                        .professionalSummary(profile.getProfessionalSummary())
-                        .interests(profile.getInterests())
-                        .workMode(profile.getWorkMode())
-                        .timezone(profile.getTimezone())
-                        .employmentType(profile.getEmploymentType())
-                        .createdAt(profile.getCreatedAt())
-                        .updatedAt(profile.getUpdatedAt())
-                        .educations(t1.getT1())
-                        .experiences(t1.getT2())
-                        .skills(t1.getT3())
-                        .languages(t1.getT4())
-                        .certifications(t1.getT5())
-                        .additionalInfo(t2.getT1())
-                        .homeCustomization(t2.getT2())
-                        .testimonials(t2.getT3())
-                        .proficiencies(t2.getT4())
-                        .projects(t2.getT5())
-                        .learningTopics(t2.getT6())
-                        .build();
-                });
+            return group2.map(t2 -> ResumeProfileResponse.builder()
+                    .id(String.valueOf(profile.getId()))
+                    .ownerId(String.valueOf(profile.getOwnerId()))
+                    .locale(profile.getLocale())
+                    .fullName(profile.getFullName())
+                    .title(profile.getTitle())
+                    .email(profile.getEmail())
+                    .phone(profile.getPhone())
+                    .linkedin(profile.getLinkedin())
+                    .github(profile.getGithub())
+                    .website(profile.getWebsite())
+                    .location(profile.getLocation())
+                    .professionalSummary(profile.getProfessionalSummary())
+                    .interests(profile.getInterests())
+                    .workMode(profile.getWorkMode())
+                    .timezone(profile.getTimezone())
+                    .employmentType(profile.getEmploymentType())
+                    .createdAt(profile.getCreatedAt())
+                    .updatedAt(profile.getUpdatedAt())
+                    .educations(t1.getT1())
+                    .experiences(t1.getT2())
+                    .skills(t1.getT3())
+                    .languages(t1.getT4())
+                    .certifications(t1.getT5())
+                    .additionalInfo(t2.getT1())
+                    .homeCustomization(t2.getT2())
+                    .testimonials(t2.getT3())
+                    .proficiencies(t2.getT4())
+                    .projects(t2.getT5())
+                    .learningTopics(t2.getT6())
+                    .build());
+        });
     }
 
     // ============================================

@@ -5,7 +5,7 @@ import dev.catananti.dto.TagResponse;
 import dev.catananti.service.TagService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
@@ -23,13 +23,15 @@ import reactor.core.publisher.Mono;
 public class TagController {
 
     private final TagService tagService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping
     @Operation(summary = "Get all tags", description = "Retrieve all tags with article counts")
     public Mono<PageResponse<TagResponse>> getAllTags(
             @Parameter(description = "Locale for translations") @RequestParam(required = false) String locale,
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "50") @Min(1) @Max(100) int size) {
+            @RequestParam(defaultValue = "20") @Min(1) int size) {
+        size = paginationConfig.clampPageSize(size);
         log.debug("Fetching all tags: page={}, size={}", page, size);
         return tagService.getAllTagsPaginated(locale, page, size);
     }

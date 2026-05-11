@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.PdfGenerationRequest;
 import dev.catananti.dto.ResumeTemplateRequest;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.core.Authentication;
 import reactor.core.publisher.Mono;
@@ -33,6 +35,9 @@ class ResumeTemplateControllerTest {
     @Mock private ResumeProfileService profileService;
     @Mock private PublicResumeService publicResumeService;
     @Mock private UserService userService;
+
+    @Spy
+    private PaginationConfig paginationConfig = new PaginationConfig();
 
     @InjectMocks
     private ResumeTemplateController controller;

@@ -34,12 +34,16 @@ public class Subscriber implements Persistable<Long>, NewRecordAware {
     @Column("email")
     private String email;
 
+    public void setEmail(String email) {
+        this.email = email != null ? email.strip().toLowerCase() : null;
+    }
+
     @Column("name")
     private String name;
 
     @Column("status")
     @Builder.Default
-    private String status = "PENDING"; // PENDING, CONFIRMED, UNSUBSCRIBED
+    private SubscriberStatus status = SubscriberStatus.PENDING;
 
     @Column("confirmation_token")
     private String confirmationToken;
@@ -61,10 +65,10 @@ public class Subscriber implements Persistable<Long>, NewRecordAware {
     private Boolean analyticsConsent = false;
 
     public boolean isConfirmed() {
-        return "CONFIRMED".equals(status);
+        return status == SubscriberStatus.CONFIRMED;
     }
 
     public boolean isActive() {
-        return "CONFIRMED".equals(status);
+        return status == SubscriberStatus.CONFIRMED;
     }
 }

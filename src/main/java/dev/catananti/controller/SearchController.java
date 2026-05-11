@@ -1,12 +1,13 @@
 package dev.catananti.controller;
 
+import dev.catananti.config.LocaleConstants;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.SearchRequest;
 import dev.catananti.service.SearchService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -15,7 +16,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDate;
@@ -30,6 +33,7 @@ import java.util.List;
 public class SearchController {
 
     private final SearchService searchService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping
     @Operation(summary = "Search articles", description = "Search published articles with filters and pagination")
@@ -39,11 +43,16 @@ public class SearchController {
             @RequestParam(defaultValue = "date") @Pattern(regexp = "^(date|title|viewCount|views|likes)$", message = "Invalid sortBy value") String sortBy,
             @RequestParam(defaultValue = "desc") @Pattern(regexp = "^(asc|desc)$", message = "sortOrder must be 'asc' or 'desc'") String sortOrder,
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "10") @Min(1) @Max(50) int size,
+            @RequestParam(defaultValue = "20") @Min(1) int size,
             @RequestParam(required = false) String locale,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
             ServerHttpRequest httpRequest) {
+        size = paginationConfig.clampPageSize(size);
+        if (locale != null && !LocaleConstants.isSupported(locale)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Unsupported locale: " + locale + ". Supported: " + LocaleConstants.SUPPORTED_LOCALE_CODES);
+        }
         log.debug("Search request: query='{}', page={}, size={}", q, page, size);
         log.debug("[search-analytics] term='{}' tags={} sortBy={} page={}", q, tags, sortBy, page);
 

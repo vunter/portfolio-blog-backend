@@ -32,6 +32,10 @@ public class ResilienceConfig {
     private final Duration databaseRetryMinBackoff;
     private final Duration databaseRetryMaxBackoff;
     private final CircuitBreaker databaseCircuitBreaker;
+    private final CircuitBreaker oauthCircuitBreaker;
+    private final CircuitBreaker cloudflareCircuitBreaker;
+    private final CircuitBreaker emailCircuitBreaker;
+    private final CircuitBreaker storageCircuitBreaker;
 
     public ResilienceConfig(
             @Value("${resilience.database.timeout-seconds:10}") int databaseTimeoutSeconds,
@@ -43,7 +47,11 @@ public class ResilienceConfig {
             @Value("${resilience.database.cb-failure-rate:50}") int cbFailureRate,
             @Value("${resilience.database.cb-wait-open-seconds:30}") int cbWaitOpenSeconds,
             @Value("${resilience.database.cb-sliding-window-size:10}") int cbSlidingWindowSize,
-            @Value("${resilience.database.cb-min-calls:5}") int cbMinCalls
+            @Value("${resilience.database.cb-min-calls:5}") int cbMinCalls,
+            @Value("${resilience.external.cb-failure-rate:50}") int extCbFailureRate,
+            @Value("${resilience.external.cb-wait-open-seconds:60}") int extCbWaitOpenSeconds,
+            @Value("${resilience.external.cb-sliding-window-size:10}") int extCbSlidingWindowSize,
+            @Value("${resilience.external.cb-min-calls:3}") int extCbMinCalls
     ) {
         this.databaseTimeout = Duration.ofSeconds(databaseTimeoutSeconds);
         this.redisTimeout = Duration.ofSeconds(redisTimeoutSeconds);
@@ -53,13 +61,25 @@ public class ResilienceConfig {
         this.databaseRetryMaxBackoff = Duration.ofMillis(databaseRetryMaxBackoffMs);
 
         // Q9.2: Circuit breaker for database operations — fast-fails when DB is down
-        CircuitBreakerConfig cbConfig = CircuitBreakerConfig.custom()
+        CircuitBreakerConfig dbCbConfig = CircuitBreakerConfig.custom()
                 .failureRateThreshold(cbFailureRate)
                 .waitDurationInOpenState(Duration.ofSeconds(cbWaitOpenSeconds))
                 .slidingWindowSize(cbSlidingWindowSize)
                 .minimumNumberOfCalls(cbMinCalls)
                 .build();
-        this.databaseCircuitBreaker = CircuitBreaker.of("database", cbConfig);
+        this.databaseCircuitBreaker = CircuitBreaker.of("database", dbCbConfig);
+
+        // Q3.4: Circuit breakers for external services
+        CircuitBreakerConfig extCbConfig = CircuitBreakerConfig.custom()
+                .failureRateThreshold(extCbFailureRate)
+                .waitDurationInOpenState(Duration.ofSeconds(extCbWaitOpenSeconds))
+                .slidingWindowSize(extCbSlidingWindowSize)
+                .minimumNumberOfCalls(extCbMinCalls)
+                .build();
+        this.oauthCircuitBreaker = CircuitBreaker.of("oauth2", extCbConfig);
+        this.cloudflareCircuitBreaker = CircuitBreaker.of("cloudflare", extCbConfig);
+        this.emailCircuitBreaker = CircuitBreaker.of("email", extCbConfig);
+        this.storageCircuitBreaker = CircuitBreaker.of("storage", extCbConfig);
 
         log.info("Resilience configuration initialized (DB circuit breaker: failureRate={}%, window={}, waitOpen={}s)",
                 cbFailureRate, cbSlidingWindowSize, cbWaitOpenSeconds);

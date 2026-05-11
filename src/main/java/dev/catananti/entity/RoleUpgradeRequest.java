@@ -41,10 +41,9 @@ public class RoleUpgradeRequest implements Persistable<Long>, NewRecordAware {
     @Column("reason")
     private String reason;
 
-    /** PENDING, APPROVED, REJECTED */
     @Column("status")
     @Builder.Default
-    private String status = "PENDING";
+    private RoleUpgradeRequestStatus status = RoleUpgradeRequestStatus.PENDING;
 
     @Column("reviewed_by")
     private Long reviewedBy;

@@ -1,5 +1,6 @@
 package dev.catananti.scheduler;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.Subscriber;
@@ -49,6 +50,9 @@ class ArticlePublishSchedulerTest {
     @Mock
     private ReactiveValueOperations<String, String> valueOps;
 
+    @Mock
+    private PaginationConfig paginationConfig;
+
     private ArticlePublishScheduler scheduler;
 
     @BeforeEach
@@ -56,7 +60,8 @@ class ArticlePublishSchedulerTest {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
         lenient().when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
         lenient().when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
-        scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService, redisTemplate);
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
+        scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService, redisTemplate, paginationConfig);
     }
 
     @Nested
@@ -71,7 +76,7 @@ class ArticlePublishSchedulerTest {
                     .slug("test-article")
                     .title("Test Article")
                     .excerpt("Test excerpt")
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .scheduledAt(LocalDateTime.now().minusMinutes(5))
                     .build();
 
@@ -79,7 +84,7 @@ class ArticlePublishSchedulerTest {
                     .thenReturn(Flux.just(article));
             when(articleRepository.save(any(Article.class)))
                     .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
-            when(subscriberRepository.findAllConfirmed())
+            when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.empty());
             when(cacheService.invalidateAllArticles())
                     .thenReturn(Mono.empty());
@@ -94,7 +99,7 @@ class ArticlePublishSchedulerTest {
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
             Article saved = captor.getValue();
-            assertThat(saved.getStatus()).isEqualTo(ArticleStatus.PUBLISHED.name());
+            assertThat(saved.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
             assertThat(saved.getPublishedAt()).isNotNull();
             assertThat(saved.getUpdatedAt()).isNotNull();
         }
@@ -107,7 +112,7 @@ class ArticlePublishSchedulerTest {
                     .slug("notify-test")
                     .title("Notify Article")
                     .excerpt("Notify excerpt")
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .scheduledAt(LocalDateTime.now().minusMinutes(1))
                     .build();
 
@@ -122,7 +127,7 @@ class ArticlePublishSchedulerTest {
                     .thenReturn(Flux.just(article));
             when(articleRepository.save(any(Article.class)))
                     .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
-            when(subscriberRepository.findAllConfirmed())
+            when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.just(subscriber));
             when(emailService.sendNewArticleNotification(
                     anyString(), anyString(), anyString(), anyString(), any(), anyString()))
@@ -152,7 +157,7 @@ class ArticlePublishSchedulerTest {
                     .slug("cache-test")
                     .title("Cache Article")
                     .excerpt("excerpt")
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .scheduledAt(LocalDateTime.now().minusMinutes(1))
                     .build();
 
@@ -160,7 +165,7 @@ class ArticlePublishSchedulerTest {
                     .thenReturn(Flux.just(article));
             when(articleRepository.save(any(Article.class)))
                     .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
-            when(subscriberRepository.findAllConfirmed())
+            when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.empty());
             when(cacheService.invalidateAllArticles())
                     .thenReturn(Mono.empty());
@@ -177,9 +182,6 @@ class ArticlePublishSchedulerTest {
         void shouldHandleErrors() throws InterruptedException {
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.error(new RuntimeException("DB connection lost")));
-            // .then() eagerly evaluates its argument during assembly, so stub is needed
-            when(cacheService.invalidateAllArticles())
-                    .thenReturn(Mono.empty());
 
             // Should not throw
             scheduler.publishScheduledArticles();
@@ -195,8 +197,6 @@ class ArticlePublishSchedulerTest {
         void shouldDoNothingWhenNoArticles() throws InterruptedException {
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.empty());
-            when(cacheService.invalidateAllArticles())
-                    .thenReturn(Mono.empty());
 
             scheduler.publishScheduledArticles();
 
@@ -216,7 +216,7 @@ class ArticlePublishSchedulerTest {
                     .slug("email-fail-test")
                     .title("Email Fail Article")
                     .excerpt("excerpt")
-                    .status("SCHEDULED")
+                    .status(ArticleStatus.SCHEDULED)
                     .scheduledAt(LocalDateTime.now().minusMinutes(1))
                     .build();
 
@@ -231,7 +231,7 @@ class ArticlePublishSchedulerTest {
                     .thenReturn(Flux.just(article));
             when(articleRepository.save(any(Article.class)))
                     .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
-            when(subscriberRepository.findAllConfirmed())
+            when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.just(subscriber));
             when(emailService.sendNewArticleNotification(
                     anyString(), anyString(), anyString(), anyString(), any(), anyString()))

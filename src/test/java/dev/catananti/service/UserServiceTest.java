@@ -23,8 +23,10 @@ import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -58,6 +60,9 @@ class UserServiceTest {
     @Mock
     private RefreshTokenService refreshTokenService;
 
+    @Mock
+    private dev.catananti.config.PaginationConfig paginationConfig;
+
     @InjectMocks
     private UserService userService;
 
@@ -67,6 +72,7 @@ class UserServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
 
         testUserId = 1234567890123456789L;
         testUser = User.builder()
@@ -210,7 +216,7 @@ class UserServiceTest {
     @Test
     @DisplayName("Should get users by role")
     void shouldGetUsersByRole() {
-        when(userRepository.findByRole("ADMIN")).thenReturn(Flux.just(testUser));
+        when(userRepository.findByRole(eq("ADMIN"), anyInt())).thenReturn(Flux.just(testUser));
 
         StepVerifier.create(userService.getUsersByRole("ADMIN").collectList())
                 .assertNext(users -> {

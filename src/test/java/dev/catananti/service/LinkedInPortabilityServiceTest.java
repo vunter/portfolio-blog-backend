@@ -30,7 +30,7 @@ class LinkedInPortabilityServiceTest {
         valueOps = mock(ReactiveValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
 
-        service = new LinkedInPortabilityService(redisTemplate);
+        service = new LinkedInPortabilityService(redisTemplate, new tools.jackson.databind.ObjectMapper());
 
         setField("clientId", "test-client-id");
         setField("clientSecret", "test-client-secret");

@@ -32,6 +32,6 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
 
     Mono<Void> deleteByArticleId(Long articleId);
 
-    @Query("DELETE FROM analytics_events WHERE created_at < :cutoff")
-    Mono<Void> deleteByCreatedAtBefore(LocalDateTime cutoff);
+    @Query("DELETE FROM analytics_events WHERE id IN (SELECT id FROM analytics_events WHERE created_at < :cutoff LIMIT 10000)")
+    Mono<Long> deleteByCreatedAtBefore(LocalDateTime cutoff);
 }

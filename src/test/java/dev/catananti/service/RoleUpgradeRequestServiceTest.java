@@ -1,7 +1,9 @@
 package dev.catananti.service;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.RoleUpgradeRequestDto;
 import dev.catananti.entity.RoleUpgradeRequest;
+import dev.catananti.entity.RoleUpgradeRequestStatus;
 import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
 import dev.catananti.exception.ResourceNotFoundException;
@@ -35,6 +37,7 @@ class RoleUpgradeRequestServiceTest {
     @Mock private IdService idService;
     @Mock private HtmlSanitizerService htmlSanitizerService;
     @Mock private EmailService emailService;
+    @Mock private PaginationConfig paginationConfig;
 
     private RoleUpgradeRequestService service;
 
@@ -43,9 +46,10 @@ class RoleUpgradeRequestServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
         service = new RoleUpgradeRequestService(
                 roleUpgradeRequestRepository, userRepository, userService,
-                idService, htmlSanitizerService, emailService);
+                idService, htmlSanitizerService, emailService, paginationConfig);
 
         viewerUser = User.builder()
                 .id(100L).email("viewer@test.com").name("Viewer User").role("VIEWER").build();
@@ -67,7 +71,7 @@ class RoleUpgradeRequestServiceTest {
             when(roleUpgradeRequestRepository.findPendingByUserId(100L)).thenReturn(Mono.empty());
             when(roleUpgradeRequestRepository.save(any(RoleUpgradeRequest.class)))
                     .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-            when(userRepository.findByRole("ADMIN")).thenReturn(Flux.just(adminUser));
+            when(userRepository.findByRole(eq("ADMIN"), anyInt())).thenReturn(Flux.just(adminUser));
             when(emailService.sendRoleUpgradeNotification(anyString(), anyString(), anyString(), anyString(), any()))
                     .thenReturn(Mono.empty());
 
@@ -86,7 +90,7 @@ class RoleUpgradeRequestServiceTest {
         void shouldRejectDuplicatePendingRequest() {
             when(userRepository.findByEmail("viewer@test.com")).thenReturn(Mono.just(viewerUser));
             when(roleUpgradeRequestRepository.findPendingByUserId(100L))
-                    .thenReturn(Mono.just(RoleUpgradeRequest.builder().id(1L).status("PENDING").build()));
+                    .thenReturn(Mono.just(RoleUpgradeRequest.builder().id(1L).status(RoleUpgradeRequestStatus.PENDING).build()));
 
             var dto = new RoleUpgradeRequestDto("DEV", "reason");
 
@@ -131,7 +135,7 @@ class RoleUpgradeRequestServiceTest {
         @DisplayName("should approve pending request and update user role")
         void shouldApprovePendingRequest() {
             var request = RoleUpgradeRequest.builder()
-                    .id(5001L).userId(100L).requestedRole("DEV").status("PENDING")
+                    .id(5001L).userId(100L).requestedRole("DEV").status(RoleUpgradeRequestStatus.PENDING)
                     .createdAt(LocalDateTime.now()).build();
 
             when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(adminUser));
@@ -157,7 +161,7 @@ class RoleUpgradeRequestServiceTest {
         @DisplayName("should reject approval of non-pending request")
         void shouldRejectApprovalOfNonPending() {
             var request = RoleUpgradeRequest.builder()
-                    .id(5001L).userId(100L).requestedRole("DEV").status("APPROVED")
+                    .id(5001L).userId(100L).requestedRole("DEV").status(RoleUpgradeRequestStatus.APPROVED)
                     .createdAt(LocalDateTime.now()).build();
 
             when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(adminUser));
@@ -177,7 +181,7 @@ class RoleUpgradeRequestServiceTest {
         @DisplayName("should reject pending request")
         void shouldRejectPendingRequest() {
             var request = RoleUpgradeRequest.builder()
-                    .id(5001L).userId(100L).requestedRole("DEV").status("PENDING")
+                    .id(5001L).userId(100L).requestedRole("DEV").status(RoleUpgradeRequestStatus.PENDING)
                     .createdAt(LocalDateTime.now()).build();
 
             when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(adminUser));

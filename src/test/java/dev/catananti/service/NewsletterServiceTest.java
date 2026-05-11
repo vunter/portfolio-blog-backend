@@ -4,6 +4,7 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.SubscribeRequest;
 import dev.catananti.dto.SubscriberResponse;
 import dev.catananti.entity.Subscriber;
+import dev.catananti.entity.SubscriberStatus;
 import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.SubscriberRepository;
@@ -36,6 +37,7 @@ class NewsletterServiceTest {
     @Mock private HtmlSanitizerService htmlSanitizerService;
     @Mock private NotificationEventService notificationEventService;
     @Mock private dev.catananti.metrics.BlogMetrics blogMetrics;
+    @Mock private dev.catananti.config.PaginationConfig paginationConfig;
 
     @InjectMocks
     private NewsletterService newsletterService;
@@ -43,6 +45,7 @@ class NewsletterServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
 
         ReflectionTestUtils.setField(newsletterService, "siteUrl", "https://catananti.dev");
         ReflectionTestUtils.setField(newsletterService, "confirmationExpirationHours", 48);
@@ -83,7 +86,7 @@ class NewsletterServiceTest {
             Subscriber confirmed = Subscriber.builder()
                     .id(4001L)
                     .email("existing@example.com")
-                    .status("CONFIRMED")
+                    .status(SubscriberStatus.CONFIRMED)
                     .build();
 
             when(subscriberRepository.findByEmail("existing@example.com"))
@@ -109,7 +112,7 @@ class NewsletterServiceTest {
             Subscriber unsubscribed = Subscriber.builder()
                     .id(4002L)
                     .email("unsub@example.com")
-                    .status("UNSUBSCRIBED")
+                    .status(SubscriberStatus.UNSUBSCRIBED)
                     .unsubscribedAt(LocalDateTime.now().minusDays(10))
                     .build();
 
@@ -144,7 +147,7 @@ class NewsletterServiceTest {
                     .id(4001L)
                     .email("pending@example.com")
                     .name("Pending User")
-                    .status("PENDING")
+                    .status(SubscriberStatus.PENDING)
                     .confirmationToken("valid-token-123")
                     .createdAt(LocalDateTime.now().minusHours(1))
                     .build();
@@ -169,7 +172,7 @@ class NewsletterServiceTest {
             Subscriber confirmed = Subscriber.builder()
                     .id(4001L)
                     .email("confirmed@example.com")
-                    .status("CONFIRMED")
+                    .status(SubscriberStatus.CONFIRMED)
                     .confirmationToken("old-token")
                     .build();
 
@@ -189,7 +192,7 @@ class NewsletterServiceTest {
             Subscriber expired = Subscriber.builder()
                     .id(4001L)
                     .email("expired@example.com")
-                    .status("PENDING")
+                    .status(SubscriberStatus.PENDING)
                     .confirmationToken("expired-token")
                     .createdAt(LocalDateTime.now().minusHours(72)) // > 48h expiration
                     .build();
@@ -224,7 +227,7 @@ class NewsletterServiceTest {
             Subscriber active = Subscriber.builder()
                     .id(4001L)
                     .email("active@example.com")
-                    .status("CONFIRMED")
+                    .status(SubscriberStatus.CONFIRMED)
                     .build();
 
             when(subscriberRepository.findByEmail("active@example.com"))
@@ -261,7 +264,7 @@ class NewsletterServiceTest {
             Subscriber active = Subscriber.builder()
                     .id(4001L)
                     .email("active@example.com")
-                    .status("CONFIRMED")
+                    .status(SubscriberStatus.CONFIRMED)
                     .confirmationToken("unsub-token")
                     .build();
 
@@ -309,15 +312,15 @@ class NewsletterServiceTest {
         @DisplayName("Should return all subscribers filtered by status")
         void shouldFilterByStatus() {
             Subscriber sub = Subscriber.builder()
-                    .id(4001L).email("sub@example.com").status("CONFIRMED").build();
+                    .id(4001L).email("sub@example.com").status(SubscriberStatus.CONFIRMED).build();
 
-            when(subscriberRepository.findByStatus("CONFIRMED"))
+            when(subscriberRepository.findByStatus(eq("CONFIRMED"), anyInt()))
                     .thenReturn(Flux.just(sub));
 
             StepVerifier.create(newsletterService.getAllSubscribers("confirmed").collectList())
                     .assertNext(subs -> {
                         assertThat(subs).hasSize(1);
-                        assertThat(subs.getFirst().getStatus()).isEqualTo("CONFIRMED");
+                        assertThat(subs.getFirst().getStatus()).isEqualTo(SubscriberStatus.CONFIRMED);
                     })
                     .verifyComplete();
         }
@@ -342,10 +345,10 @@ class NewsletterServiceTest {
         void shouldReturnPaginatedWithoutFilter() {
             Subscriber sub1 = Subscriber.builder()
                     .id(4001L).email("sub1@example.com").name("Sub One")
-                    .status("CONFIRMED").createdAt(LocalDateTime.now()).build();
+                    .status(SubscriberStatus.CONFIRMED).createdAt(LocalDateTime.now()).build();
             Subscriber sub2 = Subscriber.builder()
                     .id(4002L).email("sub2@example.com").name("Sub Two")
-                    .status("PENDING").createdAt(LocalDateTime.now()).build();
+                    .status(SubscriberStatus.PENDING).createdAt(LocalDateTime.now()).build();
 
             when(subscriberRepository.findAllPaginated(10, 0))
                     .thenReturn(Flux.just(sub1, sub2));
@@ -367,7 +370,7 @@ class NewsletterServiceTest {
         void shouldReturnPaginatedWithStatusFilter() {
             Subscriber confirmed = Subscriber.builder()
                     .id(4001L).email("confirmed@example.com").name("Confirmed")
-                    .status("CONFIRMED").createdAt(LocalDateTime.now()).build();
+                    .status(SubscriberStatus.CONFIRMED).createdAt(LocalDateTime.now()).build();
 
             when(subscriberRepository.findByStatusPaginated("CONFIRMED", 10, 0))
                     .thenReturn(Flux.just(confirmed));
@@ -386,7 +389,7 @@ class NewsletterServiceTest {
         void shouldFilterByEmail() {
             Subscriber sub1 = Subscriber.builder()
                     .id(4001L).email("joao@example.com").name("João")
-                    .status("CONFIRMED").createdAt(LocalDateTime.now()).build();
+                    .status(SubscriberStatus.CONFIRMED).createdAt(LocalDateTime.now()).build();
 
             when(subscriberRepository.findByEmailContainingPaginated("joao", 10, 0))
                     .thenReturn(Flux.just(sub1));
@@ -405,7 +408,7 @@ class NewsletterServiceTest {
         void shouldFilterByStatusAndEmail() {
             Subscriber sub1 = Subscriber.builder()
                     .id(4001L).email("joao@example.com").name("João")
-                    .status("CONFIRMED").createdAt(LocalDateTime.now()).build();
+                    .status(SubscriberStatus.CONFIRMED).createdAt(LocalDateTime.now()).build();
 
             when(subscriberRepository.findByStatusAndEmailContainingPaginated("CONFIRMED", "joao", 10, 0))
                     .thenReturn(Flux.just(sub1));
@@ -432,7 +435,7 @@ class NewsletterServiceTest {
             Subscriber active = Subscriber.builder()
                     .id(4001L)
                     .email("active@example.com")
-                    .status("CONFIRMED")
+                    .status(SubscriberStatus.CONFIRMED)
                     .unsubscribeToken("real-unsub-token")
                     .build();
 
@@ -450,7 +453,7 @@ class NewsletterServiceTest {
                     .verifyComplete();
 
             verify(subscriberRepository).save(argThat(s ->
-                    "UNSUBSCRIBED".equals(s.getStatus()) && s.getUnsubscribedAt() != null));
+                    SubscriberStatus.UNSUBSCRIBED == s.getStatus() && s.getUnsubscribedAt() != null));
         }
 
         @Test
@@ -512,11 +515,11 @@ class NewsletterServiceTest {
         @DisplayName("Should return all confirmed subscribers")
         void shouldReturnConfirmedSubscribers() {
             Subscriber sub1 = Subscriber.builder()
-                    .id(1L).email("one@example.com").status("CONFIRMED").build();
+                    .id(1L).email("one@example.com").status(SubscriberStatus.CONFIRMED).build();
             Subscriber sub2 = Subscriber.builder()
-                    .id(2L).email("two@example.com").status("CONFIRMED").build();
+                    .id(2L).email("two@example.com").status(SubscriberStatus.CONFIRMED).build();
 
-            when(subscriberRepository.findAllConfirmed()).thenReturn(Flux.just(sub1, sub2));
+            when(subscriberRepository.findAllConfirmed(anyInt())).thenReturn(Flux.just(sub1, sub2));
 
             StepVerifier.create(newsletterService.getActiveSubscribers().collectList())
                     .assertNext(subs -> {
@@ -538,7 +541,7 @@ class NewsletterServiceTest {
             Subscriber expiredPending = Subscriber.builder()
                     .id(4003L)
                     .email("pending@example.com")
-                    .status("PENDING")
+                    .status(SubscriberStatus.PENDING)
                     .confirmationToken("old-token")
                     .createdAt(LocalDateTime.now().minusHours(72)) // > 48h expiration
                     .build();
@@ -572,7 +575,7 @@ class NewsletterServiceTest {
             Subscriber pendingNotExpired = Subscriber.builder()
                     .id(4004L)
                     .email("pending2@example.com")
-                    .status("PENDING")
+                    .status(SubscriberStatus.PENDING)
                     .confirmationToken("still-valid-token")
                     .createdAt(LocalDateTime.now().minusHours(1)) // Not expired
                     .build();

@@ -4,6 +4,7 @@ import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.SearchRequest;
 import dev.catananti.entity.Article;
+import dev.catananti.entity.ArticleStatus;
 import dev.catananti.entity.User;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.CommentRepository;
@@ -92,7 +93,7 @@ class SearchServiceTest {
                 .content("Article content about Java")
                 .excerpt("Short excerpt")
                 .authorId(100L)
-                .status("PUBLISHED")
+                .status(ArticleStatus.PUBLISHED)
                 .publishedAt(LocalDateTime.now().minusDays(1))
                 .readingTimeMinutes(5)
                 .viewsCount(100)

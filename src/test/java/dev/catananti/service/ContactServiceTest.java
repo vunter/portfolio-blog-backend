@@ -1,5 +1,6 @@
 package dev.catananti.service;
 
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.ContactRequest;
 import dev.catananti.dto.ContactResponse;
 import dev.catananti.dto.PageResponse;
@@ -34,6 +35,7 @@ class ContactServiceTest {
     @Mock private HtmlSanitizerService htmlSanitizerService;
     @Mock private IdService idService;
     @Mock private NotificationEventService notificationEventService;
+    @Mock private PaginationConfig paginationConfig;
 
     private ContactService contactService;
 
@@ -43,8 +45,10 @@ class ContactServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
+        lenient().when(paginationConfig.getContactListMax()).thenReturn(100);
 
-        contactService = new ContactService(contactRepository, emailService, htmlSanitizerService, idService, notificationEventService, "test@example.com");
+        contactService = new ContactService(contactRepository, emailService, htmlSanitizerService, idService, notificationEventService, paginationConfig, "test@example.com");
         publicId = UUID.randomUUID().toString();
         testContact = Contact.builder()
                 .id(3001L)
@@ -108,7 +112,7 @@ class ContactServiceTest {
                     .read(true).createdAt(LocalDateTime.now().minusDays(5))
                     .build();
 
-            when(contactRepository.findAllByOrderByCreatedAtDesc())
+            when(contactRepository.findAllByOrderByCreatedAtDesc(anyInt()))
                     .thenReturn(Flux.just(testContact, older));
 
             StepVerifier.create(contactService.getAllContacts().collectList())

@@ -6,6 +6,7 @@ import dev.catananti.dto.UserRequest;
 import dev.catananti.dto.UserResponse;
 import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
+import dev.catananti.config.PaginationConfig;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.util.DigestUtils;
@@ -40,6 +41,7 @@ public class UserService {
     private final EmailChangeService emailChangeService;
     private final UserCacheService userCacheService;
     private final RefreshTokenService refreshTokenService;
+    private final PaginationConfig paginationConfig;
 
     public Flux<UserResponse> getAllUsers(int page, int size) {
         int offset = page * size;
@@ -145,7 +147,10 @@ public class UserService {
         if (request.getPassword() != null && !request.getPassword().isBlank()) {
             passwordMono = Mono.fromCallable(() -> passwordEncoder.encode(request.getPassword()))
                     .subscribeOn(Schedulers.boundedElastic())
-                    .doOnNext(user::setPasswordHash)
+                    .map(encoded -> {
+                        user.setPasswordHash(encoded);
+                        return encoded;
+                    })
                     .then();
         }
         
@@ -269,7 +274,10 @@ public class UserService {
                                 if (passwordChanging) {
                                     passwordUpdate = Mono.fromCallable(() -> passwordEncoder.encode(request.newPassword()))
                                             .subscribeOn(Schedulers.boundedElastic())
-                                            .doOnNext(user::setPasswordHash)
+                                            .map(encoded -> {
+                                                user.setPasswordHash(encoded);
+                                                return encoded;
+                                            })
                                             .then();
                                 }
 
@@ -346,7 +354,10 @@ public class UserService {
         if (!wasDevOrAbove && isDevOrAbove && user.getUsername() != null && !user.getUsername().isBlank()) {
             // Promotion → create forwarding rule
             cfAction = cfEmailRoutingService.createForwardingRule(user.getUsername(), user.getEmail())
-                    .doOnNext(ruleId -> user.setCfEmailRuleId(ruleId))
+                    .map(ruleId -> {
+                        user.setCfEmailRuleId(ruleId);
+                        return ruleId;
+                    })
                     .then();
         } else if (wasDevOrAbove && !isDevOrAbove && user.getCfEmailRuleId() != null) {
             // Demotion → delete forwarding rule
@@ -417,7 +428,7 @@ public class UserService {
     }
 
     public Flux<UserResponse> getUsersByRole(String role) {
-        return userRepository.findByRole(role)
+        return userRepository.findByRole(role, paginationConfig.getBulkQueryMax())
                 .map(UserResponse::fromEntity);
     }
 
@@ -460,7 +471,7 @@ public class UserService {
                 .map(UserResponse::fromEntity)
                 // F-046: Evict deactivated user from JWT auth cache for immediate lockout
                 .flatMap(resp -> {
-                    userCacheService.evict(resp.getEmail());
+                    userCacheService.evict(Long.valueOf(resp.getId()));
                     return emailService.sendAccountDeactivated(resp.getEmail(), resp.getName())
                         .onErrorResume(err -> {
                             log.warn("Failed to send account deactivation email to {}: {}", PiiMasker.maskEmail(resp.getEmail()), err.getMessage());

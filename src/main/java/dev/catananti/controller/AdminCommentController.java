@@ -3,7 +3,7 @@ package dev.catananti.controller;
 import dev.catananti.dto.CommentResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.service.CommentService;
-import jakarta.validation.constraints.Max;
+import dev.catananti.config.PaginationConfig;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
@@ -25,12 +25,14 @@ import java.util.List;
 public class AdminCommentController {
 
     private final CommentService commentService;
+    private final PaginationConfig paginationConfig;
 
     @GetMapping
     public Mono<PageResponse<CommentResponse>> getCommentsByStatus(
             @RequestParam(defaultValue = "ALL") @Pattern(regexp = "^(ALL|PENDING|APPROVED|REJECTED|SPAM)$", message = "Invalid status. Must be ALL, PENDING, APPROVED, REJECTED, or SPAM") String status,
             @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+            @RequestParam(defaultValue = "20") @Min(1) int size) {
+        size = paginationConfig.clampPageSize(size);
         log.debug("Fetching comments: status={}, page={}, size={}", status, page, size);
         return commentService.getAdminCommentsByStatus(status, page, size);
     }
