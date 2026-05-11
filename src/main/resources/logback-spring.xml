@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Q13.1: Structured logging configuration.
+  - dev/local: Human-readable console output (default Spring Boot pattern).
+  - prod/cloud/cluster: JSON-structured output for log aggregation (ELK, Datadog, CloudWatch).
+-->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!-- ============================================================
+         DEV / LOCAL: human-readable console (default Spring Boot)
+         ============================================================ -->
+    <springProfile name="dev,local,e2e">
+        <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ============================================================
+         PROD / CLOUD / CLUSTER: JSON-structured for log aggregation
+         ============================================================ -->
+    <springProfile name="prod,cloud,cluster,nitro">
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>correlationId</includeMdcKeyName>
+                <includeMdcKeyName>requestId</includeMdcKeyName>
+                <includeMdcKeyName>userId</includeMdcKeyName>
+                <timeZone>UTC</timeZone>
+                <fieldNames>
+                    <timestamp>@timestamp</timestamp>
+                    <version>[ignore]</version>
+                </fieldNames>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE"/>
+        </root>
+    </springProfile>
+</configuration>
