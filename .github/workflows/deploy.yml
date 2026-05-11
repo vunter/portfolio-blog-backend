@@ -12,11 +12,17 @@ on:
         description: 'Commit SHA to deploy (leave empty for latest main)'
         required: false
         type: string
+      skip_ci_check:
+        description: 'Bypass the green-CI gate (emergency hotfix only)'
+        required: false
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
   API_IMAGE: ghcr.io/vunter/portfolio-blog-api
   FE_IMAGE: ghcr.io/vunter/portfolio-blog-frontend
+  CONFIG_OCI: ghcr.io/vunter/portfolio-blog-config
   NEXUS_URL: https://vunter.tplinkdns.com/nexus
   CONFIG_REPO: builds
 
@@ -43,14 +49,50 @@ jobs:
           echo "Deploying SHA: $SHA"
 
   # ──────────────────────────────────────────────
+  # Gate: refuse to deploy a SHA whose CI never went green.
+  # Tags can be created from any commit — this prevents shipping a SHA
+  # that was never built, tested, or scanned.
+  # Set inputs.skip_ci_check=true on workflow_dispatch only for emergency
+  # hotfixes (still requires manual approval via the production environment).
+  # ──────────────────────────────────────────────
+  verify-ci:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      actions: read
+    steps:
+      - name: Require successful CI run for this SHA
+        if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.skip_ci_check == 'true') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -e
+          # Look for a successful run of the CI workflow on this exact SHA.
+          # `gh api` paginates automatically with --paginate.
+          STATUS=$(gh api -X GET \
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
+            -f head_sha="$DEPLOY_SHA" -f per_page=20 \
+            --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')
+          if [ "${STATUS:-0}" -eq 0 ]; then
+            echo "ERROR: no successful CI run found for SHA $DEPLOY_SHA"
+            echo "Either push to main + wait for CI green before tagging,"
+            echo "or re-dispatch with skip_ci_check=true (emergency only)."
+            exit 1
+          fi
+          echo "CI is green for $DEPLOY_SHA — proceeding"
+
+  # ──────────────────────────────────────────────
   # Build API image → push to GHCR
   # ──────────────────────────────────────────────
   build-api:
-    needs: prepare
+    needs: [prepare, verify-ci]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      id-token: write   # cosign keyless OIDC signing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,7 +106,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
       - name: Build & push API image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -72,19 +118,28 @@ jobs:
           tags: |
             ${{ env.API_IMAGE }}:latest
             ${{ env.API_IMAGE }}:${{ needs.prepare.outputs.sha }}
-          build-args: NEXUS_HOST=${{ secrets.NEXUS_HOST }}
+          build-args: |
+            NEXUS_HOST=${{ secrets.NEXUS_HOST }}
+            PLAYWRIGHT_REMOTE=true
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
+
+      - name: Sign API image (keyless via OIDC)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${{ env.API_IMAGE }}@${DIGEST}"
 
   # ──────────────────────────────────────────────
   # Build Frontend image → push to GHCR
   # ──────────────────────────────────────────────
   build-frontend:
-    needs: prepare
+    needs: [prepare, verify-ci]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      id-token: write   # cosign keyless OIDC signing
     steps:
       - name: Checkout frontend
         uses: actions/checkout@v4
@@ -100,7 +155,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
       - name: Build & push Frontend image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -111,12 +170,23 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
+      - name: Sign Frontend image (keyless via OIDC)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${{ env.FE_IMAGE }}@${DIGEST}"
+
   # ──────────────────────────────────────────────
-  # Bundle config files → upload to Nexus
+  # Bundle config files → push as OCI artifact to GHCR
+  # (primary). Mirror to Nexus as optional fallback.
   # ──────────────────────────────────────────────
   bundle-config:
-    needs: prepare
+    needs: [prepare, verify-ci]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -146,35 +216,50 @@ jobs:
           echo "Config bundle: $BUNDLE ($(du -h $BUNDLE | cut -f1))"
           echo "BUNDLE=$BUNDLE" >> "$GITHUB_ENV"
 
-      - name: Upload config bundle to Nexus
+      - name: Set up oras
+        uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
+      - name: Push config bundle to GHCR (OCI artifact)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA="${{ needs.prepare.outputs.sha }}"
+          echo "$GHCR_TOKEN" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+          # Push the bundle tagged by SHA (immutable) and as :latest.
+          oras push \
+            "${{ env.CONFIG_OCI }}:${SHA}" \
+            "${{ env.CONFIG_OCI }}:latest" \
+            --artifact-type application/vnd.catananti.portfolio-blog.config.v1+tar+gzip \
+            "${BUNDLE}:application/gzip"
+
+      - name: Sign config bundle (keyless via OIDC)
+        run: |
+          cosign sign --yes "${{ env.CONFIG_OCI }}:${{ needs.prepare.outputs.sha }}"
+
+      - name: Mirror config bundle to Nexus (best-effort)
+        continue-on-error: true
         run: |
           SHA="${{ needs.prepare.outputs.sha }}"
           UPLOAD_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/config/${BUNDLE}"
-
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
             -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" \
             --upload-file "$BUNDLE" \
-            "$UPLOAD_URL")
-
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Uploaded config bundle to Nexus (HTTP $HTTP_CODE)"
-          else
-            echo "Failed to upload config bundle (HTTP $HTTP_CODE)"
-            exit 1
-          fi
-
-          # Also upload as 'latest' for easy access
+            "$UPLOAD_URL" || echo "000")
+          echo "Nexus mirror upload HTTP $HTTP_CODE (non-fatal — GHCR is the source of truth)"
           LATEST_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/config/portfolio-blog-config-latest.tar.gz"
-          curl -s -o /dev/null \
+          curl -s -o /dev/null --max-time 60 \
             -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" \
             --upload-file "$BUNDLE" \
-            "$LATEST_URL"
+            "$LATEST_URL" || true
 
   # ──────────────────────────────────────────────
   # Build JAR → publish to Nexus with timestamp
   # ──────────────────────────────────────────────
   publish-jar:
-    needs: prepare
+    needs: [prepare, verify-ci]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -303,7 +388,7 @@ jobs:
   # Build Frontend dist → publish to Nexus with timestamp
   # ──────────────────────────────────────────────
   publish-frontend:
-    needs: prepare
+    needs: [prepare, verify-ci]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout frontend
@@ -431,7 +516,8 @@ jobs:
       url: https://catananti.dev
     steps:
       - name: Deploy on Droplet
-        uses: appleboy/ssh-action@v1.0.3
+        id: deploy
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           DEPLOY_SHA: ${{ needs.prepare.outputs.sha }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -448,24 +534,66 @@ jobs:
             set -e
             source ~/.doppler_token
 
+            # Fail-fast: validate Doppler token before doing any work.
+            # A stale/expired token would otherwise only fail 30s later when
+            # `docker compose up` starts containers without env vars injected.
+            if ! doppler secrets --only-names >/dev/null 2>&1; then
+              echo "ERROR: Doppler token in ~/.doppler_token is invalid or expired"
+              echo "Rotate the token via the Doppler dashboard and re-deploy."
+              exit 1
+            fi
+            echo "Doppler token validated"
+
             DEPLOY_DIR="$HOME/portfolio-blog"
+            PREV_SHA_FILE="$DEPLOY_DIR/.last-deploy-sha"
+            PREV_DEPLOY_SHA=""
+            if [ -f "$PREV_SHA_FILE" ]; then
+              PREV_DEPLOY_SHA=$(cat "$PREV_SHA_FILE" 2>/dev/null || true)
+              echo "Previous deployed SHA: ${PREV_DEPLOY_SHA:-<none>}"
+            fi
             BUNDLE_NAME="portfolio-blog-config-${DEPLOY_SHA}.tar.gz"
+            CONFIG_OCI="ghcr.io/vunter/portfolio-blog-config"
             BUNDLE_URL="${NEXUS_URL}/repository/builds/portfolio-blog/config/${BUNDLE_NAME}"
 
-            echo "=== Downloading config bundle from Nexus ==="
             mkdir -p "$DEPLOY_DIR"
             cd "$DEPLOY_DIR"
 
-            HTTP_CODE=$(curl -s -o "$BUNDLE_NAME" -w "%{http_code}" \
-              -u "${NEXUS_USER}:${NEXUS_PASSWORD}" \
-              "$BUNDLE_URL")
-
-            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-              echo "Downloaded config bundle (HTTP $HTTP_CODE)"
+            # Source of truth is GHCR (signed OCI artifact). Nexus is best-effort fallback.
+            # cosign verifies the bundle was signed by the deploy.yml workflow on this repo.
+            echo "=== Downloading config bundle from GHCR (OCI) ==="
+            BUNDLE_FETCHED=0
+            if command -v oras >/dev/null 2>&1; then
+              echo "$GHCR_TOKEN" | oras login ghcr.io -u github-actions --password-stdin >/dev/null 2>&1 || true
+              if oras pull "${CONFIG_OCI}:${DEPLOY_SHA}" >/dev/null 2>&1; then
+                BUNDLE_FETCHED=1
+                echo "Pulled config bundle from GHCR"
+              fi
+              if [ "$BUNDLE_FETCHED" = "1" ] && command -v cosign >/dev/null 2>&1; then
+                COSIGN_IDENTITY_REGEX_CFG="^https://github.com/vunter/portfolio-blog-backend/.github/workflows/deploy.yml@refs/(tags/v[0-9]+\\.[0-9]+\\.[0-9]+|heads/main)$"
+                if ! cosign verify \
+                    --certificate-identity-regexp "$COSIGN_IDENTITY_REGEX_CFG" \
+                    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                    "${CONFIG_OCI}:${DEPLOY_SHA}" >/dev/null 2>&1; then
+                  echo "ERROR: config bundle signature verification failed — aborting"
+                  exit 1
+                fi
+                echo "Config bundle signature verified"
+              fi
             else
-              echo "Failed to download config from Nexus (HTTP $HTTP_CODE), aborting"
-              rm -f "$BUNDLE_NAME"
-              exit 1
+              echo "oras not installed — falling back to Nexus"
+            fi
+
+            if [ "$BUNDLE_FETCHED" = "0" ]; then
+              echo "=== Falling back to Nexus mirror ==="
+              HTTP_CODE=$(curl -s -o "$BUNDLE_NAME" -w "%{http_code}" --max-time 60 \
+                -u "${NEXUS_USER}:${NEXUS_PASSWORD}" \
+                "$BUNDLE_URL" || echo "000")
+              if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+                echo "Failed to download config from Nexus (HTTP $HTTP_CODE), aborting"
+                rm -f "$BUNDLE_NAME"
+                exit 1
+              fi
+              echo "Downloaded config bundle from Nexus (HTTP $HTTP_CODE)"
             fi
 
             echo "=== Extracting config bundle ==="
@@ -476,6 +604,32 @@ jobs:
             echo "$GHCR_TOKEN" | docker login ghcr.io -u github-actions --password-stdin
             docker pull ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA}
             docker pull ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA}
+
+            echo "=== Verifying image signatures (cosign keyless) ==="
+            # Images must be signed by the deploy.yml workflow on the repo's main
+            # branch via GitHub Actions OIDC. Anything else fails the deploy.
+            # cosign is expected to be installed on the droplet — install once with:
+            #   curl -L https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
+            if ! command -v cosign >/dev/null 2>&1; then
+              echo "ERROR: cosign not installed on droplet — refusing to deploy unverified images"
+              exit 1
+            fi
+            COSIGN_IDENTITY_REGEX="^https://github.com/vunter/portfolio-blog-backend/.github/workflows/deploy.yml@refs/(tags/v[0-9]+\\.[0-9]+\\.[0-9]+|heads/main)$"
+            COSIGN_ISSUER="https://token.actions.githubusercontent.com"
+            for IMG in \
+              "ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA}" \
+              "ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA}"; do
+              echo "Verifying $IMG"
+              if ! cosign verify \
+                  --certificate-identity-regexp "$COSIGN_IDENTITY_REGEX" \
+                  --certificate-oidc-issuer "$COSIGN_ISSUER" \
+                  "$IMG" >/dev/null 2>&1; then
+                echo "ERROR: signature verification failed for $IMG — aborting deploy"
+                exit 1
+              fi
+            done
+            echo "All image signatures verified"
+
             docker tag ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA} portfolio-blog-api:latest
             docker tag ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA} portfolio-blog-frontend:latest
 
@@ -492,32 +646,142 @@ jobs:
             fi
             docker exec blog-postgres pg_isready -d blog || sleep 10
 
-            echo "=== Deploying (zero-downtime rolling recreate) ==="
-            doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate --remove-orphans
+            # Q5.13: Minimal-downtime rolling deployment for single-host Docker Compose.
+            #
+            # Strategy:
+            #   1. Pre-pull new images before touching any running container (images are
+            #      already warm when we force-recreate, shrinking the swap window).
+            #   2. Run idempotent init containers (GeoIP download) first.
+            #   3. Recreate services sequentially, waiting for each to become healthy
+            #      via `--wait` before moving on. If any service fails, the deploy aborts
+            #      and the remaining services keep running the previous version.
+            #   4. Playwright is NOT forced — Compose only recreates it if its image
+            #      actually changed, so in-flight PDF requests aren't killed on unrelated
+            #      backend deploys.
+            #   5. Nginx is recreated last; its upstream is configured with
+            #      proxy_next_upstream so any request that hits an in-flight
+            #      container swap is retried on the next healthy upstream.
+            #
+            # NOTE: True zero-downtime on a single host requires a blue-green pair
+            # (two app containers behind an active/backup upstream). That doubles
+            # memory budget and is a separate workstream — not done here.
+
+            PREV_API_CID=$(docker ps -q -f name=^portfolio-blog-api$ || true)
+            PREV_FE_CID=$(docker ps -q -f name=^portfolio-blog-frontend$ || true)
+
+            rollback_api() {
+              if [ -n "$PREV_API_CID" ] && ! docker ps -q --no-trunc | grep -q "$PREV_API_CID"; then
+                echo "!!! Rolling back API to previous container $PREV_API_CID"
+                docker start "$PREV_API_CID" >/dev/null 2>&1 || true
+              fi
+            }
+
+            echo "=== Installing certbot deploy hook (idempotent, non-fatal) ==="
+            # Q5.14: Keep nginx auto-reloaded after certbot renewal.
+            # Non-fatal: if vunter lacks passwordless sudo, the hook must be
+            # installed manually once (see DEPLOYMENT.md).
+            HOOK_SRC="scripts/certbot-deploy-hook.sh"
+            HOOK_DST="/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh"
+            if [ -f "$HOOK_SRC" ]; then
+              if [ -f "$HOOK_DST" ] && sudo -n cmp -s "$HOOK_SRC" "$HOOK_DST" 2>/dev/null; then
+                echo "Certbot deploy hook already up-to-date"
+              elif sudo -n install -m 0755 "$HOOK_SRC" "$HOOK_DST" 2>/dev/null; then
+                echo "Installed/updated certbot deploy hook at $HOOK_DST"
+              else
+                echo "WARNING: could not install certbot hook (passwordless sudo not available). Install manually: sudo install -m 0755 $HOOK_SRC $HOOK_DST"
+              fi
+            fi
+
+            echo "=== Pre-pulling new images ==="
+            doppler run -- docker compose -f docker-compose.cloud.yml pull --ignore-pull-failures app frontend
+
+            echo "=== Running init containers (GeoIP, etc.) ==="
+            doppler run -- docker compose -f docker-compose.cloud.yml up geoip-init --remove-orphans
+
+            echo "=== Ensuring Playwright sidecar is up (recreate only if image changed) ==="
+            # --wait polls Compose healthchecks; the sidecar's healthcheck is a TCP probe
+            # defined in its Dockerfile, so this correctly waits for WebSocket readiness.
+            doppler run -- docker compose -f docker-compose.cloud.yml up -d --wait --wait-timeout 60 --no-deps playwright || {
+              echo "Playwright failed health check — PDF generation may be unavailable"
+            }
+
+            echo "=== Rolling restart: API backend ==="
+            if ! doppler run -- docker compose -f docker-compose.cloud.yml up -d --wait --wait-timeout 120 --no-deps --force-recreate app; then
+              echo "API failed health check — aborting deploy"
+              docker logs portfolio-blog-api --tail 80 || true
+              rollback_api
+              exit 1
+            fi
+
+            echo "=== Rolling restart: Frontend ==="
+            if ! doppler run -- docker compose -f docker-compose.cloud.yml up -d --wait --wait-timeout 60 --no-deps --force-recreate frontend; then
+              echo "Frontend failed health check — aborting deploy (API already updated)"
+              docker logs portfolio-blog-frontend --tail 50 || true
+              exit 1
+            fi
+
+            echo "=== Reloading nginx ==="
+            doppler run -- docker compose -f docker-compose.cloud.yml up -d --no-deps nginx
+            docker exec blog-nginx nginx -t && docker exec blog-nginx nginx -s reload
+
+            echo "=== Ensuring remaining services ==="
+            doppler run -- docker compose -f docker-compose.cloud.yml up -d --remove-orphans
             docker image prune -f
             docker builder prune -f --filter until=48h || true
             docker image prune -a --filter until=168h -f || true
 
-            echo "=== Health check ==="
-            for i in $(seq 1 30); do
-              if docker exec portfolio-blog-api wget -q --spider http://localhost:8080/actuator/health/readiness 2>/dev/null; then
-                echo "API healthy after ${i} attempts"
+            # Auto-rollback on smoke-test failure: pull previous SHA images and
+            # recreate the app + frontend services. This catches regressions that
+            # passed local container healthchecks but break end-to-end behavior
+            # (TLS chain, Cloudflare cache, downstream APIs, etc.).
+            auto_rollback() {
+              local reason="$1"
+              echo "!!! SMOKE TEST FAILED: $reason"
+              if [ -z "$PREV_DEPLOY_SHA" ] || [ "$PREV_DEPLOY_SHA" = "$DEPLOY_SHA" ]; then
+                echo "!!! No previous SHA to roll back to — leaving current deploy in place"
+                return 1
+              fi
+              echo "!!! Rolling back to previous SHA: $PREV_DEPLOY_SHA"
+              if docker pull "ghcr.io/vunter/portfolio-blog-api:${PREV_DEPLOY_SHA}" \
+                && docker pull "ghcr.io/vunter/portfolio-blog-frontend:${PREV_DEPLOY_SHA}"; then
+                docker tag "ghcr.io/vunter/portfolio-blog-api:${PREV_DEPLOY_SHA}" portfolio-blog-api:latest
+                docker tag "ghcr.io/vunter/portfolio-blog-frontend:${PREV_DEPLOY_SHA}" portfolio-blog-frontend:latest
+                doppler run -- docker compose -f docker-compose.cloud.yml up -d --wait --wait-timeout 120 --no-deps --force-recreate app frontend || true
+                docker exec blog-nginx nginx -s reload || true
+                echo "!!! Rollback complete to SHA $PREV_DEPLOY_SHA"
+              else
+                echo "!!! Rollback FAILED: previous images not in GHCR"
+              fi
+              return 1
+            }
+
+            echo "=== Smoke tests (internal) ==="
+            curl -sf http://localhost:80/api/v1/languages > /dev/null \
+              || { auto_rollback "internal /api/v1/languages"; exit 1; }
+            curl -sf http://localhost:80/ > /dev/null \
+              || { auto_rollback "internal frontend"; exit 1; }
+
+            echo "=== Smoke tests (external HTTPS) ==="
+            # Hit the public domain through Cloudflare to detect TLS/cert/DNS/CF
+            # regressions that the internal localhost check would miss.
+            sleep 5
+            for i in 1 2 3; do
+              if curl -sf --max-time 10 "https://catananti.dev/api/v1/languages" > /dev/null \
+                && curl -sf --max-time 10 "https://catananti.dev/" > /dev/null; then
+                echo "External HTTPS smoke test passed (attempt $i)"
                 break
               fi
-              if [ $i -eq 30 ]; then
-                echo "API failed health check after 30 attempts"
-                docker logs portfolio-blog-api --tail 50
+              if [ "$i" -eq 3 ]; then
+                auto_rollback "external https://catananti.dev"
                 exit 1
               fi
-              sleep 3
+              echo "External smoke attempt $i failed, retrying in 5s..."
+              sleep 5
             done
 
-            echo "=== Smoke tests ==="
-            curl -sf http://localhost:80/api/v1/languages > /dev/null || { echo "Languages endpoint failed"; exit 1; }
-            curl -sf http://localhost:80/ > /dev/null || { echo "Frontend failed"; exit 1; }
             echo "All smoke tests passed"
 
-            echo "${DEPLOY_SHA}" > ~/portfolio-blog/.last-deploy-sha
+            echo "${DEPLOY_SHA}" > "$PREV_SHA_FILE"
             echo "Deploy complete at $(date) — SHA: ${DEPLOY_SHA}"
 
       - name: Notify deploy status
