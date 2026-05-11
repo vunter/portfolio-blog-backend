@@ -99,16 +99,26 @@ services:
       - S3_PUBLIC_URL=${S3_PUBLIC_URL}
       # GeoIP MaxMind
       - GEOIP_DATABASE_PATH=/data/geolite2/GeoLite2-Country.mmdb
+      # MaxMind license key (for GeoIP init download)
+      - MAXMIND_LICENSE_KEY=${MAXMIND_LICENSE_KEY:-}
+      # Q5.15: Remote Playwright browser (sidecar container).
+      # The sidecar exposes a fixed wsPath so the client URL is deterministic.
+      - APP_PDF_BROWSER_WS_ENDPOINT=ws://playwright:3000/playwright
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/readiness"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
+    depends_on:
+      geoip-init:
+        condition: service_completed_successfully
+      playwright:
+        condition: service_healthy
     volumes:
       - uploads_data:/app/uploads
       - app_logs:/app/logs
-      - /home/vunter/geolite2:/data/geolite2:ro
+      - geoip_data:/data/geolite2:ro
     networks:
       - blog-network
       - blog-infra
@@ -127,6 +137,46 @@ services:
           memory: 2G
     labels:
       com.datadoghq.ad.logs: '[{"source":"java","service":"portfolio-blog-api"}]'
+
+  # Q5.10: GeoIP init — downloads MaxMind GeoLite2-Country at deploy time into
+  # a shared named volume. Replaces the hardcoded host path mount. The download
+  # logic (staleness check, SHA256 verification, retries, atomic swap) lives in
+  # scripts/geoip-init.sh so it can be reviewed, tested, and edited independently.
+  geoip-init:
+    image: alpine:3
+    container_name: geoip-init
+    entrypoint: ["/bin/sh", "/scripts/geoip-init.sh"]
+    environment:
+      - MAXMIND_LICENSE_KEY=${MAXMIND_LICENSE_KEY:-}
+      - GEOIP_STALE_SECONDS=${GEOIP_STALE_SECONDS:-604800}
+    volumes:
+      - ./scripts:/scripts:ro
+      - geoip_data:/data/geolite2
+    restart: "no"
+
+  # Q5.15: Playwright Chromium sidecar — runs headless browser for PDF generation.
+  # Separating Chromium from the JRE image saves ~500MB on the main backend image.
+  # Uses the healthcheck baked into the Dockerfile (TCP probe on port 3000).
+  playwright:
+    build:
+      context: playwright
+      dockerfile: Dockerfile
+    container_name: blog-playwright
+    networks:
+      - blog-network
+    restart: unless-stopped
+    # read_only is not set: Playwright writes to ~pwuser/.cache and /ms-playwright runtime dirs.
+    tmpfs:
+      - /tmp:size=256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   # Frontend (Angular SPA)
   frontend:
@@ -157,7 +207,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
 
   # Nginx Reverse Proxy (SSL termination)
   nginx:
@@ -276,3 +326,4 @@ volumes:
   uploads_data:
   app_logs:
   certbot_webroot:
+  geoip_data:

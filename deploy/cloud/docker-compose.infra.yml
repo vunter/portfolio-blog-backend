@@ -46,9 +46,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: blog-redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redis_data:/data
+    command: redis-server --appendonly no --save "" --maxmemory 256mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD}
     # Q10.4: Ports removed — use Docker network only. For local access: ssh -L 6379:localhost:6379 <host>
     # ports:
     #   - "127.0.0.1:6379:6379"
@@ -88,5 +86,3 @@ networks:
 volumes:
   postgres_data:
     name: cloud_postgres_data
-  redis_data:
-    name: cloud_redis_data
