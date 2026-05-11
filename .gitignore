@@ -45,6 +45,7 @@ logs/
 *.sh
 !deploy/**/*.sh
 !scripts/**/*.sh
+!env/**/*.sh
 *.ps1
 *.bat
 
