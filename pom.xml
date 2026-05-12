@@ -36,6 +36,13 @@
 		<java.version>25</java.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+		<!--
+		  Reproducible-build timestamp. Override at build time with the
+		  current commit timestamp (mvn -Dproject.build.outputTimestamp=...).
+		  CI sets this from the commit timestamp so the resulting JAR layer
+		  hashes deterministically across rebuilds.
+		-->
+		<project.build.outputTimestamp>2026-05-12T00:00:00Z</project.build.outputTimestamp>
 		<lombok.version>1.18.42</lombok.version>
 		<jjwt.version>0.13.0</jjwt.version>
 		<testcontainers.version>1.21.0</testcontainers.version>
@@ -381,6 +388,11 @@
 			<version>${testcontainers.version}</version>
 			<scope>test</scope>
 		</dependency>
+		<!--
+		  H2 is the dev-profile DB (in-memory). Kept at runtime scope so the
+		  dev profile resolves it on the classpath, but excluded from the
+		  production fat-jar via spring-boot-maven-plugin/excludes below.
+		-->
 		<dependency>
 			<groupId>io.r2dbc</groupId>
 			<artifactId>r2dbc-h2</artifactId>
@@ -452,6 +464,31 @@
 				</dependency>
 			</dependencies>
 		</profile>
+		<!--
+		  Activate in CI to run OWASP Dependency-Check as part of `verify`.
+		  Local builds skip it because the NVD download is multi-minute and
+		  requires an NVD_API_KEY env var.
+		-->
+		<profile>
+			<id>dep-scan</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.owasp</groupId>
+						<artifactId>dependency-check-maven</artifactId>
+						<executions>
+							<execution>
+								<id>dependency-check</id>
+								<phase>verify</phase>
+								<goals>
+									<goal>check</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
 	</profiles>
 
 	<build>
@@ -476,6 +513,15 @@
 						<exclude>
 							<groupId>org.projectlombok</groupId>
 							<artifactId>lombok</artifactId>
+						</exclude>
+						<!-- H2 is dev-only; do not ship it in the prod fat-jar. -->
+						<exclude>
+							<groupId>com.h2database</groupId>
+							<artifactId>h2</artifactId>
+						</exclude>
+						<exclude>
+							<groupId>io.r2dbc</groupId>
+							<artifactId>r2dbc-h2</artifactId>
 						</exclude>
 					</excludes>
 				</configuration>
@@ -553,18 +599,48 @@
 					</execution>
 				</executions>
 			</plugin>
-			<!-- Q11.5: OWASP Dependency-Check for known vulnerability scanning -->
+			<!--
+			  Q11.5: OWASP Dependency-Check.
+			  Threshold dropped from 9 (critical-only) to 7 so HIGH-severity CVEs
+			  fail the build. The check binds to the verify phase via the
+			  `dep-scan` profile (skipped in everyday local builds because the
+			  NVD download is multi-minute). CI activates `dep-scan` so the
+			  check actually runs on PRs.
+			-->
 			<plugin>
 				<groupId>org.owasp</groupId>
 				<artifactId>dependency-check-maven</artifactId>
 				<version>12.1.1</version>
 				<configuration>
-					<failBuildOnCVSS>9</failBuildOnCVSS>
+					<failBuildOnCVSS>7</failBuildOnCVSS>
 					<suppressionFiles>
 						<suppressionFile>dependency-check-suppressions.xml</suppressionFile>
 					</suppressionFiles>
 					<nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+					<skipProvidedScope>true</skipProvidedScope>
+					<skipRuntimeScope>false</skipRuntimeScope>
 				</configuration>
+			</plugin>
+			<!--
+			  Maven Failsafe runs integration tests (*IT or *IntegrationTest) in
+			  the integration-test/verify phases. Surefire above handles fast
+			  unit tests; this split keeps `mvn test` quick and `mvn verify`
+			  comprehensive.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+				<configuration>
+					<argLine>@{argLine}</argLine>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>integration-test</goal>
+							<goal>verify</goal>
+						</goals>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>
