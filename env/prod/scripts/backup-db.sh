@@ -33,21 +33,21 @@ source /home/vunter/.doppler_token
 eval $(doppler run -- sh -c 'echo "R2_AK=$R2_ACCESS_KEY_ID R2_SK=$R2_SECRET_ACCESS_KEY R2_EP=$R2_ENDPOINT"')
 
 # Upload daily backup to PRIVATE bucket
-R2_KEY="backups/db/daily/${BACKUP_FILE}"
+DAILY_OBJECT="backups/db/daily/${BACKUP_FILE}"
 curl -sf --aws-sigv4 "aws:amz:auto:s3" \
   --user "${R2_AK}:${R2_SK}" \
   -T "${BACKUP_DIR}/${BACKUP_FILE}" \
-  "${R2_EP}/${R2_BACKUP_BUCKET}/${R2_KEY}"
-log "Uploaded daily: ${R2_KEY} -> ${R2_BACKUP_BUCKET}"
+  "${R2_EP}/${R2_BACKUP_BUCKET}/${DAILY_OBJECT}"
+log "Uploaded daily: ${DAILY_OBJECT} -> ${R2_BACKUP_BUCKET}"
 
 # Upload weekly backup on Sundays
 if [ "$WEEKDAY" -eq 7 ]; then
-  WEEKLY_KEY="backups/db/weekly/${BACKUP_FILE}"
+  WEEKLY_OBJECT="backups/db/weekly/${BACKUP_FILE}"
   curl -sf --aws-sigv4 "aws:amz:auto:s3" \
     --user "${R2_AK}:${R2_SK}" \
     -T "${BACKUP_DIR}/${BACKUP_FILE}" \
-    "${R2_EP}/${R2_BACKUP_BUCKET}/${WEEKLY_KEY}"
-  log "Uploaded weekly: ${WEEKLY_KEY} -> ${R2_BACKUP_BUCKET}"
+    "${R2_EP}/${R2_BACKUP_BUCKET}/${WEEKLY_OBJECT}"
+  log "Uploaded weekly: ${WEEKLY_OBJECT} -> ${R2_BACKUP_BUCKET}"
 fi
 
 # Cleanup: remove local dumps older than 3 days
@@ -55,18 +55,18 @@ find "$BACKUP_DIR" -name "blog_*.sql.gz" -mtime +3 -delete 2>/dev/null || true
 
 # Cleanup: remove daily R2 backups older than 30 days
 CUTOFF_DATE=$(date -d "-30 days" +%Y%m%d)
-DAILY_KEYS=$(curl -sf --aws-sigv4 "aws:amz:auto:s3" \
+DAILY_OBJECTS=$(curl -sf --aws-sigv4 "aws:amz:auto:s3" \
   --user "${R2_AK}:${R2_SK}" \
   "${R2_EP}/${R2_BACKUP_BUCKET}?list-type=2&prefix=backups/db/daily/" \
   | grep -oP '<Key>[^<]+</Key>' | sed 's/<[^>]*>//g')
 
-for KEY in $DAILY_KEYS; do
-  KEY_DATE=$(echo "$KEY" | grep -oP '\d{8}' | head -1)
-  if [ -n "$KEY_DATE" ] && [ "$KEY_DATE" -lt "$CUTOFF_DATE" ]; then
+for OBJECT in $DAILY_OBJECTS; do
+  OBJECT_DATE=$(echo "$OBJECT" | grep -oP '\d{8}' | head -1)
+  if [ -n "$OBJECT_DATE" ] && [ "$OBJECT_DATE" -lt "$CUTOFF_DATE" ]; then
     curl -sf --aws-sigv4 "aws:amz:auto:s3" \
       --user "${R2_AK}:${R2_SK}" \
-      -X DELETE "${R2_EP}/${R2_BACKUP_BUCKET}/${KEY}" && \
-    log "Deleted old daily: ${KEY}"
+      -X DELETE "${R2_EP}/${R2_BACKUP_BUCKET}/${OBJECT}" && \
+    log "Deleted old daily: ${OBJECT}"
   fi
 done
 
