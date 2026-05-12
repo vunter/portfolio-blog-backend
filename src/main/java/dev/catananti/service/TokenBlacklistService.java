@@ -58,7 +58,11 @@ public class TokenBlacklistService {
                 .set(key, "1", ttl)
                 .doOnSuccess(ok -> log.debug("Blacklisted JWT jti={} ttl={}ms", jti, remainingMs))
                 .onErrorResume(e -> {
-                    log.debug("Redis unavailable for blacklist, using local fallback for jti={}: {}", jti, e.getMessage());
+                    // Cross-pod blacklist integrity is degraded when Redis is unreachable;
+                    // surface this at WARN so operators page on it rather than discovering
+                    // the inconsistency after a revoked token is honored elsewhere.
+                    log.warn("Redis unavailable for blacklist write; falling back to local store for jti={}: {}",
+                            jti, e.getMessage());
                     return Mono.just(true);
                 });
     }
@@ -83,7 +87,10 @@ public class TokenBlacklistService {
         String key = BLACKLIST_PREFIX + jti;
         return redisTemplate.hasKey(key)
                 .onErrorResume(e -> {
-                    log.debug("Redis unavailable for blacklist check, using local fallback for jti={}: {}", jti, e.getMessage());
+                    // Local fallback is per-pod; revoked tokens issued elsewhere may pass
+                    // this check until Redis recovers. Log at WARN so the gap is observable.
+                    log.warn("Redis unavailable for blacklist check; falling back to local store for jti={}: {}",
+                            jti, e.getMessage());
                     Long expiry = localBlacklist.get(jti);
                     if (expiry != null && expiry > System.currentTimeMillis()) {
                         return Mono.just(true);

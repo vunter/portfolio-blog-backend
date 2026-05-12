@@ -21,7 +21,6 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Base64;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Service for handling password reset functionality with security best practices.
@@ -156,7 +155,7 @@ public class PasswordResetService {
         // SEC-05: Hash the incoming token before lookup
         return tokenRepository.findByTokenAndUsedFalse(hashToken(token))
                 .map(PasswordResetToken::isValid)
-                .delayElement(Duration.ofMillis(50 + ThreadLocalRandom.current().nextLong(100)))
+                .delayElement(Duration.ofMillis(50 + SECURE_RANDOM.nextInt(100)))
                 .defaultIfEmpty(false);
     }
 
@@ -184,7 +183,7 @@ public class PasswordResetService {
         // SEC: Artificial random delay prevents timing-based token enumeration
         return tokenRepository.findByTokenAndUsedFalse(hashToken(token))
                 .filter(PasswordResetToken::isValid)
-                .delayElement(Duration.ofMillis(50 + ThreadLocalRandom.current().nextLong(100)))
+                .delayElement(Duration.ofMillis(50 + SECURE_RANDOM.nextInt(100)))
                 .switchIfEmpty(Mono.error(new SecurityException("error.invalid_reset_token")))
                 // SEC: Atomically mark token as used FIRST to prevent concurrent use
                 .flatMap(resetToken -> tokenRepository.markAsUsedConditionally(resetToken.getId(), LocalDateTime.now())

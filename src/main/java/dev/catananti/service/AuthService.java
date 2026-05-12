@@ -7,6 +7,7 @@ import dev.catananti.dto.TokenResponse;
 import dev.catananti.entity.RefreshToken;
 import dev.catananti.entity.User;
 import dev.catananti.exception.AccountLockedException;
+import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.security.JwtTokenProvider;
 import org.springframework.transaction.annotation.Transactional;
@@ -353,6 +354,9 @@ public class AuthService {
                     String encodedPassword = tuple.getT2();
 
                     if (exists) {
+                        // Best-effort "someone tried to register your email" notification.
+                        // Always returns 409 to the caller so the FE can render a clear
+                        // conflict state rather than a 200 with null tokens.
                         return emailService.sendTextEmail(email,
                                         "Account registration attempt",
                                         "An account with this email already exists. If this was you, try logging in.")
@@ -360,12 +364,7 @@ public class AuthService {
                                     log.warn("Failed to send existing-account email: {}", e.getMessage());
                                     return Mono.empty();
                                 })
-                                .thenReturn(TokenResponse.builder()
-                                        .accessToken(null)
-                                        .refreshToken(null)
-                                        .tokenType("Bearer")
-                                        .expiresIn(jwtExpirationMs / 1000)
-                                        .build());
+                                .then(Mono.error(new DuplicateResourceException("error.email_already_registered")));
                     }
 
                     // Step 2: Run only the DB writes inside the transactional boundary so
