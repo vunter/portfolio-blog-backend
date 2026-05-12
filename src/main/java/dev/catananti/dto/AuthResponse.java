@@ -1,20 +1,20 @@
 package dev.catananti.dto;
 
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+/**
+ * Token-bearing response for legacy login endpoints. Records guarantee
+ * immutability so the DTO can't drift after the service returns it.
+ */
+public record AuthResponse(
+        String token,
+        String type,
+        long expiresIn,
+        String email,
+        String name,
+        String role
+) {
 
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class AuthResponse {
-    private String token;
-    @Builder.Default
-    private String type = "Bearer";
-    private long expiresIn; // seconds until token expires (BUG-11)
-    private String email;
-    private String name;
-    private String role;
+    /** Convenience overload that defaults the token type to "Bearer". */
+    public static AuthResponse bearer(String token, long expiresIn, String email, String name, String role) {
+        return new AuthResponse(token, "Bearer", expiresIn, email, name, role);
+    }
 }

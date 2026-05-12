@@ -177,14 +177,8 @@ public class AuthService {
                 .map(user -> {
                     String token = tokenProvider.generateToken(user.getId(), user.getRole());
                     log.debug("User logged in: {} from IP: {}", PiiMasker.maskEmail(user.getEmail()), clientIp);
-                    return AuthResponse.builder()
-                            .token(token)
-                            .type("Bearer")
-                            .expiresIn(jwtExpirationMs / 1000)
-                            .email(user.getEmail())
-                            .name(user.getName())
-                            .role(user.getRole())
-                            .build();
+                    return AuthResponse.bearer(token, jwtExpirationMs / 1000,
+                            user.getEmail(), user.getName(), user.getRole());
                 });
     }
 

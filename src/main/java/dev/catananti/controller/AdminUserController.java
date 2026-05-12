@@ -1,7 +1,6 @@
 package dev.catananti.controller;
 
 import dev.catananti.config.PaginationConfig;
-import dev.catananti.dto.MessageResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.dto.ProfileUpdateRequest;
 import dev.catananti.dto.RoleUpdateRequest;
