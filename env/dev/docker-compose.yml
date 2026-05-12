@@ -13,7 +13,12 @@ services:
         max-size: "10m"
         max-file: "3"
     environment:
-      - SPRING_PROFILES_ACTIVE=dev
+      # NOTE: profile is 'docker' (not 'dev'). application-dev.properties
+      # hard-codes spring.r2dbc.url to in-memory H2, which conflicts with the
+      # postgres container in this compose. 'docker' has no profile file, so
+      # the app falls back to application.properties defaults, which honor
+      # DATABASE_URL and the other env vars set below.
+      - SPRING_PROFILES_ACTIVE=docker
       - DATABASE_URL=r2dbc:postgresql://postgres:5432/blog
       - DATABASE_USERNAME=${DB_USERNAME:-postgres}
       - DATABASE_PASSWORD=${DB_PASSWORD:-postgres}
@@ -178,7 +183,6 @@ services:
       - /tmp:size=64M
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/bearer_token:/etc/prometheus/bearer_token:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'

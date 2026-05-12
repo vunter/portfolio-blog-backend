@@ -14,7 +14,7 @@ Rede `blog-infra` é compartilhada entre os dois (declarada como `external: true
 ## Pré-requisitos no Droplet
 
 - Docker Engine + Docker Compose v2
-- `doppler` CLI instalado, autenticado, e `DOPPLER_TOKEN` salvo em `~/.doppler/`
+- `doppler` CLI instalado, autenticado, e service token salvo em `~/.doppler_token` (lido via `source ~/.doppler_token` pelos scripts — formato `export DOPPLER_TOKEN=dp.st.xxx`)
 - Imagens `portfolio-blog-api` e `portfolio-blog-frontend` construídas pelo CI e disponíveis localmente (`docker images | grep portfolio-blog`)
 - GeoLite2 database em `/home/vunter/geolite2/GeoLite2-Country.mmdb` (gerenciado por `scripts/update-geolite2.sh`)
 - Let's Encrypt certs em `/etc/letsencrypt/live/catananti.dev/` (renovação via certbot)
