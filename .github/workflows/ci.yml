@@ -6,7 +6,37 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+permissions:
+  contents: read
+
 jobs:
+  # Supply-chain guardrail: every third-party action invoked in the .github/
+  # workflows tree must reference a commit SHA, not a mutable tag. Action
+  # maintainers can force-push tags; SHAs are immutable. actions/* and
+  # github/* are explicitly allowed by tag because they're maintained by
+  # GitHub itself and have additional protections; everything else needs
+  # the @<sha> form with the version pinned in a trailing comment.
+  pin-check:
+    name: Action Pin Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Verify third-party actions are pinned by SHA
+        run: |
+          set -euo pipefail
+          mapfile -t bad < <(grep -RhnE 'uses: ' .github/workflows \
+            | grep -vE 'uses: actions/' \
+            | grep -vE 'uses: github/' \
+            | grep -vE 'uses: \./' \
+            | grep -vE 'uses: [^@]+@[a-f0-9]{40}( |$)') || true
+          if [ ${#bad[@]} -gt 0 ]; then
+            echo "::error::The following 'uses:' references are not SHA-pinned:"
+            printf '  %s\n' "${bad[@]}"
+            exit 1
+          fi
+          echo "All third-party actions are SHA-pinned"
+
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -25,8 +55,10 @@ jobs:
       - name: Make Maven wrapper executable
         run: chmod +x mvnw
 
-      - name: Run tests
-        run: ./mvnw verify -B
+      - name: Run tests (with OWASP Dependency-Check)
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: ./mvnw -B -Pdep-scan verify
 
       - name: Upload coverage to Codecov
         if: always()
@@ -111,6 +143,25 @@ jobs:
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: 'true'
           exit-code: '1'
+
+      # SBOM generation. Builds a CycloneDX-flavored bill of materials for the
+      # backend image. The deploy workflow signs and attests this alongside
+      # the image with cosign, which gives downstream consumers a verifiable
+      # dependency manifest.
+      - name: Generate SBOM (syft)
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          image: portfolio-blog-backend:${{ github.sha }}
+          format: 'cyclonedx-json'
+          output-file: sbom.cdx.json
+          upload-artifact: false
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.cdx.json
+          retention-days: 30
 
       - name: Upload SARIF scan results to GitHub Security
         if: always()
