@@ -90,9 +90,9 @@ class IdempotencyKeyFilterTest {
         void shouldProcessFirstRequest() {
             String key = UUID.randomUUID().toString();
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
-            when(valueOps.setIfAbsent(eq("idem:" + key), eq("processing"), any(Duration.class)))
+            when(valueOps.setIfAbsent(eq("idem:a:unknown:" + key), eq("processing"), any(Duration.class)))
                     .thenReturn(Mono.just(true));
-            when(valueOps.set(eq("idem:" + key), anyString(), any(Duration.class)))
+            when(valueOps.set(eq("idem:a:unknown:" + key), anyString(), any(Duration.class)))
                     .thenReturn(Mono.just(true));
 
             MockServerWebExchange exchange = MockServerWebExchange.from(
@@ -110,7 +110,7 @@ class IdempotencyKeyFilterTest {
         void shouldRejectDuplicateRequest() {
             String key = UUID.randomUUID().toString();
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
-            when(valueOps.setIfAbsent(eq("idem:" + key), eq("processing"), any(Duration.class)))
+            when(valueOps.setIfAbsent(eq("idem:a:unknown:" + key), eq("processing"), any(Duration.class)))
                     .thenReturn(Mono.just(false));
 
             MockServerWebExchange exchange = MockServerWebExchange.from(
@@ -130,9 +130,9 @@ class IdempotencyKeyFilterTest {
         void shouldRemoveKeyOnFailure() {
             String key = UUID.randomUUID().toString();
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
-            when(valueOps.setIfAbsent(eq("idem:" + key), eq("processing"), any(Duration.class)))
+            when(valueOps.setIfAbsent(eq("idem:a:unknown:" + key), eq("processing"), any(Duration.class)))
                     .thenReturn(Mono.just(true));
-            when(redisTemplate.delete(eq("idem:" + key)))
+            when(redisTemplate.delete(eq("idem:a:unknown:" + key)))
                     .thenReturn(Mono.just(1L));
 
             MockServerWebExchange exchange = MockServerWebExchange.from(
@@ -146,7 +146,7 @@ class IdempotencyKeyFilterTest {
                     .expectErrorMatches(e -> e.getMessage().equals("Processing failed"))
                     .verify();
 
-            verify(redisTemplate).delete("idem:" + key);
+            verify(redisTemplate).delete("idem:a:unknown:" + key);
         }
 
         @Test

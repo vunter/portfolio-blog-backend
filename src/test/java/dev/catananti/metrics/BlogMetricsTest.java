@@ -116,7 +116,7 @@ class BlogMetricsTest {
             when(commentRepository.countByStatus("PENDING")).thenReturn(Mono.just(5L));
             when(subscriberRepository.countConfirmed()).thenReturn(Mono.just(100L));
 
-            blogMetrics.updateMetrics();
+            blogMetrics.updateMetrics().block();
 
             // Give the async subscribe a moment to complete
             Thread.sleep(100);
@@ -141,7 +141,7 @@ class BlogMetricsTest {
             when(commentRepository.countByStatus("PENDING")).thenReturn(Mono.error(new RuntimeException("DB down")));
             when(subscriberRepository.countConfirmed()).thenReturn(Mono.error(new RuntimeException("DB down")));
 
-            blogMetrics.updateMetrics();
+            blogMetrics.updateMetrics().block();
 
             // Give the async subscribe a moment to complete
             Thread.sleep(100);

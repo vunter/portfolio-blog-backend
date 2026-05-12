@@ -83,8 +83,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleResourceNotFound(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(404);
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(404);
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -104,8 +104,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleAccountLocked(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -125,9 +125,9 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleBadCredentials(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(401);
-                        assertThat(resp.getMessage()).doesNotContain("attempt");
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(401);
+                        assertThat(resp.message()).doesNotContain("attempt");
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -152,9 +152,9 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleValidationErrors(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(400);
-                        assertThat(resp.getValidationErrors()).containsEntry("title", "must not be blank");
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(400);
+                        assertThat(resp.validationErrors()).containsEntry("title", "must not be blank");
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -171,8 +171,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleValidationErrors(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(400);
-                        assertThat(resp.getValidationErrors()).containsKey("title");
+                        assertThat(resp.status()).isEqualTo(400);
+                        assertThat(resp.validationErrors()).containsKey("title");
                     })
                     .verifyComplete();
         }
@@ -192,8 +192,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleRecaptchaException(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(400);
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(400);
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -213,8 +213,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleDuplicateResource(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(409);
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(409);
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -234,8 +234,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleSecurityException(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(401);
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(401);
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -255,8 +255,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleIllegalArgument(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(400);
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(400);
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -272,8 +272,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleIllegalArgument(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(400);
-                        assertThat(resp.getMessage()).isEqualTo("Locale is not supported");
+                        assertThat(resp.status()).isEqualTo(400);
+                        assertThat(resp.message()).isEqualTo("Locale is not supported");
                     })
                     .verifyComplete();
         }
@@ -299,8 +299,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleConstraintViolation(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(400);
-                        assertThat(resp.getValidationErrors()).containsEntry("title", "must not be blank");
+                        assertThat(resp.status()).isEqualTo(400);
+                        assertThat(resp.validationErrors()).containsEntry("title", "must not be blank");
                     })
                     .verifyComplete();
         }
@@ -318,7 +318,7 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleConstraintViolation(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getValidationErrors()).containsEntry("email", "invalid format");
+                        assertThat(resp.validationErrors()).containsEntry("email", "invalid format");
                     })
                     .verifyComplete();
         }
@@ -340,8 +340,8 @@ class GlobalExceptionHandlerTest {
                     .assertNext(resp -> {
                         assertThat(resp.getStatusCode().value()).isEqualTo(403);
                         assertThat(resp.getBody()).isNotNull();
-                        assertThat(resp.getBody().getStatus()).isEqualTo(403);
-                        assertThat(resp.getBody().getPath()).isEqualTo("/api/test");
+                        assertThat(resp.getBody().status()).isEqualTo(403);
+                        assertThat(resp.getBody().path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -354,7 +354,7 @@ class GlobalExceptionHandlerTest {
             StepVerifier.create(handler.handleResponseStatusException(ex, exchange))
                     .assertNext(resp -> {
                         assertThat(resp.getStatusCode().value()).isEqualTo(404);
-                        assertThat(resp.getBody().getStatus()).isEqualTo(404);
+                        assertThat(resp.getBody().status()).isEqualTo(404);
                     })
                     .verifyComplete();
         }
@@ -387,9 +387,9 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleRuntimeException(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(500);
-                        assertThat(resp.getMessage()).doesNotContain("NullPointerException");
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(500);
+                        assertThat(resp.message()).doesNotContain("NullPointerException");
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -409,8 +409,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleGenericException(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getStatus()).isEqualTo(500);
-                        assertThat(resp.getPath()).isEqualTo("/api/test");
+                        assertThat(resp.status()).isEqualTo(500);
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }
@@ -501,8 +501,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleIllegalArgument(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getMessage()).doesNotContain("C:\\Users");
-                        assertThat(resp.getMessage()).contains("[path]");
+                        assertThat(resp.message()).doesNotContain("C:\\Users");
+                        assertThat(resp.message()).contains("[path]");
                     })
                     .verifyComplete();
         }
@@ -514,8 +514,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleIllegalArgument(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getMessage()).doesNotContain("/home/dev");
-                        assertThat(resp.getMessage()).contains("[path]");
+                        assertThat(resp.message()).doesNotContain("/home/dev");
+                        assertThat(resp.message()).contains("[path]");
                     })
                     .verifyComplete();
         }
@@ -527,10 +527,10 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleIllegalArgument(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getMessage()).doesNotContain("SELECT");
-                        assertThat(resp.getMessage()).doesNotContain("FROM");
-                        assertThat(resp.getMessage()).doesNotContain("WHERE");
-                        assertThat(resp.getMessage()).contains("[query]");
+                        assertThat(resp.message()).doesNotContain("SELECT");
+                        assertThat(resp.message()).doesNotContain("FROM");
+                        assertThat(resp.message()).doesNotContain("WHERE");
+                        assertThat(resp.message()).contains("[query]");
                     })
                     .verifyComplete();
         }
@@ -542,8 +542,8 @@ class GlobalExceptionHandlerTest {
 
             StepVerifier.create(handler.handleIllegalArgument(ex, exchange))
                     .assertNext(resp -> {
-                        assertThat(resp.getMessage()).doesNotContain("org.hibernate.QueryException");
-                        assertThat(resp.getMessage()).contains("[class]");
+                        assertThat(resp.message()).doesNotContain("org.hibernate.QueryException");
+                        assertThat(resp.message()).contains("[class]");
                     })
                     .verifyComplete();
         }

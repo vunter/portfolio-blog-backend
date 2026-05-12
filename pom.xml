@@ -350,15 +350,24 @@
 			<artifactId>reactor-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!--
+		  BlockHound trips any blocking call on a non-blocking Reactor thread
+		  so future regressions (e.g. JdbcTemplate slipping into a Mono,
+		  synchronized blocks on Netty I/O) fail loudly. The 1.0.x line uses
+		  sun.misc.Unsafe.objectFieldOffset, which Java 25 has removed; the
+		  test JVM crashes trying to install the agent. Enable in the
+		  `blockhound` Maven profile once a Java-25-compatible release ships
+		  (https://github.com/reactor/BlockHound/issues/461).
+		-->
+		<!--
 		<dependency>
-			<!-- Trips any blocking call on a non-blocking Reactor thread so
-			     future regressions (e.g. JdbcTemplate slipping into a Mono,
-			     synchronized blocks on Netty I/O) fail loudly in CI. -->
 			<groupId>io.projectreactor.tools</groupId>
 			<artifactId>blockhound-junit-platform</artifactId>
 			<version>1.0.13.RELEASE</version>
 			<scope>test</scope>
 		</dependency>
+		-->
+
 		<dependency>
 			<groupId>org.springframework.security</groupId>
 			<artifactId>spring-security-test</artifactId>

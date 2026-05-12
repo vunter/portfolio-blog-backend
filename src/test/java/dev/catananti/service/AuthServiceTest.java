@@ -122,10 +122,10 @@ class AuthServiceTest {
         // Then
         StepVerifier.create(result)
                 .assertNext(response -> {
-                    assertThat(response.getToken()).isEqualTo("jwt-token-here");
-                    assertThat(response.getType()).isEqualTo("Bearer");
-                    assertThat(response.getEmail()).isEqualTo("test@example.com");
-                    assertThat(response.getName()).isEqualTo("Test User");
+                    assertThat(response.token()).isEqualTo("jwt-token-here");
+                    assertThat(response.type()).isEqualTo("Bearer");
+                    assertThat(response.email()).isEqualTo("test@example.com");
+                    assertThat(response.name()).isEqualTo("Test User");
                 })
                 .verifyComplete();
 
@@ -353,7 +353,7 @@ class AuthServiceTest {
     }
 
     @Test
-    @DisplayName("Should return success and send email when email already exists (no enumeration)")
+    @DisplayName("Should error with DuplicateResourceException + send notification email when address already exists")
     void register_ShouldThrow_WhenEmailAlreadyRegistered() {
         RegisterRequest request = new RegisterRequest("User", "existing@example.com", "Password123!@", true, null);
         when(userRepository.existsByEmail("existing@example.com")).thenReturn(Mono.just(true));
@@ -362,11 +362,11 @@ class AuthServiceTest {
         when(passwordEncoder.encode("Password123!@")).thenReturn("hashed-dummy");
 
         StepVerifier.create(authService.register(request, "127.0.0.1"))
-                .assertNext(resp -> {
-                    assertThat(resp.getAccessToken()).isNull();
-                    assertThat(resp.getEmail()).isNull();
+                .expectErrorSatisfies(err -> {
+                    assertThat(err).isInstanceOf(dev.catananti.exception.DuplicateResourceException.class);
+                    assertThat(err.getMessage()).isEqualTo("error.email_already_registered");
                 })
-                .verifyComplete();
+                .verify();
 
         verify(emailService).sendTextEmail(eq("existing@example.com"), anyString(), anyString());
         verify(userRepository, never()).save(any(User.class));

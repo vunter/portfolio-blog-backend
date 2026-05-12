@@ -72,7 +72,8 @@ class OAuth2ServiceTest {
         oAuth2Service = new OAuth2Service(
                 userRepository, socialAccountRepository, refreshTokenService,
                 tokenProvider, idService, auditService, redisTemplate, resilienceConfig,
-                new tools.jackson.databind.ObjectMapper());
+                new tools.jackson.databind.ObjectMapper(),
+                org.springframework.web.reactive.function.client.WebClient.builder());
 
         // Set @Value fields via reflection
         setField("googleClientId", "google-client-id");
