@@ -366,7 +366,7 @@ class ApiEndpointIntegrationTest {
         @BeforeEach
         void setUp() throws Exception {
             authController = new AuthController(authService, recaptchaService, emailChangeService,
-                    refreshTokenService, userRepository, csrfTokenRepository, blogMetrics);
+                    refreshTokenService, csrfTokenRepository, blogMetrics);
             // Set @Value fields via reflection (not injected in standalone mode)
             java.lang.reflect.Field expField = AuthController.class.getDeclaredField("jwtExpirationMs");
             expField.setAccessible(true);

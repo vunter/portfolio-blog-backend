@@ -16,8 +16,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
-import org.springframework.data.redis.core.ReactiveValueOperations;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -45,10 +43,7 @@ class ArticlePublishSchedulerTest {
     private EmailService emailService;
 
     @Mock
-    private ReactiveStringRedisTemplate redisTemplate;
-
-    @Mock
-    private ReactiveValueOperations<String, String> valueOps;
+    private SchedulerLock schedulerLock;
 
     @Mock
     private PaginationConfig paginationConfig;
@@ -57,11 +52,12 @@ class ArticlePublishSchedulerTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        lenient().when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class))).thenReturn(Mono.just(true));
-        lenient().when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+        // SchedulerLock.executeWithLock(name, ttl, task) is mocked as a
+        // pass-through so the scheduler's reactive pipeline still runs.
+        lenient().when(schedulerLock.executeWithLock(anyString(), any(Duration.class), any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(2));
         lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
-        scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService, redisTemplate, paginationConfig);
+        scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService, schedulerLock, paginationConfig);
     }
 
     @Nested
@@ -89,7 +85,7 @@ class ArticlePublishSchedulerTest {
             when(cacheService.invalidateAllArticles())
                     .thenReturn(Mono.empty());
 
-            scheduler.publishScheduledArticles();
+            scheduler.publishScheduledArticles().block();
 
             // Allow async subscribe to complete
             Thread.sleep(200);
@@ -135,7 +131,7 @@ class ArticlePublishSchedulerTest {
             when(cacheService.invalidateAllArticles())
                     .thenReturn(Mono.empty());
 
-            scheduler.publishScheduledArticles();
+            scheduler.publishScheduledArticles().block();
 
             Thread.sleep(200);
 
@@ -170,7 +166,7 @@ class ArticlePublishSchedulerTest {
             when(cacheService.invalidateAllArticles())
                     .thenReturn(Mono.empty());
 
-            scheduler.publishScheduledArticles();
+            scheduler.publishScheduledArticles().block();
 
             Thread.sleep(200);
 
@@ -184,7 +180,7 @@ class ArticlePublishSchedulerTest {
                     .thenReturn(Flux.error(new RuntimeException("DB connection lost")));
 
             // Should not throw
-            scheduler.publishScheduledArticles();
+            scheduler.publishScheduledArticles().block();
 
             Thread.sleep(200);
 
@@ -198,7 +194,7 @@ class ArticlePublishSchedulerTest {
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.empty());
 
-            scheduler.publishScheduledArticles();
+            scheduler.publishScheduledArticles().block();
 
             Thread.sleep(200);
 
@@ -240,7 +236,7 @@ class ArticlePublishSchedulerTest {
                     .thenReturn(Mono.empty());
 
             // Should not throw even when email fails
-            scheduler.publishScheduledArticles();
+            scheduler.publishScheduledArticles().block();
 
             Thread.sleep(200);
 

@@ -24,7 +24,10 @@ class CloudflareEmailRoutingServiceTest {
     private CloudflareEmailRoutingService service;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ResilienceConfig resilienceConfig = new ResilienceConfig(
-            10, 3, 100, 1000, 5, 30, 50, 30, 10, 5, 50, 60, 10, 3);
+            new dev.catananti.config.ResilienceProperties(
+                    new dev.catananti.config.ResilienceProperties.Database(10, 3, 100, 1000, 50, 30, 10, 5),
+                    new dev.catananti.config.ResilienceProperties.Redis(5),
+                    new dev.catananti.config.ResilienceProperties.External(30, 50, 60, 10, 3)));
 
     @BeforeEach
     void setUp() throws IOException {
