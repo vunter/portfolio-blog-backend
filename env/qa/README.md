@@ -25,10 +25,13 @@ doppler run --config qa -- docker compose up -d --build
 
 ## Verificar saúde
 
+O compose não expõe a porta 8080 do app no host (acesso só via rede Docker, geralmente atrás de um nginx externo). Para checar o readiness localmente:
+
 ```bash
 docker compose ps
 docker compose logs -f app
-curl http://localhost:8080/actuator/health/readiness
+# Dentro do container (acesso direto ao app)
+docker exec portfolio-blog-api wget -qO- http://localhost:8080/actuator/health/readiness
 ```
 
 ## Banco QA

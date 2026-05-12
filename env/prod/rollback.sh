@@ -3,10 +3,15 @@
 # Usage: ./rollback.sh <commit-sha>
 # Images must exist in GHCR (any previous successful deploy)
 # Config bundle is downloaded from Nexus if available
+# Run from anywhere — the script resolves its own location.
 set -e
 
 SHA=${1:?"Usage: ./rollback.sh <commit-sha>"}
 source ~/.doppler_token
+
+# Resolve the directory containing this script (env/prod/) and the repo root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 echo "Rolling back to SHA: $SHA"
 
@@ -32,7 +37,7 @@ BUNDLE_FILE="/tmp/config-rollback-${SHA}.tar.gz"
 HTTP_CODE=$(curl -s -o "$BUNDLE_FILE" -w "%{http_code}" "$BUNDLE_URL" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
   echo "Restoring config bundle from Nexus for SHA $SHA"
-  cd ~/portfolio-blog
+  cd "${REPO_ROOT}"
   tar xzf "$BUNDLE_FILE" --overwrite
   rm -f "$BUNDLE_FILE"
 else
@@ -41,8 +46,8 @@ else
 fi
 
 # Recreate containers with the rolled-back images
-cd ~/portfolio-blog/deploy/cloud
-doppler run -- docker compose -f docker-compose.cloud.yml up -d --force-recreate --remove-orphans
+cd "${SCRIPT_DIR}"
+doppler run -- docker compose -p blog-cloud -f docker-compose.cloud.yml up -d --force-recreate --remove-orphans
 
 # Health check
 echo "Waiting for API health..."
@@ -59,5 +64,5 @@ for i in $(seq 1 30); do
   sleep 3
 done
 
-echo "$SHA" > ~/portfolio-blog/.last-deploy-sha
+echo "$SHA" > "${REPO_ROOT}/.last-deploy-sha"
 echo "Rollback complete — now running SHA: $SHA"

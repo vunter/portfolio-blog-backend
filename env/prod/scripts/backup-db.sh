@@ -2,7 +2,7 @@
 # =============================================================================
 # Database Backup to Cloudflare R2 (PRIVATE bucket — no public access)
 # Runs daily via cron, keeps 30 daily + weekly backups
-# Usage: crontab -e → 0 3 * * * /home/vunter/portfolio-blog/scripts/backup-db.sh
+# Usage: crontab -e → 0 3 * * * /home/vunter/portfolio-blog-backend/env/prod/scripts/backup-db.sh
 # SECURITY: Backups go to 'catananti-backups' (private, S3 API auth only)
 #           NOT 'catananti-assets' (public via cdn.catananti.dev)
 # =============================================================================
