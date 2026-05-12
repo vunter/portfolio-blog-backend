@@ -344,6 +344,15 @@
 			<scope>test</scope>
 		</dependency>
 		<dependency>
+			<!-- Trips any blocking call on a non-blocking Reactor thread so
+			     future regressions (e.g. JdbcTemplate slipping into a Mono,
+			     synchronized blocks on Netty I/O) fail loudly in CI. -->
+			<groupId>io.projectreactor.tools</groupId>
+			<artifactId>blockhound-junit-platform</artifactId>
+			<version>1.0.13.RELEASE</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
 			<groupId>org.springframework.security</groupId>
 			<artifactId>spring-security-test</artifactId>
 			<scope>test</scope>

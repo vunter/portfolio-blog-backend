@@ -239,15 +239,15 @@ public class PasswordResetService {
      * Cleanup expired tokens (runs every 6 hours by default).
      */
     @Scheduled(fixedRateString = "${scheduling.password-reset-cleanup-ms:21600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
-    public void cleanupExpiredTokens() {
+    public Mono<Void> cleanupExpiredTokens() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(1);
-        schedulerLock.executeWithLock("password-reset-cleanup", Duration.ofMinutes(5),
+        return schedulerLock.executeWithLock("password-reset-cleanup", Duration.ofMinutes(5),
                 tokenRepository.deleteExpiredTokens(cutoff)
                         .timeout(Duration.ofSeconds(30))
                         .doOnSuccess(count -> log.info("Cleaned up expired password reset tokens"))
                         .doOnError(e -> log.error("Failed to cleanup expired password reset tokens: {}", e.getMessage(), e))
                         .onErrorComplete()
                         .then()
-        ).subscribe();
+        );
     }
 }

@@ -10,74 +10,64 @@ import dev.catananti.service.EmailService;
 import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 
 /**
- * Scheduler for publishing scheduled articles.
- * Runs every minute to check for articles that should be published.
+ * Publishes articles whose {@code scheduledAt} has elapsed. Returns a
+ * {@code Mono<Void>} so Spring's reactive scheduler defers the next run
+ * until the current one terminates, eliminating the overlap risk of the
+ * previous fire-and-forget {@code .subscribe()} pattern.
+ *
+ * <p>Distributed locking is delegated to {@link SchedulerLock}; the previous
+ * hand-rolled Redis SETNX implementation duplicated that abstraction.</p>
  */
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class ArticlePublishScheduler {
 
-    private static final String LOCK_KEY = "scheduler:article-publish:lock";
     private static final Duration LOCK_TTL = Duration.ofSeconds(55);
 
     private final ArticleRepository articleRepository;
     private final CacheService cacheService;
     private final SubscriberRepository subscriberRepository;
     private final EmailService emailService;
-    private final ReactiveStringRedisTemplate redisTemplate;
+    private final SchedulerLock schedulerLock;
     private final PaginationConfig paginationConfig;
 
-    /**
-     * Check for scheduled articles and publish them.
-     * Runs every minute (configurable).
-     * Uses Redis SETNX lock to prevent duplicate execution in multi-instance deployments.
-     */
     @Scheduled(fixedRateString = "${app.scheduler.article-publish-rate:60000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
-    public void publishScheduledArticles() {
-        redisTemplate.opsForValue().setIfAbsent(LOCK_KEY, "locked", LOCK_TTL)
-                .onErrorResume(e -> {
-                    log.debug("Redis unavailable for scheduler lock, proceeding without lock: {}", e.getMessage());
-                    return reactor.core.publisher.Mono.just(true);
-                })
-                .flatMap(acquired -> {
-                    if (!Boolean.TRUE.equals(acquired)) {
-                        log.debug("Skipping scheduled article publish — another instance holds the lock");
-                        return reactor.core.publisher.Mono.empty();
-                    }
-                    log.debug("Checking for scheduled articles to publish...");
-                    LocalDateTime now = LocalDateTime.now();
-                    return articleRepository.findScheduledArticlesToPublish(now)
-                            .flatMap(this::publishArticle)
-                            .flatMap(article -> notifySubscribers(article).thenReturn(article))
-                            .doOnNext(article -> log.info("Auto-published scheduled article: {} (scheduled for: {})",
-                                    article.getSlug(), article.getScheduledAt()))
-                            .collectList()
-                            .flatMap(published -> {
-                                if (!published.isEmpty()) {
-                                    log.info("Published {} scheduled article(s), invalidating cache", published.size());
-                                    return cacheService.invalidateAllArticles();
-                                }
-                                return reactor.core.publisher.Mono.just(0L);
-                            })
-                            .doFinally(signal -> releaseLock().subscribe())
-                            .then();
-                })
-                .subscribe(
-                        v -> log.debug("Scheduled articles check completed"),
-                        error -> log.error("Error publishing scheduled articles: {}", error.getMessage(), error)
-                );
+    public Mono<Void> publishScheduledArticles() {
+        return schedulerLock.executeWithLock("article-publish", LOCK_TTL,
+                doPublishScheduledArticles());
     }
 
-    private reactor.core.publisher.Mono<Article> publishArticle(Article article) {
+    private Mono<Void> doPublishScheduledArticles() {
+        log.debug("Checking for scheduled articles to publish...");
+        LocalDateTime now = LocalDateTime.now();
+        return articleRepository.findScheduledArticlesToPublish(now)
+                .flatMap(this::publishArticle)
+                .flatMap(article -> notifySubscribers(article).thenReturn(article))
+                .doOnNext(article -> log.info("Auto-published scheduled article: {} (scheduled for: {})",
+                        article.getSlug(), article.getScheduledAt()))
+                .collectList()
+                .flatMap(published -> {
+                    if (published.isEmpty()) {
+                        return Mono.empty();
+                    }
+                    log.info("Published {} scheduled article(s), invalidating cache", published.size());
+                    return cacheService.invalidateAllArticles().then();
+                })
+                .doOnError(e -> log.error("Error publishing scheduled articles: {}", e.getMessage(), e))
+                .onErrorResume(e -> Mono.empty());
+    }
+
+    private Mono<Article> publishArticle(Article article) {
         article.setStatus(ArticleStatus.PUBLISHED);
         article.setPublishedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
@@ -85,20 +75,10 @@ public class ArticlePublishScheduler {
         return articleRepository.save(article);
     }
 
-    private reactor.core.publisher.Mono<Void> releaseLock() {
-        return redisTemplate.delete(LOCK_KEY)
-                .doOnSuccess(v -> log.debug("Released scheduler lock"))
-                .onErrorResume(e -> {
-                    log.warn("Failed to release scheduler lock: {}", e.getMessage());
-                    return reactor.core.publisher.Mono.empty();
-                })
-                .then();
-    }
-
-    private reactor.core.publisher.Mono<Void> notifySubscribers(Article article) {
+    private Mono<Void> notifySubscribers(Article article) {
         return subscriberRepository.findAllConfirmed(paginationConfig.getBulkQueryMax())
                 .buffer(50)
-                .concatMap(batch -> reactor.core.publisher.Flux.fromIterable(batch)
+                .concatMap(batch -> Flux.fromIterable(batch)
                         .flatMap(subscriber -> emailService.sendNewArticleNotification(
                                 subscriber.getEmail(),
                                 subscriber.getName(),
@@ -107,8 +87,9 @@ public class ArticlePublishScheduler {
                                 article.getExcerpt(),
                                 subscriber.getUnsubscribeToken()
                         ).onErrorResume(e -> {
-                            log.warn("Failed to send article notification to {}: {}", PiiMasker.maskEmail(subscriber.getEmail()), e.getMessage());
-                            return reactor.core.publisher.Mono.empty();
+                            log.warn("Failed to send article notification to {}: {}",
+                                    PiiMasker.maskEmail(subscriber.getEmail()), e.getMessage());
+                            return Mono.empty();
                         }), 5))
                 .then()
                 .doOnSuccess(v -> log.info("Notified subscribers about scheduled article: {}", article.getSlug()));

@@ -174,7 +174,7 @@ class PdfGenerationServiceTest {
             </html>
             """;
 
-        String preview = pdfService.extractTextPreview(html, 50);
+        String preview = pdfService.extractTextPreview(html, 50).block();
 
         assertThat(preview).isNotNull();
         assertThat(preview).contains("Title");
@@ -194,7 +194,7 @@ class PdfGenerationServiceTest {
             </html>
             """;
 
-        String preview = pdfService.extractTextPreview(html, 20);
+        String preview = pdfService.extractTextPreview(html, 20).block();
 
         assertThat(preview).hasSize(23); // 20 + "..."
         assertThat(preview).endsWith("...");
@@ -381,7 +381,7 @@ class PdfGenerationServiceTest {
     @Test
     @DisplayName("Should extract empty text preview for empty HTML")
     void shouldExtractEmptyTextPreviewForEmptyHtml() {
-        String preview = pdfService.extractTextPreview("<html><body></body></html>", 100);
+        String preview = pdfService.extractTextPreview("<html><body></body></html>", 100).block();
         assertThat(preview).isNotNull();
     }
 
@@ -389,7 +389,7 @@ class PdfGenerationServiceTest {
     @DisplayName("Should extract text preview stripping all HTML tags")
     void shouldExtractTextStrippingTags() {
         String html = "<html><body><h1>Title</h1><p>Paragraph <strong>bold</strong></p></body></html>";
-        String preview = pdfService.extractTextPreview(html, 100);
+        String preview = pdfService.extractTextPreview(html, 100).block();
 
         assertThat(preview).contains("Title");
         assertThat(preview).contains("Paragraph");

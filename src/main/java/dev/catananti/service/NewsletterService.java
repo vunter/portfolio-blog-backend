@@ -272,10 +272,10 @@ public class NewsletterService {
      * Runs daily at 3 AM by default.
      */
     @Scheduled(cron = "${scheduling.newsletter-cleanup-cron:0 0 3 * * *}")
-    public void cleanupExpiredPendingSubscriptions() {
+    public Mono<Void> cleanupExpiredPendingSubscriptions() {
         LocalDateTime expirationDate = LocalDateTime.now().minusHours(confirmationExpirationHours);
 
-        schedulerLock.executeWithLock("newsletter-cleanup", Duration.ofMinutes(5),
+        return schedulerLock.executeWithLock("newsletter-cleanup", Duration.ofMinutes(5),
                 subscriberRepository.countExpiredPendingSubscriptions(expirationDate)
                         .flatMap(count -> {
                             if (count > 0) {
@@ -289,6 +289,6 @@ public class NewsletterService {
                         .doOnError(e -> log.error("Error cleaning up expired subscriptions: {}", e.getMessage(), e))
                         .onErrorComplete()
                         .then()
-        ).subscribe();
+        );
     }
 }

@@ -20,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Service for converting HTML content to PDF documents.
@@ -84,7 +85,10 @@ public class PdfGenerationService {
      * - Local: launches Chromium in the same container (default, requires Chromium installed)
      * - Remote: connects to a Playwright sidecar via WebSocket (set app.pdf.browser-ws-endpoint)
      */
-    private volatile Mono<Browser> browserMono;
+    // CAS-based lazy init keeps both @PostConstruct (eager) and the
+    // pre-init corner case non-blocking. Replaces a synchronized block
+    // that previously ran on the Netty event loop.
+    private final AtomicReference<Mono<Browser>> browserMonoRef = new AtomicReference<>();
 
     private Mono<Browser> createBrowserMono() {
         return Mono.defer(() ->
@@ -120,8 +124,9 @@ public class PdfGenerationService {
     @PostConstruct
     public void init() {
         this.pdfSemaphore = new Semaphore(maxConcurrentPdf);
-        this.browserMono = createBrowserMono();
-        initSubscription = browserMono.subscribe(
+        Mono<Browser> mono = createBrowserMono();
+        browserMonoRef.set(mono);
+        initSubscription = mono.subscribe(
                 b -> log.info("Playwright pre-initialized successfully"),
                 e -> log.warn("Failed to pre-initialize Playwright: {}. Will retry on first use.", e.getMessage(), e)
         );
@@ -133,7 +138,7 @@ public class PdfGenerationService {
         // Invalidate the cached Mono FIRST so any in-flight request doesn't get a closed
         // Browser handed back from the cache. New ensureBrowserReactive() callers will
         // see a failing Mono and short-circuit.
-        browserMono = Mono.error(new IllegalStateException("PdfGenerationService is shutting down"));
+        browserMonoRef.set(Mono.error(new IllegalStateException("PdfGenerationService is shutting down")));
         if (initSubscription != null && !initSubscription.isDisposed()) {
             initSubscription.dispose();
         }
@@ -159,21 +164,21 @@ public class PdfGenerationService {
     }
 
     /**
-     * Ensure browser is initialized reactively (non-blocking).
-     * Uses cached Mono to guarantee single initialization without synchronized blocks.
+     * Ensure browser is initialized reactively. Uses an AtomicReference + CAS
+     * so the path is fully non-blocking; nothing here acquires a monitor on
+     * the calling thread (previously a {@code synchronized} block could run
+     * on the Netty event loop before {@code @PostConstruct} fired).
      */
     private Mono<Browser> ensureBrowserReactive() {
-        Mono<Browser> current = browserMono;
-        if (current == null) {
-            synchronized (this) {
-                current = browserMono;
-                if (current == null) {
-                    current = createBrowserMono();
-                    browserMono = current;
-                }
-            }
+        Mono<Browser> current = browserMonoRef.get();
+        if (current != null) {
+            return current;
         }
-        return current;
+        Mono<Browser> candidate = createBrowserMono();
+        if (browserMonoRef.compareAndSet(null, candidate)) {
+            return candidate;
+        }
+        return browserMonoRef.get();
     }
 
     /**
@@ -424,23 +429,29 @@ public class PdfGenerationService {
     }
 
     /**
-     * Extract plain text preview from HTML content.
+     * Extract plain text preview from HTML content. Jsoup parsing of large or
+     * malformed HTML can cost tens of milliseconds and walk an internal tree,
+     * so this method runs on {@code Schedulers.boundedElastic()} rather than
+     * on the calling thread (which would typically be the Netty event loop).
      *
      * @param htmlContent HTML content to extract text from
-     * @param maxLength   Maximum length of extracted text
-     * @return Extracted text content
+     * @param maxLength   maximum length of extracted text
+     * @return a {@code Mono} emitting the preview text (empty string on parse failure)
      */
-    public String extractTextPreview(String htmlContent, int maxLength) {
-        try {
-            Document doc = Jsoup.parse(htmlContent);
-            String text = doc.body().text();
-            if (text.length() > maxLength) {
-                return text.substring(0, maxLength) + "...";
-            }
-            return text;
-        } catch (Exception e) {
-            log.warn("Failed to extract text preview: {}", e.getMessage(), e);
-            return "";
-        }
+    public Mono<String> extractTextPreview(String htmlContent, int maxLength) {
+        return Mono.fromCallable(() -> {
+                    try {
+                        Document doc = Jsoup.parse(htmlContent);
+                        String text = doc.body().text();
+                        if (text.length() > maxLength) {
+                            return text.substring(0, maxLength) + "...";
+                        }
+                        return text;
+                    } catch (Exception e) {
+                        log.warn("Failed to extract text preview: {}", e.getMessage(), e);
+                        return "";
+                    }
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 }
