@@ -17,6 +17,17 @@ log() {
 log "Certificate renewed for: ${RENEWED_DOMAINS:-unknown}"
 log "Lineage: ${RENEWED_LINEAGE:-unknown}"
 
+# Sanity check: the new fullchain.pem must still be valid for at least an
+# hour. If it isn't, certbot or the renewal pipeline produced something
+# broken and we must NOT swap it in (an expired cert would lock users out).
+if [ -n "${RENEWED_LINEAGE:-}" ] && [ -f "${RENEWED_LINEAGE}/fullchain.pem" ]; then
+    if ! openssl x509 -in "${RENEWED_LINEAGE}/fullchain.pem" -noout -checkend 3600; then
+        log "ERROR: renewed certificate expires within 1 hour — refusing to reload"
+        exit 1
+    fi
+    log "Certificate validity check passed"
+fi
+
 # Reload nginx inside the Docker container (picks up new certs from bind mount)
 if docker exec blog-nginx nginx -t 2>/dev/null; then
     docker exec blog-nginx nginx -s reload
