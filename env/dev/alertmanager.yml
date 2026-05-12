@@ -1,0 +1,32 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: 'null'
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  routes:
+    - matchers:
+        - severity =~ "critical|warning"
+      receiver: 'webhook'
+
+receivers:
+  # Default sink used when no Discord/Slack/email is wired up. Alerts still
+  # fire and are visible in the AlertManager UI; they just don't notify out.
+  - name: 'null'
+
+  # Webhook receiver. ALERTMANAGER_WEBHOOK_URL points at Discord/Slack/etc.
+  # (Discord requires the ?wait=true query string in the URL.)
+  - name: 'webhook'
+    webhook_configs:
+      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://localhost:5001/}'
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ['alertname', 'instance']

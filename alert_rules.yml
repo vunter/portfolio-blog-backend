@@ -80,3 +80,33 @@ groups:
         annotations:
           summary: "PDF generation is slow"
           description: "95th percentile PDF generation time exceeds 15 seconds."
+
+      # Host disk usage above 85% — requires node-exporter
+      - alert: HostDiskUsageHigh
+        expr: 100 - ((node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} * 100) / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage above 85% on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Filesystem {{ $labels.mountpoint }} is over 85% full. Backups, logs, and tmp may fill the rest soon."
+
+      # Host disk usage above 95% — page immediately
+      - alert: HostDiskUsageCritical
+        expr: 100 - ((node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} * 100) / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}) > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Filesystem {{ $labels.mountpoint }} is over 95% full. The host risks write failures."
+
+      # Host node unreachable
+      - alert: NodeExporterDown
+        expr: up{job="node"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node exporter is down on {{ $labels.instance }}"
+          description: "Host-level metrics have not been scraped for 5 minutes."

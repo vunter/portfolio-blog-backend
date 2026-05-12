@@ -183,6 +183,7 @@ services:
       - /tmp:size=64M
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -190,6 +191,9 @@ services:
       - '--web.enable-lifecycle'
       - '--web.external-url=/prometheus'
       - '--web.route-prefix=/prometheus'
+    depends_on:
+      - alertmanager
+      - node-exporter
     logging:
       driver: json-file
       options:
@@ -204,6 +208,59 @@ services:
     restart: unless-stopped
     labels:
       com.datadoghq.ad.logs: '[{"source":"prometheus","service":"blog-prometheus"}]'
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    container_name: blog-alertmanager
+    read_only: true
+    tmpfs:
+      - /tmp:size=32M
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=/alertmanager'
+      - '--web.route-prefix=/alertmanager'
+    environment:
+      - ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL:-http://localhost:5001/}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"alertmanager","service":"blog-alertmanager"}]'
+
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.9.1
+    container_name: blog-node-exporter
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - blog-backend-network
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:11.4.0
@@ -355,5 +412,6 @@ volumes:
   minio_data:
   prometheus_data:
   grafana_data:
+  alertmanager_data:
   uploads_data:
   app_logs:
