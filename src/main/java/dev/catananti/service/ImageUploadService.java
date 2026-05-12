@@ -10,6 +10,8 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,6 +21,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Iterator;
 import java.util.Set;
 import java.util.UUID;
 
@@ -31,6 +34,14 @@ public class ImageUploadService {
 
     @Value("${app.upload.max-size:10485760}")
     private long maxFileSize; // 10MB default
+
+    /** Maximum total pixel count (width × height × frame count) to defuse decompression bombs. */
+    @Value("${app.upload.max-pixels:100000000}")
+    private long maxPixels; // 100 MP default
+
+    /** Hard cap on GIF frame count — animated logos rarely need more than 200 frames. */
+    @Value("${app.upload.max-gif-frames:200}")
+    private int maxGifFrames;
 
     @Value("${app.site-url:https://catananti.dev}")
     private String siteUrl;
@@ -130,6 +141,11 @@ public class ImageUploadService {
                                             "File content does not match declared type");
                                 }
 
+                                // Defuse decompression bombs (esp. animated GIFs) by capping
+                                // total decoded pixels and GIF frame count before any further
+                                // ImageIO read that would expand the file in memory.
+                                enforcePixelBudget(path, ext);
+
                                 // Strip EXIF metadata from JPEG files to prevent GPS/device info leakage
                                 stripExifMetadata(path, ext);
 
@@ -211,6 +227,46 @@ public class ImageUploadService {
             log.debug("EXIF metadata stripped from: {}", filePath);
         } catch (IOException e) {
             log.warn("Failed to strip EXIF metadata from {}: {}", filePath, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Reject images whose declared dimensions would expand to more than the
+     * configured pixel budget when decoded. For GIFs the frame count is also
+     * factored in so an animated GIF cannot bypass the budget by claiming a
+     * modest single-frame footprint.
+     */
+    private void enforcePixelBudget(Path filePath, String extension) throws IOException {
+        try (ImageInputStream input = ImageIO.createImageInputStream(filePath.toFile())) {
+            if (input == null) {
+                Files.deleteIfExists(filePath);
+                throw new IllegalArgumentException("Unable to read image header for: " + extension);
+            }
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                Files.deleteIfExists(filePath);
+                throw new IllegalArgumentException("No image reader available for: " + extension);
+            }
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(input, true, true);
+                int width = reader.getWidth(0);
+                int height = reader.getHeight(0);
+                long frames = "gif".equals(extension) ? Math.max(1, reader.getNumImages(true)) : 1L;
+                if ("gif".equals(extension) && frames > maxGifFrames) {
+                    Files.deleteIfExists(filePath);
+                    throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                            "Animated GIF exceeds " + maxGifFrames + "-frame cap");
+                }
+                long pixelsRequired = (long) width * (long) height * frames;
+                if (pixelsRequired <= 0 || pixelsRequired > maxPixels) {
+                    Files.deleteIfExists(filePath);
+                    throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                            "Image dimensions exceed pixel budget (" + maxPixels + ")");
+                }
+            } finally {
+                reader.dispose();
+            }
         }
     }
 

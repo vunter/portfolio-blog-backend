@@ -1,5 +1,6 @@
 package dev.catananti.controller;
 
+import dev.catananti.util.LogSafe;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -23,7 +24,10 @@ public class ClientErrorController {
     @PostMapping
     public Mono<ResponseEntity<Void>> reportError(@Valid @RequestBody ClientErrorReport report) {
         log.warn("Client error: message={}, url={}, source={}, userAgent={}",
-                report.message(), report.url(), report.source(), report.userAgent());
+                LogSafe.sanitize(report.message(), 2000),
+                LogSafe.sanitize(report.url(), 500),
+                LogSafe.sanitize(report.source(), 200),
+                LogSafe.sanitize(report.userAgent(), 500));
         return Mono.just(ResponseEntity.noContent().build());
     }
 

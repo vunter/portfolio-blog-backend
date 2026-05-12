@@ -42,7 +42,7 @@ import java.util.regex.Pattern;
  */
 @RestController
 @RequestMapping("/api/v1/resume")
-@PreAuthorize("isAuthenticated()") // F-096: Enforce authentication at class level
+@PreAuthorize("hasAnyRole('ADMIN', 'DEV')") // F-096: defense-in-depth with the URL rule in SecurityConfig
 @RequiredArgsConstructor
 @Slf4j
 @Validated
