@@ -4,23 +4,29 @@ import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
 
 /**
- * Centralised resilience settings: timeouts and retry strategies.
- * Inject this component directly — no need for @Qualifier on Duration beans.
+ * Centralised resilience settings: timeouts, retry strategies, and circuit
+ * breakers. Inject this component directly into reactive pipelines:
  *
  * <pre>
  * return articleRepository.findBySlug(slug)
- *         .timeout(resilience.databaseTimeout())
+ *         .timeout(resilience.getDatabaseTimeout())
  *         .retryWhen(resilience.databaseRetry());
  * </pre>
+ *
+ * <p>Configuration is bound via {@link ResilienceProperties}; the
+ * previous 14-parameter {@code @Value} constructor is replaced with a
+ * single immutable record that groups settings by concern (database /
+ * redis / external).</p>
  */
-@Component
+@Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(ResilienceProperties.class)
 @Getter
 @Slf4j
 public class ResilienceConfig {
@@ -37,44 +43,31 @@ public class ResilienceConfig {
     private final CircuitBreaker emailCircuitBreaker;
     private final CircuitBreaker storageCircuitBreaker;
 
-    public ResilienceConfig(
-            @Value("${resilience.database.timeout-seconds:10}") int databaseTimeoutSeconds,
-            @Value("${resilience.database.retry-max-attempts:3}") int databaseRetryMaxAttempts,
-            @Value("${resilience.database.retry-min-backoff-ms:100}") int databaseRetryMinBackoffMs,
-            @Value("${resilience.database.retry-max-backoff-ms:1000}") int databaseRetryMaxBackoffMs,
-            @Value("${resilience.redis.timeout-seconds:5}") int redisTimeoutSeconds,
-            @Value("${resilience.external.timeout-seconds:30}") int externalTimeoutSeconds,
-            @Value("${resilience.database.cb-failure-rate:50}") int cbFailureRate,
-            @Value("${resilience.database.cb-wait-open-seconds:30}") int cbWaitOpenSeconds,
-            @Value("${resilience.database.cb-sliding-window-size:10}") int cbSlidingWindowSize,
-            @Value("${resilience.database.cb-min-calls:5}") int cbMinCalls,
-            @Value("${resilience.external.cb-failure-rate:50}") int extCbFailureRate,
-            @Value("${resilience.external.cb-wait-open-seconds:60}") int extCbWaitOpenSeconds,
-            @Value("${resilience.external.cb-sliding-window-size:10}") int extCbSlidingWindowSize,
-            @Value("${resilience.external.cb-min-calls:3}") int extCbMinCalls
-    ) {
-        this.databaseTimeout = Duration.ofSeconds(databaseTimeoutSeconds);
-        this.redisTimeout = Duration.ofSeconds(redisTimeoutSeconds);
-        this.externalTimeout = Duration.ofSeconds(externalTimeoutSeconds);
-        this.databaseRetryMaxAttempts = databaseRetryMaxAttempts;
-        this.databaseRetryMinBackoff = Duration.ofMillis(databaseRetryMinBackoffMs);
-        this.databaseRetryMaxBackoff = Duration.ofMillis(databaseRetryMaxBackoffMs);
+    public ResilienceConfig(ResilienceProperties props) {
+        ResilienceProperties.Database db = props.database();
+        ResilienceProperties.External ext = props.external();
+        this.databaseTimeout = Duration.ofSeconds(db.timeoutSeconds());
+        this.redisTimeout = Duration.ofSeconds(props.redis().timeoutSeconds());
+        this.externalTimeout = Duration.ofSeconds(ext.timeoutSeconds());
+        this.databaseRetryMaxAttempts = db.retryMaxAttempts();
+        this.databaseRetryMinBackoff = Duration.ofMillis(db.retryMinBackoffMs());
+        this.databaseRetryMaxBackoff = Duration.ofMillis(db.retryMaxBackoffMs());
 
         // Q9.2: Circuit breaker for database operations — fast-fails when DB is down
         CircuitBreakerConfig dbCbConfig = CircuitBreakerConfig.custom()
-                .failureRateThreshold(cbFailureRate)
-                .waitDurationInOpenState(Duration.ofSeconds(cbWaitOpenSeconds))
-                .slidingWindowSize(cbSlidingWindowSize)
-                .minimumNumberOfCalls(cbMinCalls)
+                .failureRateThreshold(db.cbFailureRate())
+                .waitDurationInOpenState(Duration.ofSeconds(db.cbWaitOpenSeconds()))
+                .slidingWindowSize(db.cbSlidingWindowSize())
+                .minimumNumberOfCalls(db.cbMinCalls())
                 .build();
         this.databaseCircuitBreaker = CircuitBreaker.of("database", dbCbConfig);
 
         // Q3.4: Circuit breakers for external services
         CircuitBreakerConfig extCbConfig = CircuitBreakerConfig.custom()
-                .failureRateThreshold(extCbFailureRate)
-                .waitDurationInOpenState(Duration.ofSeconds(extCbWaitOpenSeconds))
-                .slidingWindowSize(extCbSlidingWindowSize)
-                .minimumNumberOfCalls(extCbMinCalls)
+                .failureRateThreshold(ext.cbFailureRate())
+                .waitDurationInOpenState(Duration.ofSeconds(ext.cbWaitOpenSeconds()))
+                .slidingWindowSize(ext.cbSlidingWindowSize())
+                .minimumNumberOfCalls(ext.cbMinCalls())
                 .build();
         this.oauthCircuitBreaker = CircuitBreaker.of("oauth2", extCbConfig);
         this.cloudflareCircuitBreaker = CircuitBreaker.of("cloudflare", extCbConfig);
@@ -82,7 +75,7 @@ public class ResilienceConfig {
         this.storageCircuitBreaker = CircuitBreaker.of("storage", extCbConfig);
 
         log.info("Resilience configuration initialized (DB circuit breaker: failureRate={}%, window={}, waitOpen={}s)",
-                cbFailureRate, cbSlidingWindowSize, cbWaitOpenSeconds);
+                db.cbFailureRate(), db.cbSlidingWindowSize(), db.cbWaitOpenSeconds());
     }
 
     /**
@@ -113,7 +106,6 @@ public class ResilienceConfig {
 
         String lowerMessage = message.toLowerCase();
 
-        // Retry on connection issues
         if (lowerMessage.contains("connection") ||
             lowerMessage.contains("timeout") ||
             lowerMessage.contains("temporarily unavailable") ||
@@ -121,13 +113,11 @@ public class ResilienceConfig {
             return true;
         }
 
-        // Retry on deadlocks
         if (lowerMessage.contains("deadlock") ||
             lowerMessage.contains("lock wait timeout")) {
             return true;
         }
 
-        // Don't retry on validation, constraint violations, or business logic errors
         return false;
     }
 }

@@ -8,7 +8,6 @@ import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.RecaptchaService;
 import dev.catananti.service.RefreshTokenService;
-import dev.catananti.repository.UserRepository;
 import dev.catananti.util.IpAddressExtractor;
 import dev.catananti.util.PiiMasker;
 import dev.catananti.service.EmailChangeService;
@@ -46,7 +45,6 @@ public class AuthController {
     private final RecaptchaService recaptchaService;
     private final EmailChangeService emailChangeService;
     private final RefreshTokenService refreshTokenService;
-    private final UserRepository userRepository;
     private final ServerCsrfTokenRepository csrfTokenRepository;
     private final BlogMetrics blogMetrics;
 
@@ -327,8 +325,8 @@ public class AuthController {
     @GetMapping("/sessions")
     public Mono<ResponseEntity<java.util.List<Map<String, Object>>>> getActiveSessions(
             @AuthenticationPrincipal String email) {
-        return userRepository.findByEmail(email)
-                .flatMapMany(user -> refreshTokenService.getActiveSessions(user.getId()))
+        return authService.resolveUserIdByEmail(email)
+                .flatMapMany(refreshTokenService::getActiveSessions)
                 .map(session -> {
                     Map<String, Object> dto = new java.util.LinkedHashMap<>();
                     dto.put("id", session.getId());
@@ -347,8 +345,8 @@ public class AuthController {
     public Mono<ResponseEntity<Void>> revokeSession(
             @PathVariable Long sessionId,
             @AuthenticationPrincipal String email) {
-        return userRepository.findByEmail(email)
-                .flatMap(user -> refreshTokenService.revokeTokenById(sessionId, user.getId()))
+        return authService.resolveUserIdByEmail(email)
+                .flatMap(userId -> refreshTokenService.revokeTokenById(sessionId, userId))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 
@@ -360,8 +358,8 @@ public class AuthController {
         if (currentRefreshToken == null) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
-        return userRepository.findByEmail(email)
-                .flatMap(user -> refreshTokenService.revokeAllExceptCurrent(user.getId(), currentRefreshToken))
+        return authService.resolveUserIdByEmail(email)
+                .flatMap(userId -> refreshTokenService.revokeAllExceptCurrent(userId, currentRefreshToken))
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
 }

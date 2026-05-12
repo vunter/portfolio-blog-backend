@@ -43,30 +43,38 @@ public class GlobalExceptionHandler {
     private final MessageSource messageSource;
 
     /**
-     * Build a standardized error response with correlation ID.
+     * Build a standardized error response. Populates both the legacy keys
+     * (status / error / message / path) and the RFC 7807 keys (title /
+     * detail / instance) so clients can opt into the standard shape without
+     * the server breaking the existing one.
      */
     private ErrorResponse buildErrorResponse(HttpStatus status, String error, String message,
                                               ServerWebExchange exchange) {
-        String requestId = exchange.getRequest().getHeaders().getFirst("X-Correlation-Id");
-        if (requestId == null || requestId.isBlank()) {
-            requestId = UUID.randomUUID().toString();
-        }
-        return ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(status.value())
-                .error(error)
-                .message(message)
-                .path(exchange.getRequest().getPath().value())
-                .requestId(requestId)
-                .build();
+        return buildErrorResponse(status, error, message, exchange, null);
     }
 
     private ErrorResponse buildErrorResponse(HttpStatus status, String error, String message,
                                               ServerWebExchange exchange,
                                               Map<String, String> validationErrors) {
-        ErrorResponse resp = buildErrorResponse(status, error, message, exchange);
-        resp.setValidationErrors(validationErrors);
-        return resp;
+        String requestId = exchange.getRequest().getHeaders().getFirst("X-Correlation-Id");
+        if (requestId == null || requestId.isBlank()) {
+            requestId = UUID.randomUUID().toString();
+        }
+        String path = exchange.getRequest().getPath().value();
+        return ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(status.value())
+                .error(error)
+                .message(message)
+                .path(path)
+                .requestId(requestId)
+                .validationErrors(validationErrors)
+                // RFC 7807 surface — clients should prefer these going forward.
+                .type("about:blank")
+                .title(error)
+                .detail(message)
+                .instance(path)
+                .build();
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)
@@ -253,16 +261,36 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Mono<ErrorResponse> handleRuntimeException(RuntimeException ex, ServerWebExchange exchange) {
         String path = exchange.getRequest().getPath().value();
-        // Client disconnects (SSE stream closed) are expected, not server errors
-        if (ex.getMessage() != null && ex.getMessage().contains("Connection has been closed")) {
-            log.trace("status=500 path={} Client disconnected: {}", path, ex.getMessage());
+        if (isClientDisconnect(ex)) {
+            log.trace("status=499 path={} Client disconnected: {}", path, ex.getMessage());
             return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Client disconnected", ex.getMessage(), exchange));
+                    "Client disconnected", "Client closed the connection before response completed", exchange));
         }
         log.error("status=500 path={} Runtime exception: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
         return Mono.just(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
                 msg(locale, "error.internal_server_error"), msg(locale, "error.unexpected_error"), exchange));
+    }
+
+    /**
+     * Client-disconnect detection via exception type rather than message text.
+     * Netty publishes {@link reactor.netty.channel.AbortedException} when a
+     * downstream consumer goes away mid-response; matching by class keeps us
+     * insulated from Netty / Reactor message-string churn across versions.
+     */
+    private boolean isClientDisconnect(Throwable ex) {
+        Throwable cur = ex;
+        while (cur != null) {
+            String name = cur.getClass().getName();
+            if (name.equals("reactor.netty.channel.AbortedException")
+                    || name.equals("java.io.IOException") && cur.getMessage() != null
+                            && (cur.getMessage().contains("Broken pipe")
+                                || cur.getMessage().contains("Connection reset by peer"))) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     @ExceptionHandler(Exception.class)

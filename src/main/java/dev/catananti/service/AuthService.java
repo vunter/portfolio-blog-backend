@@ -309,6 +309,18 @@ public class AuthService {
     }
 
     /**
+     * Resolve an authenticated principal's email to the persisted user id.
+     * Provided so controllers (e.g. {@code AuthController}) don't have to
+     * depend on {@link UserRepository} directly.
+     *
+     * @param email principal email (typically from {@code @AuthenticationPrincipal})
+     * @return {@code Mono} emitting the user id, or empty when no user matches
+     */
+    public Mono<Long> resolveUserIdByEmail(String email) {
+        return userRepository.findByEmail(email).map(User::getId);
+    }
+
+    /**
      * Resolve an mfaToken to the associated userId (for sending email OTP during login).
      */
     public Mono<Long> resolveMfaTokenUserId(String mfaToken) {
