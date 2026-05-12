@@ -12,6 +12,10 @@ on:
         description: 'Commit SHA to deploy (leave empty for latest main)'
         required: false
         type: string
+      frontend_sha:
+        description: 'Frontend repo SHA to build (leave empty for portfolio-blog-frontend@main)'
+        required: false
+        type: string
       skip_ci_check:
         description: 'Bypass the green-CI gate (emergency hotfix only)'
         required: false
@@ -35,6 +39,7 @@ jobs:
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
       sha_short: ${{ steps.sha.outputs.sha_short }}
+      fe_sha: ${{ steps.fe_sha.outputs.sha }}
     steps:
       - name: Resolve deploy SHA
         id: sha
@@ -47,6 +52,27 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "sha_short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
           echo "Deploying SHA: $SHA"
+
+      # Resolve the frontend SHA up-front so every downstream job builds
+      # from the SAME commit. Previously each FE-checkout used `ref: main`
+      # so a commit pushed mid-deploy would silently change what shipped.
+      - name: Resolve frontend SHA
+        id: fe_sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.frontend_sha }}" ]; then
+            FE_SHA="${{ github.event.inputs.frontend_sha }}"
+          else
+            FE_SHA=$(gh api repos/vunter/portfolio-blog-frontend/commits/main --jq '.sha')
+          fi
+          if [ -z "$FE_SHA" ]; then
+            echo "ERROR: could not resolve frontend SHA"
+            exit 1
+          fi
+          echo "sha=$FE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Frontend SHA: $FE_SHA"
 
   # ──────────────────────────────────────────────
   # Gate: refuse to deploy a SHA whose CI never went green.
@@ -67,21 +93,36 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEPLOY_SHA: ${{ needs.prepare.outputs.sha }}
+          FE_SHA: ${{ needs.prepare.outputs.fe_sha }}
         run: |
           set -e
-          # Look for a successful run of the CI workflow on this exact SHA.
-          # `gh api` paginates automatically with --paginate.
+
+          # 1. Backend CI must be green for this SHA.
           STATUS=$(gh api -X GET \
             "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
             -f head_sha="$DEPLOY_SHA" -f per_page=20 \
             --jq '[.workflow_runs[] | select(.conclusion=="success")] | length')
           if [ "${STATUS:-0}" -eq 0 ]; then
-            echo "ERROR: no successful CI run found for SHA $DEPLOY_SHA"
+            echo "ERROR: no successful backend CI run for SHA $DEPLOY_SHA"
             echo "Either push to main + wait for CI green before tagging,"
             echo "or re-dispatch with skip_ci_check=true (emergency only)."
             exit 1
           fi
-          echo "CI is green for $DEPLOY_SHA — proceeding"
+          echo "Backend CI is green for $DEPLOY_SHA"
+
+          # 2. Frontend CI must be green for the resolved FE SHA. The
+          #    frontend lives in a separate repo so we hit its CI workflow
+          #    runs directly.
+          FE_STATUS=$(gh api -X GET \
+            "repos/vunter/portfolio-blog-frontend/actions/runs" \
+            -f head_sha="$FE_SHA" -f per_page=20 \
+            --jq '[.workflow_runs[] | select(.conclusion=="success" and (.name | test("CI|Build|Test"; "i")))] | length')
+          if [ "${FE_STATUS:-0}" -eq 0 ]; then
+            echo "ERROR: no successful frontend CI run for SHA $FE_SHA"
+            echo "Re-run the frontend pipeline (or pass frontend_sha for a known-good commit)."
+            exit 1
+          fi
+          echo "Frontend CI is green for $FE_SHA — proceeding"
 
   # ──────────────────────────────────────────────
   # Build API image → push to GHCR
@@ -145,7 +186,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: vunter/portfolio-blog-frontend
-          ref: main
+          ref: ${{ needs.prepare.outputs.fe_sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -395,7 +436,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: vunter/portfolio-blog-frontend
-          ref: main
+          ref: ${{ needs.prepare.outputs.fe_sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
