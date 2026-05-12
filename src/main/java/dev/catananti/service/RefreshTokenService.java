@@ -217,15 +217,15 @@ public class RefreshTokenService {
     }
 
     @Scheduled(fixedRateString = "${scheduling.refresh-token-cleanup-ms:3600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
-    public void cleanupExpiredTokens() {
-        schedulerLock.executeWithLock("refresh-token-cleanup", Duration.ofMinutes(5),
+    public reactor.core.publisher.Mono<Void> cleanupExpiredTokens() {
+        return schedulerLock.executeWithLock("refresh-token-cleanup", Duration.ofMinutes(5),
                 refreshTokenRepository.deleteExpired(LocalDateTime.now())
                         .timeout(Duration.ofSeconds(30))
                         .doOnSuccess(count -> log.info("Expired refresh tokens cleaned up"))
                         .doOnError(e -> log.error("Failed to cleanup expired refresh tokens", e))
                         .onErrorComplete()
                         .then()
-        ).subscribe();
+        );
     }
 
     private String generateSecureToken() {

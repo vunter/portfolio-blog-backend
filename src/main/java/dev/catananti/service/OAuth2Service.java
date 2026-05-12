@@ -78,7 +78,8 @@ public class OAuth2Service {
                          AuditService auditService,
                          ReactiveStringRedisTemplate redisTemplate,
                          ResilienceConfig resilience,
-                         tools.jackson.databind.ObjectMapper objectMapper) {
+                         tools.jackson.databind.ObjectMapper objectMapper,
+                         WebClient.Builder webClientBuilder) {
         this.userRepository = userRepository;
         this.socialAccountRepository = socialAccountRepository;
         this.refreshTokenService = refreshTokenService;
@@ -86,7 +87,9 @@ public class OAuth2Service {
         this.idService = idService;
         this.auditService = auditService;
         this.redisTemplate = redisTemplate;
-        this.webClient = WebClient.builder().build();
+        // Reuse the configured WebClient.Builder so OAuth provider calls inherit
+        // the connector-level connect / response timeouts.
+        this.webClient = webClientBuilder.build();
         this.circuitBreaker = resilience.getOauthCircuitBreaker();
         this.objectMapper = objectMapper;
     }

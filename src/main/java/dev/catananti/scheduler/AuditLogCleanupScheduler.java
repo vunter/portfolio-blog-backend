@@ -21,15 +21,22 @@ public class AuditLogCleanupScheduler {
     @Value("${app.audit.retention-days:90}")
     private int retentionDays = 90;
 
+    /**
+     * Daily audit-log retention sweep. Returns {@code Mono<Void>} so Spring's
+     * reactive scheduler defers the next run until the current pipeline
+     * terminates; the previous {@code .subscribe()} call was an untracked
+     * fire-and-forget subscription that could overlap with itself under
+     * cron drift.
+     */
     @Scheduled(cron = "${app.audit.cleanup-cron:0 0 2 * * *}")
-    public void cleanupOldAuditLogs() {
+    public reactor.core.publisher.Mono<Void> cleanupOldAuditLogs() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
-        schedulerLock.executeWithLock("audit-cleanup", Duration.ofMinutes(10),
+        return schedulerLock.executeWithLock("audit-cleanup", Duration.ofMinutes(10),
                 auditLogRepository.deleteByCreatedAtBefore(cutoff)
                         .doOnSuccess(result -> log.info("Audit log retention cleanup completed"))
                         .doOnError(e -> log.error("Failed to cleanup old audit logs: {}", e.getMessage(), e))
                         .onErrorComplete()
                         .then()
-        ).subscribe();
+        );
     }
 }

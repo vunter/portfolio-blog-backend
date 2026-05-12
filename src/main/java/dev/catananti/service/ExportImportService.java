@@ -206,11 +206,16 @@ public class ExportImportService {
     private int maxImportSize;
 
     /**
-     * Import blog data from JSON.
-     * Uses the injected ObjectMapper with secure defaults.
-     * Enforces a size limit to prevent DoS via large payloads.
+     * Import blog data from JSON. Uses the injected ObjectMapper with secure
+     * defaults and enforces a size limit to prevent DoS via large payloads.
+     * <p>
+     * The {@link Isolation#REPEATABLE_READ} boundary is declared here (the
+     * proxied entry point) rather than on {@link #importData} so the
+     * self-invocation {@code this.importData(...)} doesn't silently drop the
+     * annotation — Spring AOP only honors annotations crossed through the
+     * proxy, never on internal calls.
      */
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<ImportResult> importFromJson(String json, boolean overwrite) {
         if (json == null || json.isBlank()) {
             return Mono.error(new IllegalArgumentException("error.import_data_empty"));
@@ -227,9 +232,12 @@ public class ExportImportService {
     }
 
     /**
-     * Import blog data.
+     * Import blog data. Callers should normally go through {@link #importFromJson},
+     * which establishes the {@code REPEATABLE_READ} transactional boundary. This
+     * method intentionally carries no {@code @Transactional} — historically it
+     * did, but the annotation was silently dropped because the only production
+     * caller invokes it via {@code this.importData(...)} (proxy bypass).
      */
-    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<ImportResult> importData(BlogExport export, boolean overwrite) {
         int totalTags = export.getTags() != null ? export.getTags().size() : 0;
         int totalArticles = export.getArticles() != null ? export.getArticles().size() : 0;

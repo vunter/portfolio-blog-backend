@@ -91,26 +91,33 @@ public class BlogMetrics {
                 .register(meterRegistry);
     }
 
+    /**
+     * Refresh blog metrics on a fixed cadence. Returns a {@code Mono<Void>} so
+     * Spring's reactive scheduler will not fire the next run until the current
+     * pipeline terminates — preventing overlapping subscriptions when the DB
+     * is slow.
+     */
     @Scheduled(fixedRateString = "${scheduling.metrics-update-ms:60000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
-    public void updateMetrics() {
-        reactor.core.publisher.Mono.zip(
-                articleRepository.countAll().onErrorReturn(0L),
-                articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()).onErrorReturn(0L),
-                articleRepository.countByStatus(ArticleStatus.DRAFT.name()).onErrorReturn(0L),
-                commentRepository.count().onErrorReturn(0L),
-                commentRepository.countByStatus(CommentStatus.PENDING.name()).onErrorReturn(0L),
-                subscriberRepository.countConfirmed().onErrorReturn(0L)
-        ).subscribe(
-                tuple -> {
+    public reactor.core.publisher.Mono<Void> updateMetrics() {
+        return reactor.core.publisher.Mono.zip(
+                        articleRepository.countAll().onErrorReturn(0L),
+                        articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()).onErrorReturn(0L),
+                        articleRepository.countByStatus(ArticleStatus.DRAFT.name()).onErrorReturn(0L),
+                        commentRepository.count().onErrorReturn(0L),
+                        commentRepository.countByStatus(CommentStatus.PENDING.name()).onErrorReturn(0L),
+                        subscriberRepository.countConfirmed().onErrorReturn(0L)
+                )
+                .doOnNext(tuple -> {
                     totalArticles.set(tuple.getT1());
                     publishedArticles.set(tuple.getT2());
                     draftArticles.set(tuple.getT3());
                     totalComments.set(tuple.getT4());
                     pendingComments.set(tuple.getT5());
                     activeSubscribers.set(tuple.getT6());
-                },
-                e -> log.warn("Failed to update metrics: {}", e.getMessage(), e)
-        );
+                })
+                .doOnError(e -> log.warn("Failed to update metrics: {}", e.getMessage(), e))
+                .onErrorResume(e -> reactor.core.publisher.Mono.empty())
+                .then();
     }
 
     // Counter for specific events - call from services

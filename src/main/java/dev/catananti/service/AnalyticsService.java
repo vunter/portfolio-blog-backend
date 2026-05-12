@@ -754,15 +754,15 @@ public class AnalyticsService {
      * Runs daily by default.
      */
     @Scheduled(fixedRateString = "${scheduling.analytics-cleanup-ms:86400000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
-    public void cleanupOldEvents() {
+    public reactor.core.publisher.Mono<Void> cleanupOldEvents() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
-        schedulerLock.executeWithLock("analytics-cleanup", Duration.ofMinutes(10),
+        return schedulerLock.executeWithLock("analytics-cleanup", Duration.ofMinutes(10),
                 analyticsRepository.deleteByCreatedAtBefore(cutoff)
                         .timeout(Duration.ofSeconds(30))
                         .doOnSuccess(count -> log.info("Analytics cleanup: deleted {} events older than {} days", count, retentionDays))
                         .doOnError(e -> log.error("Failed to cleanup old analytics events: {}", e.getMessage(), e))
                         .onErrorComplete()
                         .then()
-        ).subscribe();
+        );
     }
 }

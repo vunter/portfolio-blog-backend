@@ -52,9 +52,11 @@ public class LinkedInPortabilityService {
     private String redirectBaseUrl;
 
     public LinkedInPortabilityService(ReactiveStringRedisTemplate redisTemplate,
-                                      tools.jackson.databind.ObjectMapper objectMapper) {
+                                      tools.jackson.databind.ObjectMapper objectMapper,
+                                      WebClient.Builder webClientBuilder) {
         this.redisTemplate = redisTemplate;
-        this.webClient = WebClient.builder().build();
+        // Use the shared builder so LinkedIn calls inherit connector timeouts.
+        this.webClient = webClientBuilder.build();
         this.objectMapper = objectMapper;
     }
 
