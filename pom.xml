@@ -523,17 +523,40 @@
 							<groupId>org.projectlombok</groupId>
 							<artifactId>lombok</artifactId>
 						</exclude>
-						<!-- H2 is dev-only; do not ship it in the prod fat-jar. -->
-						<exclude>
-							<groupId>com.h2database</groupId>
-							<artifactId>h2</artifactId>
-						</exclude>
-						<exclude>
-							<groupId>io.r2dbc</groupId>
-							<artifactId>r2dbc-h2</artifactId>
-						</exclude>
 					</excludes>
 				</configuration>
+				<executions>
+					<!--
+					  H2 is dev-only. Excluding it at the `repackage` goal level
+					  (not the plugin-level <configuration>) keeps it on the
+					  spring-boot:run classpath for local dev while keeping the
+					  prod fat-jar slim. The plugin-level <excludes> above
+					  applies to every goal including `run`, which would break
+					  the H2-backed dev profile.
+					-->
+					<execution>
+						<id>repackage</id>
+						<goals>
+							<goal>repackage</goal>
+						</goals>
+						<configuration>
+							<excludes>
+								<exclude>
+									<groupId>org.projectlombok</groupId>
+									<artifactId>lombok</artifactId>
+								</exclude>
+								<exclude>
+									<groupId>com.h2database</groupId>
+									<artifactId>h2</artifactId>
+								</exclude>
+								<exclude>
+									<groupId>io.r2dbc</groupId>
+									<artifactId>r2dbc-h2</artifactId>
+								</exclude>
+							</excludes>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 			<!-- F-005: Enforce minimum Maven/Java versions and ban duplicate deps -->
 			<plugin>
