@@ -2,6 +2,14 @@
 # Portfolio Blog API - Multi-stage Dockerfile
 # Java 25 + Spring Boot 4 + WebFlux
 # Optimized: layered JARs + BuildKit cache
+#
+# SUPPLY CHAIN: pin base images by digest before release. Lookup with:
+#   docker buildx imagetools inspect eclipse-temurin:25-jdk-alpine
+#   docker buildx imagetools inspect eclipse-temurin:25-jre-noble
+# Then change the FROM lines to:
+#   FROM eclipse-temurin:25-jdk-alpine@sha256:<digest> AS builder
+#   FROM eclipse-temurin:25-jre-noble@sha256:<digest> AS runtime
+# Dependabot's docker ecosystem will keep the digest fresh once pinned.
 # ============================================
 
 # Stage 1: Build with Maven cache
@@ -103,8 +111,11 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
     CMD wget -q --spider http://localhost:8080/actuator/health || exit 1
 
-# JVM tuned for containers; DD agent conditionally loaded
-ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+UseZGC" \
+# JVM tuned for containers. -Djava.security.egd avoids start-up entropy
+# stalls in container environments where /dev/random can block.
+# UseContainerSupport is default-on since Java 11 but kept explicit for
+# auditability. -XX:MaxRAMPercentage respects cgroup memory limits.
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseZGC -Djava.security.egd=file:/dev/./urandom" \
     DD_AGENT_ENABLED=false \
     DD_SERVICE=portfolio-blog-api \
     DD_ENV=production \

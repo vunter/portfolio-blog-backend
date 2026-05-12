@@ -61,18 +61,18 @@ if ! download "${BASE_URL}?edition_id=GeoLite2-Country&license_key=${MAXMIND_LIC
     exit 0
 fi
 
-if download "${BASE_URL}?edition_id=GeoLite2-Country&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz.sha256" "$SHA_FILE"; then
-    # MaxMind SHA file format: "<sha256>  GeoLite2-Country_YYYYMMDD.tar.gz"
-    EXPECTED=$(awk '{print $1}' "$SHA_FILE")
-    ACTUAL=$(sha256sum "$ARCHIVE" | awk '{print $1}')
-    if [ "$EXPECTED" != "$ACTUAL" ]; then
-        log "WARNING: SHA256 mismatch (expected=$EXPECTED actual=$ACTUAL) — refusing to install, app starts without geolocation"
-        exit 0
-    fi
-    log "SHA256 verified"
-else
-    log "WARNING: could not download SHA256 file — skipping integrity check"
+if ! download "${BASE_URL}?edition_id=GeoLite2-Country&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz.sha256" "$SHA_FILE"; then
+    log "WARNING: SHA256 download failed — refusing to install unverified archive, app starts without geolocation"
+    exit 0
 fi
+# MaxMind SHA file format: "<sha256>  GeoLite2-Country_YYYYMMDD.tar.gz"
+EXPECTED=$(awk '{print $1}' "$SHA_FILE")
+ACTUAL=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+    log "WARNING: SHA256 mismatch (expected=$EXPECTED actual=$ACTUAL) — refusing to install, app starts without geolocation"
+    exit 0
+fi
+log "SHA256 verified"
 
 tar -xzf "$ARCHIVE" -C "$TMP"
 MMDB=$(find "$TMP" -name 'GeoLite2-Country.mmdb' -type f | head -1)
