@@ -105,6 +105,17 @@ class BlogMetricsTest {
     class UpdateMetrics {
 
         @Test
+        @DisplayName("updateMetricsScheduled should call updateMetrics")
+        void shouldInvokeScheduledWrapper() {
+            BlogMetrics spyMetrics = spy(blogMetrics);
+            doReturn(Mono.empty()).when(spyMetrics).updateMetrics();
+
+            spyMetrics.updateMetricsScheduled();
+
+            verify(spyMetrics).updateMetrics();
+        }
+
+        @Test
         @DisplayName("should set atomic values from repository counts")
         void shouldSetAtomicValuesFromRepositoryCounts() throws InterruptedException {
             blogMetrics.init();

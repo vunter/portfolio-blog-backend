@@ -275,6 +275,30 @@ public class EmailService {
     }
 
     /**
+     * Send unsubscribe confirmation email.
+     */
+    public Mono<Void> sendNewsletterUnsubscribeConfirmation(String to, String name, String unsubscribeToken) {
+        String subject = msg("email.newsletter.unsubscribe.subject");
+        String unsubscribeUrl = siteUrl + "/newsletter/unsubscribe?token=" + unsubscribeToken;
+        String displayName = name != null ? name : msg("email.default.subscriber");
+
+        String html = templateService.render("newsletter-confirmation", baseVars(
+            "#f59e0b 0%, #d97706 100%",
+            msg("email.newsletter.unsubscribe.header"),
+            Map.of(
+                "greeting", msg("email.greeting", displayName),
+                "bodyText", msg("email.newsletter.unsubscribe.body"),
+                "actionText", msg("email.newsletter.unsubscribe.action"),
+                "confirmUrl", unsubscribeUrl,
+                "buttonText", msg("email.newsletter.unsubscribe.button"),
+                "disclaimer", msg("email.newsletter.unsubscribe.disclaimer")
+            )
+        ));
+
+        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeUrl);
+    }
+
+    /**
      * Send welcome email after newsletter confirmation.
      */
     public Mono<Void> sendNewsletterWelcome(String to, String name, String unsubscribeToken) {

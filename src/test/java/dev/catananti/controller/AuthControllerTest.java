@@ -160,6 +160,24 @@ class AuthControllerTest {
 
             verify(authService).logout(eq("refresh-token-123"), any());
         }
+
+        @Test
+        @DisplayName("Should revoke all refresh_token cookies on logout")
+        void shouldRevokeAllRefreshTokens() {
+            MultiValueMap<String, HttpCookie> cookies = new LinkedMultiValueMap<>();
+            cookies.add("refresh_token", new HttpCookie("refresh_token", "refresh-1"));
+            cookies.add("refresh_token", new HttpCookie("refresh_token", "refresh-2"));
+            when(mockRequest.getCookies()).thenReturn(cookies);
+
+            when(authService.logout(eq("refresh-1"), any())).thenReturn(Mono.empty());
+            when(refreshTokenService.revokeToken("refresh-2")).thenReturn(Mono.empty());
+
+            StepVerifier.create(authController.logout(mockRequest, mockResponse, mockExchange))
+                    .verifyComplete();
+
+            verify(authService).logout(eq("refresh-1"), any());
+            verify(refreshTokenService).revokeToken("refresh-2");
+        }
     }
 
     @Nested

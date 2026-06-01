@@ -86,10 +86,13 @@ class MediaServiceTest {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(contentType);
+        headers.setContentLength(data.length);
         when(filePart.headers()).thenReturn(headers);
 
         DataBuffer dataBuffer = new DefaultDataBufferFactory().wrap(data);
-        when(filePart.content()).thenReturn(Flux.just(dataBuffer));
+        // lenient: tests that reject the upload early (size/validation) never read the
+        // content, so this shared-helper stub is intentionally unused by some of them.
+        lenient().when(filePart.content()).thenReturn(Flux.just(dataBuffer));
 
         return filePart;
     }
@@ -555,8 +558,10 @@ class MediaServiceTest {
                     .expectErrorMatches(ex ->
                             ex instanceof ResponseStatusException rse
                                     && rse.getStatusCode().value() == 400
-                                    && rse.getReason().contains("size"))
+                                    && rse.getReason().contains("upload_too_large"))
                     .verify();
+
+            verify(filePart, never()).content();
         }
 
         @Test

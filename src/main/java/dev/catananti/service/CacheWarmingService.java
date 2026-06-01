@@ -164,13 +164,6 @@ public class CacheWarmingService {
 
     // ==================== SCHEDULED WARMING ====================
 
-    /**
-     * Periodically refresh cache for popular content. Returns {@code Mono<Void>}
-     * so Spring's reactive scheduler defers the next run until the current one
-     * completes — eliminating the overlap risk of the previous
-     * {@code .subscribe()} pattern under slow DB.
-     */
-    @Scheduled(fixedRateString = "${cache.warming.refresh-rate-ms:300000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public Mono<Void> refreshPopularContent() {
         if (!warmingEnabled || !startupWarmingComplete.get()) {
             return Mono.empty();
@@ -193,6 +186,14 @@ public class CacheWarmingService {
                     log.error("refreshPopularContent failed: {}", e.getMessage(), e);
                 })
                 .onErrorResume(e -> Mono.empty());
+    }
+
+    /**
+     * Periodically refresh cache for popular content.
+     */
+    @Scheduled(fixedRateString = "${cache.warming.refresh-rate-ms:300000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
+    public void refreshPopularContentScheduled() {
+        refreshPopularContent().subscribe();
     }
 
     // ==================== PREFETCH ON ACCESS ====================

@@ -59,88 +59,97 @@ public class MediaService {
      */
     public Mono<MediaAsset> upload(FilePart filePart, String purpose, String altText, Long uploaderId) {
         return validateFile(filePart)
-                .flatMap(validated -> readFileBytes(validated)
-                        .flatMap(data -> {
-                            // Validate size
-                            if (data.length > maxFileSize) {
-                                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                        "File size exceeds maximum allowed: " + maxFileSize + " bytes"));
-                            }
+                .flatMap(validated -> {
+                    long contentLength = validated.headers().getContentLength();
+                    if (contentLength > 0 && contentLength > maxFileSize) {
+                        return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "error.upload_too_large"));
+                    }
 
-                            // Validate magic bytes
-                            String ext = getExtension(filePart.filename()).toLowerCase();
-                            if (!isValidMagicBytes(data, ext)) {
-                                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                        "File content does not match declared type"));
-                            }
+                    return readFileBytes(validated)
+                            .flatMap(data -> {
+                                // Validate size after buffering as a secondary safeguard for clients
+                                // that do not send Content-Length or can stream without it.
+                                if (data.length > maxFileSize) {
+                                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                            "error.upload_too_large"));
+                                }
 
-                            // Generate storage key
-                            String datePath = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy/MM"));
-                            String fileId = UUID.randomUUID().toString();
-                            String storedFilename = fileId + "." + ext;
-                            String storageKey = datePath + "/" + storedFilename;
-                            String contentType = filePart.headers().getContentType() != null
-                                    ? filePart.headers().getContentType().toString()
-                                    : "application/octet-stream";
+                                // Validate magic bytes
+                                String ext = getExtension(filePart.filename()).toLowerCase();
+                                if (!isValidMagicBytes(data, ext)) {
+                                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                            "File content does not match declared type"));
+                                }
 
-                            boolean isImage = ALLOWED_CONTENT_TYPES.contains(contentType)
-                                    && !"image/gif".equals(contentType);
+                                // Generate storage key
+                                String datePath = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy/MM"));
+                                String fileId = UUID.randomUUID().toString();
+                                String storedFilename = fileId + "." + ext;
+                                String storageKey = datePath + "/" + storedFilename;
+                                String contentType = filePart.headers().getContentType() != null
+                                        ? filePart.headers().getContentType().toString()
+                                        : "application/octet-stream";
 
-                            Mono<Map<String, ImageProcessingService.ImageVariant>> processingMono =
-                                    isImage
-                                            ? imageProcessingService.processImage(data, contentType)
-                                            : Mono.just(Map.of("",
-                                                    new ImageProcessingService.ImageVariant("", data, 0, 0)));
+                                boolean isImage = ALLOWED_CONTENT_TYPES.contains(contentType)
+                                        && !"image/gif".equals(contentType);
 
-                            return processingMono.flatMap(variants -> {
-                                ImageProcessingService.ImageVariant original = variants.get("");
-                                byte[] originalBytes = original != null ? original.data() : data;
+                                Mono<Map<String, ImageProcessingService.ImageVariant>> processingMono =
+                                        isImage
+                                                ? imageProcessingService.processImage(data, contentType)
+                                                : Mono.just(Map.of("",
+                                                        new ImageProcessingService.ImageVariant("", data, 0, 0)));
 
-                                // Store original (EXIF-stripped if processed)
-                                return storageProvider.store(storageKey, originalBytes, contentType)
-                                        .flatMap(url -> {
-                                            // Store thumbnail variant if generated
-                                            ImageProcessingService.ImageVariant thumb = variants.get("-thumb");
-                                            Mono<String> thumbMono;
-                                            if (thumb != null) {
-                                                String thumbKey = datePath + "/" + fileId + "-thumb." + ext;
-                                                thumbMono = storageProvider.store(thumbKey, thumb.data(), contentType);
-                                            } else {
-                                                thumbMono = Mono.empty();
-                                            }
+                                return processingMono.flatMap(variants -> {
+                                    ImageProcessingService.ImageVariant original = variants.get("");
+                                    byte[] originalBytes = original != null ? original.data() : data;
 
-                                            return thumbMono.defaultIfEmpty("")
-                                                    .flatMap(thumbnailUrl -> {
-                                                        // Store medium/large variants in parallel (non-critical)
-                                                        Mono<Void> mediumMono = storeVariantAsync(variants.get("-medium"),
-                                                                datePath + "/" + fileId + "-medium." + ext, contentType);
-                                                        Mono<Void> largeMono = storeVariantAsync(variants.get("-large"),
-                                                                datePath + "/" + fileId + "-large." + ext, contentType);
+                                    // Store original (EXIF-stripped if processed)
+                                    return storageProvider.store(storageKey, originalBytes, contentType)
+                                            .flatMap(url -> {
+                                                // Store thumbnail variant if generated
+                                                ImageProcessingService.ImageVariant thumb = variants.get("-thumb");
+                                                Mono<String> thumbMono;
+                                                if (thumb != null) {
+                                                    String thumbKey = datePath + "/" + fileId + "-thumb." + ext;
+                                                    thumbMono = storageProvider.store(thumbKey, thumb.data(), contentType);
+                                                } else {
+                                                    thumbMono = Mono.empty();
+                                                }
 
-                                                        MediaAsset asset = MediaAsset.builder()
-                                                                .id(idService.nextId())
-                                                                .originalFilename(filePart.filename())
-                                                                .storedFilename(storedFilename)
-                                                                .storageKey(storageKey)
-                                                                .contentType(contentType)
-                                                                .fileSize((long) originalBytes.length)
-                                                                .purpose(purpose != null ? purpose.toUpperCase() : "GENERAL")
-                                                                .altText(altText)
-                                                                .url(url)
-                                                                .thumbnailUrl(thumbnailUrl.isEmpty() ? null : thumbnailUrl)
-                                                                .uploaderId(uploaderId)
-                                                                .createdAt(LocalDateTime.now())
-                                                                .newRecord(true)
-                                                                .build();
+                                                return thumbMono.defaultIfEmpty("")
+                                                        .flatMap(thumbnailUrl -> {
+                                                            // Store medium/large variants in parallel (non-critical)
+                                                            Mono<Void> mediumMono = storeVariantAsync(variants.get("-medium"),
+                                                                    datePath + "/" + fileId + "-medium." + ext, contentType);
+                                                            Mono<Void> largeMono = storeVariantAsync(variants.get("-large"),
+                                                                    datePath + "/" + fileId + "-large." + ext, contentType);
 
-                                                        return mediaAssetRepository.save(asset)
-                                                                .flatMap(savedAsset ->
-                                                                        Mono.when(mediumMono, largeMono)
-                                                                                .thenReturn(savedAsset));
-                                                    });
-                                        });
+                                                            MediaAsset asset = MediaAsset.builder()
+                                                                    .id(idService.nextId())
+                                                                    .originalFilename(filePart.filename())
+                                                                    .storedFilename(storedFilename)
+                                                                    .storageKey(storageKey)
+                                                                    .contentType(contentType)
+                                                                    .fileSize((long) originalBytes.length)
+                                                                    .purpose(purpose != null ? purpose.toUpperCase() : "GENERAL")
+                                                                    .altText(altText)
+                                                                    .url(url)
+                                                                    .thumbnailUrl(thumbnailUrl.isEmpty() ? null : thumbnailUrl)
+                                                                    .uploaderId(uploaderId)
+                                                                    .createdAt(LocalDateTime.now())
+                                                                    .newRecord(true)
+                                                                    .build();
+
+                                                            return mediaAssetRepository.save(asset)
+                                                                    .flatMap(savedAsset ->
+                                                                            Mono.when(mediumMono, largeMono)
+                                                                                    .thenReturn(savedAsset));
+                                                        });
+                                            });
+                                });
                             });
-                        }));
+                });
     }
 
     /**
