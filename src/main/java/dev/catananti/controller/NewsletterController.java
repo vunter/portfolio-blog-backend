@@ -53,11 +53,10 @@ public class NewsletterController {
     }
 
     @PostMapping("/unsubscribe")
-    @Operation(summary = "Unsubscribe from newsletter", description = "Unsubscribe an email from the newsletter")
+    @Operation(summary = "Request unsubscribe confirmation", description = "Send an unsubscribe confirmation email")
     public Mono<Map<String, String>> unsubscribe(
             @RequestParam @Email(message = "Invalid email format") String email) {
         log.debug("Newsletter unsubscription: email={}", PiiMasker.maskEmail(email));
-        // Always return success to prevent email enumeration
         return newsletterService.unsubscribe(email)
                 .flatMap(this::localizeResult)
                 .onErrorResume(e -> localizeKey("success.generic_unsubscribe"))

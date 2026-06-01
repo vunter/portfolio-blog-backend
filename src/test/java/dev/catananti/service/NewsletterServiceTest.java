@@ -222,35 +222,44 @@ class NewsletterServiceTest {
     class Unsubscribe {
 
         @Test
-        @DisplayName("Should unsubscribe by email")
-        void shouldUnsubscribeByEmail() {
+        @DisplayName("Should send unsubscribe confirmation by email")
+        void shouldRequestUnsubscribeConfirmation() {
             Subscriber active = Subscriber.builder()
                     .id(4001L)
                     .email("active@example.com")
+                    .name("Active User")
                     .status(SubscriberStatus.CONFIRMED)
+                    .unsubscribeToken("unsub-token")
                     .build();
 
             when(subscriberRepository.findByEmail("active@example.com"))
                     .thenReturn(Mono.just(active));
-            when(subscriberRepository.save(any(Subscriber.class)))
-                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(emailService.sendNewsletterUnsubscribeConfirmation("active@example.com", "Active User", "unsub-token"))
+                    .thenReturn(Mono.empty());
 
             StepVerifier.create(newsletterService.unsubscribe("active@example.com"))
                     .assertNext(response -> {
-                        assertThat(response.get("message")).isEqualTo("success.newsletter_unsubscribed");
+                        assertThat(response.get("message")).isEqualTo("success.generic_unsubscribe");
                     })
                     .verifyComplete();
+
+            verify(emailService).sendNewsletterUnsubscribeConfirmation("active@example.com", "Active User", "unsub-token");
+            verify(subscriberRepository, never()).save(any(Subscriber.class));
         }
 
         @Test
-        @DisplayName("Should throw ResourceNotFoundException for unknown email")
-        void shouldThrowForUnknownEmail() {
+        @DisplayName("Should return a generic success message for an unknown email (anti-enumeration)")
+        void shouldReturnGenericSuccessForUnknownEmail() {
+            // Email-by-email unsubscribe must NOT reveal whether an address is subscribed,
+            // otherwise it becomes a subscriber-enumeration oracle. Unknown emails get the
+            // same generic success response as known ones.
             when(subscriberRepository.findByEmail("unknown@example.com"))
                     .thenReturn(Mono.empty());
 
             StepVerifier.create(newsletterService.unsubscribe("unknown@example.com"))
-                    .expectError(ResourceNotFoundException.class)
-                    .verify();
+                    .assertNext(response ->
+                            assertThat(response.get("message")).isEqualTo("success.generic_unsubscribe"))
+                    .verifyComplete();
         }
     }
 
@@ -280,6 +289,8 @@ class NewsletterServiceTest {
                         assertThat(response.get("message")).isEqualTo("success.newsletter_unsubscribed");
                     })
                     .verifyComplete();
+
+            verify(blogMetrics).incrementUnsubscription();
         }
     }
 

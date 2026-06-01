@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -170,19 +171,34 @@ public class NewsletterService {
     }
 
     public Mono<Map<String, String>> unsubscribe(String email) {
-        return subscriberRepository.findByEmail(email)
-                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Subscriber", "email", email)))
+        String normalizedEmail = email.toLowerCase().trim();
+        return subscriberRepository.findByEmail(normalizedEmail)
                 .flatMap(subscriber -> {
-                    subscriber.setStatus(SubscriberStatus.UNSUBSCRIBED);
-                    subscriber.setUnsubscribedAt(LocalDateTime.now());
+                    if (subscriber.getStatus() == SubscriberStatus.UNSUBSCRIBED) {
+                        return Mono.just(Map.of("message", "success.generic_unsubscribe"));
+                    }
 
-                    return subscriberRepository.save(subscriber)
-                            .map(s -> Map.of("message", "success.newsletter_unsubscribed"))
-                            .doOnSuccess(m -> {
-                                log.debug("Subscriber unsubscribed: {}", PiiMasker.maskEmail(email));
-                                blogMetrics.incrementUnsubscription();
-                            });
-                });
+                    String unsubscribeToken = subscriber.getUnsubscribeToken();
+                    Mono<Subscriber> subscriberMono = Mono.just(subscriber);
+                    if (!StringUtils.hasText(unsubscribeToken)) {
+                        unsubscribeToken = UUID.randomUUID().toString();
+                        subscriber.setUnsubscribeToken(unsubscribeToken);
+                        subscriberMono = subscriberRepository.save(subscriber);
+                    }
+
+                    String finalUnsubscribeToken = unsubscribeToken;
+                    return subscriberMono.flatMap(saved -> emailService.sendNewsletterUnsubscribeConfirmation(
+                                    saved.getEmail(),
+                                    saved.getName(),
+                                    finalUnsubscribeToken)
+                            .onErrorResume(e -> {
+                                log.warn("Failed to send unsubscribe confirmation to {}: {}",
+                                        PiiMasker.maskEmail(saved.getEmail()), e.getMessage());
+                                return Mono.empty();
+                            })
+                            .thenReturn(Map.of("message", "success.generic_unsubscribe")));
+                })
+                .switchIfEmpty(Mono.just(Map.of("message", "success.generic_unsubscribe")));
     }
 
     public Mono<Map<String, String>> unsubscribeByToken(String token) {
@@ -191,10 +207,14 @@ public class NewsletterService {
                 .switchIfEmpty(subscriberRepository.findByConfirmationToken(token))
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Subscription", "token", token)))
                 .flatMap(subscriber -> {
+                    if (subscriber.getStatus() == SubscriberStatus.UNSUBSCRIBED) {
+                        return Mono.just(Map.of("message", "success.newsletter_unsubscribed"));
+                    }
                     subscriber.setStatus(SubscriberStatus.UNSUBSCRIBED);
                     subscriber.setUnsubscribedAt(LocalDateTime.now());
 
                     return subscriberRepository.save(subscriber)
+                            .doOnSuccess(s -> blogMetrics.incrementUnsubscription())
                             .map(s -> Map.of("message", "success.newsletter_unsubscribed"));
                 });
     }
@@ -267,11 +287,6 @@ public class NewsletterService {
         return subscriberRepository.deleteAllByIdIn(ids);
     }
 
-    /**
-     * Cleanup expired pending subscriptions.
-     * Runs daily at 3 AM by default.
-     */
-    @Scheduled(cron = "${scheduling.newsletter-cleanup-cron:0 0 3 * * *}")
     public Mono<Void> cleanupExpiredPendingSubscriptions() {
         LocalDateTime expirationDate = LocalDateTime.now().minusHours(confirmationExpirationHours);
 
@@ -290,5 +305,14 @@ public class NewsletterService {
                         .onErrorComplete()
                         .then()
         );
+    }
+
+    /**
+     * Cleanup expired pending subscriptions.
+     * Runs daily at 3 AM by default.
+     */
+    @Scheduled(cron = "${scheduling.newsletter-cleanup-cron:0 0 3 * * *}")
+    public void cleanupExpiredPendingSubscriptionsScheduled() {
+        cleanupExpiredPendingSubscriptions().subscribe();
     }
 }

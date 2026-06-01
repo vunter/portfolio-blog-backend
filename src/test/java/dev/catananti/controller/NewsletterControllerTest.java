@@ -107,13 +107,13 @@ class NewsletterControllerTest {
         void shouldReturnGenericSuccess() {
             // Given
             when(newsletterService.unsubscribe("user@example.com"))
-                    .thenReturn(Mono.just(Map.of("message", "If the email was subscribed, it has been unsubscribed")));
+                    .thenReturn(Mono.just(Map.of("message", "success.generic_unsubscribe")));
 
             // When & Then
             StepVerifier.create(newsletterController.unsubscribe("user@example.com"))
                     .assertNext(response -> {
                         assertThat(response).containsKey("message");
-                        assertThat(response.get("message")).isNotEmpty();
+                        assertThat(response.get("message")).isEqualTo("success.generic_unsubscribe");
                     })
                     .verifyComplete();
 
@@ -131,7 +131,7 @@ class NewsletterControllerTest {
             StepVerifier.create(newsletterController.unsubscribe("nonexistent@example.com"))
                     .assertNext(response -> {
                         assertThat(response).containsKey("message");
-                        assertThat(response.get("message")).isNotEmpty();
+                        assertThat(response.get("message")).isEqualTo("success.generic_unsubscribe");
                     })
                     .verifyComplete();
         }
