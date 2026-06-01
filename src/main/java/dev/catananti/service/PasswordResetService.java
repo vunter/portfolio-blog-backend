@@ -235,10 +235,6 @@ public class PasswordResetService {
         return DigestUtils.sha256Hex(token);
     }
 
-    /**
-     * Cleanup expired tokens (runs every 6 hours by default).
-     */
-    @Scheduled(fixedRateString = "${scheduling.password-reset-cleanup-ms:21600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public Mono<Void> cleanupExpiredTokens() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(1);
         return schedulerLock.executeWithLock("password-reset-cleanup", Duration.ofMinutes(5),
@@ -249,5 +245,13 @@ public class PasswordResetService {
                         .onErrorComplete()
                         .then()
         );
+    }
+
+    /**
+     * Cleanup expired tokens (runs every 6 hours by default).
+     */
+    @Scheduled(fixedRateString = "${scheduling.password-reset-cleanup-ms:21600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
+    public void cleanupExpiredTokensScheduled() {
+        cleanupExpiredTokens().subscribe();
     }
 }

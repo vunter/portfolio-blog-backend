@@ -91,13 +91,6 @@ public class BlogMetrics {
                 .register(meterRegistry);
     }
 
-    /**
-     * Refresh blog metrics on a fixed cadence. Returns a {@code Mono<Void>} so
-     * Spring's reactive scheduler will not fire the next run until the current
-     * pipeline terminates — preventing overlapping subscriptions when the DB
-     * is slow.
-     */
-    @Scheduled(fixedRateString = "${scheduling.metrics-update-ms:60000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public reactor.core.publisher.Mono<Void> updateMetrics() {
         return reactor.core.publisher.Mono.zip(
                         articleRepository.countAll().onErrorReturn(0L),
@@ -118,6 +111,11 @@ public class BlogMetrics {
                 .doOnError(e -> log.warn("Failed to update metrics: {}", e.getMessage(), e))
                 .onErrorResume(e -> reactor.core.publisher.Mono.empty())
                 .then();
+    }
+
+    @Scheduled(fixedRateString = "${scheduling.metrics-update-ms:60000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
+    public void updateMetricsScheduled() {
+        updateMetrics().subscribe();
     }
 
     // Counter for specific events - call from services

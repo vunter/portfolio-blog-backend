@@ -749,11 +749,6 @@ public class AnalyticsService {
                 .defaultIfEmpty(List.of());
     }
 
-    /**
-     * Cleanup analytics events older than the configured retention period.
-     * Runs daily by default.
-     */
-    @Scheduled(fixedRateString = "${scheduling.analytics-cleanup-ms:86400000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public reactor.core.publisher.Mono<Void> cleanupOldEvents() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
         return schedulerLock.executeWithLock("analytics-cleanup", Duration.ofMinutes(10),
@@ -764,5 +759,14 @@ public class AnalyticsService {
                         .onErrorComplete()
                         .then()
         );
+    }
+
+    /**
+     * Cleanup analytics events older than the configured retention period.
+     * Runs daily by default.
+     */
+    @Scheduled(fixedRateString = "${scheduling.analytics-cleanup-ms:86400000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
+    public void cleanupOldEventsScheduled() {
+        cleanupOldEvents().subscribe();
     }
 }

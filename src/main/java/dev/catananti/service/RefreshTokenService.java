@@ -216,7 +216,6 @@ public class RefreshTokenService {
         return refreshTokenRepository.revokeAllByUserIdExcept(userId, currentHash);
     }
 
-    @Scheduled(fixedRateString = "${scheduling.refresh-token-cleanup-ms:3600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public reactor.core.publisher.Mono<Void> cleanupExpiredTokens() {
         return schedulerLock.executeWithLock("refresh-token-cleanup", Duration.ofMinutes(5),
                 refreshTokenRepository.deleteExpired(LocalDateTime.now())
@@ -226,6 +225,11 @@ public class RefreshTokenService {
                         .onErrorComplete()
                         .then()
         );
+    }
+
+    @Scheduled(fixedRateString = "${scheduling.refresh-token-cleanup-ms:3600000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
+    public void cleanupExpiredTokensScheduled() {
+        cleanupExpiredTokens().subscribe();
     }
 
     private String generateSecureToken() {
