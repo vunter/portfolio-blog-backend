@@ -78,8 +78,8 @@ class ArticlePublishSchedulerTest {
 
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.just(article));
-            when(articleRepository.save(any(Article.class)))
-                    .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+            when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1));
             when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.empty());
             when(cacheService.invalidateAllArticles())
@@ -92,12 +92,14 @@ class ArticlePublishSchedulerTest {
 
             verify(articleRepository).findScheduledArticlesToPublish(any(LocalDateTime.class));
 
-            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
-            verify(articleRepository).save(captor.capture());
-            Article saved = captor.getValue();
-            assertThat(saved.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
-            assertThat(saved.getPublishedAt()).isNotNull();
-            assertThat(saved.getUpdatedAt()).isNotNull();
+            // Publication is an atomic compare-and-swap keyed by id, not a full save().
+            ArgumentCaptor<Long> idCaptor = ArgumentCaptor.forClass(Long.class);
+            verify(articleRepository).markPublishedIfScheduled(idCaptor.capture(), any(LocalDateTime.class));
+            assertThat(idCaptor.getValue()).isEqualTo(1L);
+            // The in-memory copy handed downstream reflects the persisted PUBLISHED state.
+            assertThat(article.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
+            assertThat(article.getPublishedAt()).isNotNull();
+            assertThat(article.getUpdatedAt()).isNotNull();
         }
 
         @Test
@@ -121,8 +123,8 @@ class ArticlePublishSchedulerTest {
 
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.just(article));
-            when(articleRepository.save(any(Article.class)))
-                    .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+            when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1));
             when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.just(subscriber));
             when(emailService.sendNewArticleNotification(
@@ -159,8 +161,8 @@ class ArticlePublishSchedulerTest {
 
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.just(article));
-            when(articleRepository.save(any(Article.class)))
-                    .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+            when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1));
             when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.empty());
             when(cacheService.invalidateAllArticles())
@@ -185,7 +187,7 @@ class ArticlePublishSchedulerTest {
             Thread.sleep(200);
 
             verify(articleRepository).findScheduledArticlesToPublish(any(LocalDateTime.class));
-            verify(articleRepository, never()).save(any());
+            verify(articleRepository, never()).markPublishedIfScheduled(anyLong(), any());
         }
 
         @Test
@@ -199,7 +201,7 @@ class ArticlePublishSchedulerTest {
             Thread.sleep(200);
 
             verify(articleRepository).findScheduledArticlesToPublish(any(LocalDateTime.class));
-            verify(articleRepository, never()).save(any());
+            verify(articleRepository, never()).markPublishedIfScheduled(anyLong(), any());
             verify(emailService, never()).sendNewArticleNotification(
                     anyString(), anyString(), anyString(), anyString(), any(), anyString());
         }
@@ -225,8 +227,8 @@ class ArticlePublishSchedulerTest {
 
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.just(article));
-            when(articleRepository.save(any(Article.class)))
-                    .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+            when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1));
             when(subscriberRepository.findAllConfirmed(anyInt()))
                     .thenReturn(Flux.just(subscriber));
             when(emailService.sendNewArticleNotification(
@@ -240,9 +242,39 @@ class ArticlePublishSchedulerTest {
 
             Thread.sleep(200);
 
-            // Article was still saved
-            verify(articleRepository).save(any(Article.class));
+            // Article was still published (atomic claim) despite the e-mail failure
+            verify(articleRepository).markPublishedIfScheduled(anyLong(), any(LocalDateTime.class));
             verify(cacheService).invalidateAllArticles();
+        }
+
+        @Test
+        @DisplayName("should NOT notify subscribers when another instance already published the article")
+        void shouldNotNotifyWhenClaimLost() throws InterruptedException {
+            Article article = Article.builder()
+                    .id(1L)
+                    .slug("race-test")
+                    .title("Race Article")
+                    .excerpt("excerpt")
+                    .status(ArticleStatus.SCHEDULED)
+                    .scheduledAt(LocalDateTime.now().minusMinutes(1))
+                    .build();
+
+            when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
+                    .thenReturn(Flux.just(article));
+            // 0 rows updated => another replica won the compare-and-swap.
+            when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(0));
+
+            scheduler.publishScheduledArticles().block();
+
+            Thread.sleep(200);
+
+            verify(articleRepository).markPublishedIfScheduled(eq(1L), any(LocalDateTime.class));
+            // No duplicate e-mail blast and no redundant cache invalidation.
+            verify(emailService, never()).sendNewArticleNotification(
+                    anyString(), anyString(), anyString(), anyString(), any(), anyString());
+            verify(subscriberRepository, never()).findAllConfirmed(anyInt());
+            verify(cacheService, never()).invalidateAllArticles();
         }
     }
 }

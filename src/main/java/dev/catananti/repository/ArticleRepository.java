@@ -1,6 +1,7 @@
 package dev.catananti.repository;
 
 import dev.catananti.entity.Article;
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.stereotype.Repository;
@@ -129,6 +130,22 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     // Find scheduled articles that should be published now
     @Query("SELECT * FROM articles WHERE status = 'SCHEDULED' AND scheduled_at <= :now")
     Flux<Article> findScheduledArticlesToPublish(LocalDateTime now);
+
+    /**
+     * Atomically claim a scheduled article for publication (compare-and-swap).
+     *
+     * <p>The {@code WHERE status = 'SCHEDULED'} predicate guarantees that, even if
+     * multiple replicas run the publish scheduler concurrently, exactly one wins the
+     * race for a given row (rows affected == 1); all others get 0 and must skip.
+     * This makes duplicate publishing — and the duplicate subscriber e-mail blast it
+     * would trigger — impossible regardless of the distributed lock's behaviour.</p>
+     *
+     * @return number of rows updated: 1 if this caller claimed the article, 0 otherwise.
+     */
+    @Modifying
+    @Query("UPDATE articles SET status = 'PUBLISHED', published_at = :now, updated_at = :now " +
+           "WHERE id = :id AND status = 'SCHEDULED'")
+    Mono<Integer> markPublishedIfScheduled(Long id, LocalDateTime now);
 
     // Count scheduled articles
     @Query("SELECT COUNT(*) FROM articles WHERE status = 'SCHEDULED'")
