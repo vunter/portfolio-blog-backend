@@ -80,8 +80,11 @@ class SchedulerLockTest {
         }
 
         @Test
-        @DisplayName("should proceed when Redis is unavailable")
-        void shouldProceedWhenRedisUnavailable() {
+        @DisplayName("should fail CLOSED (skip the task) when Redis is unavailable")
+        void shouldSkipWhenRedisUnavailable() {
+            // When Redis errors we cannot guarantee mutual exclusion across replicas,
+            // so the lock must skip the run rather than let every replica proceed and
+            // produce duplicate side-effects (e.g. duplicate subscriber e-mails).
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
             when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
                     .thenReturn(Mono.error(new RuntimeException("Connection refused")));
@@ -93,7 +96,7 @@ class SchedulerLockTest {
                             Mono.fromRunnable(() -> taskRan.set(true)).then()))
                     .verifyComplete();
 
-            assertThat(taskRan.get()).isTrue();
+            assertThat(taskRan.get()).isFalse();
         }
 
         @Test

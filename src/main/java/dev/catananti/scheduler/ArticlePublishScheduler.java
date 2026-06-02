@@ -18,20 +18,15 @@ import reactor.core.publisher.Mono;
 import java.time.Duration;
 import java.time.LocalDateTime;
 
-/**
- * Publishes articles whose {@code scheduledAt} has elapsed. Returns a
- * {@code Mono<Void>} so Spring's reactive scheduler defers the next run
- * until the current one terminates, eliminating the overlap risk of the
- * previous fire-and-forget {@code .subscribe()} pattern.
- *
- * <p>Distributed locking is delegated to {@link SchedulerLock}; the previous
- * hand-rolled Redis SETNX implementation duplicated that abstraction.</p>
- */
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class ArticlePublishScheduler {
 
+    // The distributed lock is a best-effort optimisation to avoid redundant work
+    // across replicas; correctness (no double-publish, no duplicate subscriber e-mails)
+    // is guaranteed by the atomic compare-and-swap in claimForPublication, so a lock
+    // that expires mid-run while notifying subscribers is harmless.
     private static final Duration LOCK_TTL = Duration.ofSeconds(55);
 
     private final ArticleRepository articleRepository;
@@ -41,17 +36,30 @@ public class ArticlePublishScheduler {
     private final SchedulerLock schedulerLock;
     private final PaginationConfig paginationConfig;
 
-    @Scheduled(fixedRateString = "${app.scheduler.article-publish-rate:60000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
     public Mono<Void> publishScheduledArticles() {
         return schedulerLock.executeWithLock("article-publish", LOCK_TTL,
                 doPublishScheduledArticles());
+    }
+
+    /**
+     * Publishes articles whose {@code scheduledAt} has elapsed.
+     *
+     * <p>Distributed locking is delegated to {@link SchedulerLock}; the previous
+     * hand-rolled Redis SETNX implementation duplicated that abstraction.</p>
+     */
+    @Scheduled(fixedRateString = "${app.scheduler.article-publish-rate:60000}", initialDelayString = "${scheduling.initial-delay-ms:30000}")
+    public void publishScheduledArticlesScheduled() {
+        publishScheduledArticles().subscribe();
     }
 
     private Mono<Void> doPublishScheduledArticles() {
         log.debug("Checking for scheduled articles to publish...");
         LocalDateTime now = LocalDateTime.now();
         return articleRepository.findScheduledArticlesToPublish(now)
-                .flatMap(this::publishArticle)
+                // concatMap (not flatMap) so the atomic claim of each candidate is
+                // observed sequentially; only articles this instance actually won the
+                // race for are emitted downstream and notified.
+                .concatMap(article -> claimForPublication(article, now))
                 .flatMap(article -> notifySubscribers(article).thenReturn(article))
                 .doOnNext(article -> log.info("Auto-published scheduled article: {} (scheduled for: {})",
                         article.getSlug(), article.getScheduledAt()))
@@ -67,12 +75,28 @@ public class ArticlePublishScheduler {
                 .onErrorResume(e -> Mono.empty());
     }
 
-    private Mono<Article> publishArticle(Article article) {
-        article.setStatus(ArticleStatus.PUBLISHED);
-        article.setPublishedAt(LocalDateTime.now());
-        article.setUpdatedAt(LocalDateTime.now());
-        article.setNewRecord(false);
-        return articleRepository.save(article);
+    /**
+     * Atomically transitions a single article from SCHEDULED to PUBLISHED.
+     *
+     * <p>Returns the article only when this instance won the compare-and-swap
+     * ({@code rows == 1}); a 0-row result means another replica already published it,
+     * so we emit nothing and never notify subscribers twice.</p>
+     */
+    private Mono<Article> claimForPublication(Article article, LocalDateTime now) {
+        return articleRepository.markPublishedIfScheduled(article.getId(), now)
+                .flatMap(rows -> {
+                    if (rows == null || rows < 1) {
+                        log.debug("Article '{}' already published by another instance — skipping notification",
+                                article.getSlug());
+                        return Mono.empty();
+                    }
+                    // Reflect the persisted state on the in-memory copy used downstream.
+                    article.setStatus(ArticleStatus.PUBLISHED);
+                    article.setPublishedAt(now);
+                    article.setUpdatedAt(now);
+                    article.setNewRecord(false);
+                    return Mono.just(article);
+                });
     }
 
     private Mono<Void> notifySubscribers(Article article) {
