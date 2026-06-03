@@ -13,6 +13,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -86,6 +87,23 @@ class AdminExportControllerTest {
                         assertThat(response.getBody().getStats().getTotalArticles()).isEqualTo(25);
                     })
                     .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("Should reject exports above the configured article limit")
+        void shouldRejectExportWhenOverLimit() {
+            when(articleRepository.countAll()).thenReturn(Mono.just(10001L));
+
+            StepVerifier.create(controller.exportBlog("Admin"))
+                    .expectErrorSatisfies(error -> {
+                        assertThat(error).isInstanceOf(ResponseStatusException.class);
+                        ResponseStatusException ex = (ResponseStatusException) error;
+                        assertThat(ex.getStatusCode().value()).isEqualTo(400);
+                        assertThat(ex.getReason()).isEqualTo("error.export_limit_exceeded");
+                    })
+                    .verify();
+
+            verifyNoInteractions(exportImportService);
         }
     }
 

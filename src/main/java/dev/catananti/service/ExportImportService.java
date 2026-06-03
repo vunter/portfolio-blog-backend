@@ -47,6 +47,15 @@ public class ExportImportService {
     private final HtmlSanitizerService htmlSanitizerService;
 
     /**
+     * Upper bound on how many articles a single export loads into memory. Guards the
+     * unbounded {@code findAll()} so the admin export can't OOM the app if the dataset
+     * grows. Raise via {@code app.export.max-articles} if a legitimately larger export
+     * is needed.
+     */
+    @Value("${app.export.max-articles:5000}")
+    private int maxExportArticles = 5000;
+
+    /**
      * Export all blog data to JSON format.
      */
     public Mono<BlogExport> exportAll(String exportedBy) {
@@ -84,9 +93,14 @@ public class ExportImportService {
      */
     private Flux<ArticleExportData> exportArticles() {
         return articleRepository.findAll()
+                .take(maxExportArticles)
                 .collectList()
                 .flatMapMany(articles -> {
                     if (articles.isEmpty()) return Flux.empty();
+                    if (articles.size() >= maxExportArticles) {
+                        log.warn("Export reached the {}-article cap; result may be truncated. "
+                                + "Raise app.export.max-articles to export more.", maxExportArticles);
+                    }
                     Long[] articleIds = articles.stream().map(Article::getId).toArray(Long[]::new);
                     // Single batch query for all article-tag mappings
                     return articleTagRepository.findTagIdsByArticleIds(articleIds)
