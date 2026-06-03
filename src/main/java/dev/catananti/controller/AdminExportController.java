@@ -15,6 +15,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
@@ -46,8 +47,11 @@ public class AdminExportController {
             @Parameter(description = "Name of the person exporting")
             @RequestParam(defaultValue = "Admin") @jakarta.validation.constraints.Size(max = 100) @jakarta.validation.constraints.Pattern(regexp = "^[a-zA-Z0-9 _-]+$", message = "exportedBy must contain only alphanumeric characters, spaces, hyphens, and underscores") String exportedBy) {
         log.info("Exporting blog data");
+        // Mono.defer so the export pipeline (and its "Export started" log) is only
+        // built AFTER the limit check passes — eager evaluation would otherwise start
+        // the export even when it is rejected over-limit.
         return checkExportLimit()
-                .then(exportImportService.exportAll(exportedBy))
+                .then(Mono.defer(() -> exportImportService.exportAll(exportedBy)))
                 .map(ResponseEntity::ok);
     }
 
@@ -60,7 +64,7 @@ public class AdminExportController {
                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")) + ".json";
         
         return checkExportLimit()
-                .then(exportImportService.exportToJson(exportedBy))
+                .then(Mono.defer(() -> exportImportService.exportToJson(exportedBy)))
                 .map(json -> ResponseEntity.ok()
                         .header(HttpHeaders.CONTENT_DISPOSITION,
                                 org.springframework.http.ContentDisposition.attachment()
@@ -75,7 +79,7 @@ public class AdminExportController {
     public Mono<ResponseEntity<Map<String, String>>> exportAsMarkdown() {
         log.info("Exporting blog data as Markdown");
         return checkExportLimit()
-                .then(exportImportService.exportToMarkdown())
+                .then(Mono.defer(() -> exportImportService.exportToMarkdown()))
                 .map(ResponseEntity::ok);
     }
 
@@ -116,8 +120,10 @@ public class AdminExportController {
         return articleRepository.countAll()
                 .flatMap(count -> {
                     if (count > maxExportArticles) {
-                        return Mono.error(new IllegalStateException(
-                                "Export limit exceeded. Maximum " + maxExportArticles + " articles allowed, found " + count));
+                        log.warn("Export limit exceeded: found {} articles, max allowed {}", count, maxExportArticles);
+                        return Mono.error(new ResponseStatusException(
+                                org.springframework.http.HttpStatus.BAD_REQUEST,
+                                "error.export_limit_exceeded"));
                     }
                     return Mono.empty();
                 });
