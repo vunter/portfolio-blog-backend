@@ -5,13 +5,14 @@ import dev.catananti.repository.CommentRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.service.DashboardService;
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleStatus;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
@@ -39,8 +40,14 @@ class AdminDashboardControllerTest {
     @Mock private SubscriberRepository subscriberRepository;
     @Mock private TagRepository tagRepository;
 
-    @InjectMocks
     private AdminDashboardController controller;
+
+    @BeforeEach
+    void setUp() {
+        var dashboardService = new DashboardService(
+                articleRepository, commentRepository, userRepository, subscriberRepository, tagRepository);
+        controller = new AdminDashboardController(dashboardService, userRepository);
+    }
 
     private <T> Mono<T> withAdminAuth(Mono<T> mono) {
         lenient().when(userRepository.findByEmail("admin@test.com"))
