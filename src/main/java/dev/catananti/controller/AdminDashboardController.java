@@ -1,9 +1,9 @@
 package dev.catananti.controller;
 
-import dev.catananti.entity.ArticleStatus;
-import dev.catananti.entity.CommentStatus;
+import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
-import dev.catananti.repository.*;
+import dev.catananti.repository.UserRepository;
+import dev.catananti.service.DashboardService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -15,7 +15,6 @@ import org.springframework.security.core.context.SecurityContext;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -24,6 +23,9 @@ import java.util.Map;
  * - ADMIN sees global stats (all articles, all users, subscribers, etc.)
  * - DEV sees only their own articles, comments on their articles, tags on their articles.
  *   Users/subscribers stats are omitted (set to 0).
+ *
+ * <p>Aggregation logic lives in {@link DashboardService}; this controller only resolves
+ * the authenticated caller and routes to the global or author-scoped view.</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin/dashboard")
@@ -34,129 +36,36 @@ import java.util.Map;
 @Slf4j
 public class AdminDashboardController {
 
-    private final ArticleRepository articleRepository;
-    private final CommentRepository commentRepository;
+    private final DashboardService dashboardService;
     private final UserRepository userRepository;
-    private final SubscriberRepository subscriberRepository;
-    private final TagRepository tagRepository;
 
     @GetMapping("/stats")
     @Operation(summary = "Get dashboard statistics", description = "Get overview statistics scoped by role")
     public Mono<Map<String, Object>> getDashboardStats() {
         log.debug("Fetching dashboard stats");
-        return getCurrentUser().flatMap(user -> {
-            if (UserRole.ADMIN.matches(user.getRole())) {
-                return getGlobalStats();
-            } else {
-                return getScopedStats(user.getId());
-            }
-        });
+        return getCurrentUser().flatMap(user ->
+                UserRole.ADMIN.matches(user.getRole())
+                        ? dashboardService.getGlobalStats()
+                        : dashboardService.getScopedStats(user.getId()));
     }
 
     @GetMapping("/activity")
     @Operation(summary = "Get recent activity", description = "Get recent activity feed scoped by role")
     public Mono<List<Map<String, Object>>> getRecentActivity() {
         log.debug("Fetching recent activity");
-        return getCurrentUser().flatMap(user -> {
-            if (UserRole.ADMIN.matches(user.getRole())) {
-                return getGlobalActivity();
-            } else {
-                return getScopedActivity(user.getId());
-            }
-        });
-    }
-
-    // ==================== GLOBAL STATS (ADMIN) ====================
-
-    private Mono<Map<String, Object>> getGlobalStats() {
-        return Mono.zip(
-                articleRepository.count(),
-                articleRepository.countByStatus(ArticleStatus.PUBLISHED.name()),
-                articleRepository.countByStatus(ArticleStatus.DRAFT.name()),
-                commentRepository.count(),
-                commentRepository.countByStatus(CommentStatus.PENDING.name()),
-                userRepository.count(),
-                subscriberRepository.countConfirmed(),
-                articleRepository.sumViewsCount()
-        ).flatMap(tuple -> tagRepository.count()
-                .map(tagCount -> {
-                    var stats = new java.util.HashMap<String, Object>();
-                    stats.put("totalArticles", tuple.getT1());
-                    stats.put("publishedArticles", tuple.getT2());
-                    stats.put("draftArticles", tuple.getT3());
-                    stats.put("totalComments", tuple.getT4());
-                    stats.put("pendingComments", tuple.getT5());
-                    stats.put("totalUsers", tuple.getT6());
-                    stats.put("newsletterSubscribers", tuple.getT7());
-                    stats.put("totalViews", tuple.getT8());
-                    stats.put("totalTags", tagCount);
-                    stats.put("timestamp", LocalDateTime.now().toString());
-                    return (Map<String, Object>) stats;
-                }));
-    }
-
-    // ==================== SCOPED STATS (DEV) ====================
-
-    private Mono<Map<String, Object>> getScopedStats(Long authorId) {
-        return Mono.zip(
-                articleRepository.countByAuthorId(authorId),
-                articleRepository.countByAuthorIdAndStatus(authorId, ArticleStatus.PUBLISHED.name()),
-                articleRepository.countByAuthorIdAndStatus(authorId, ArticleStatus.DRAFT.name()),
-                commentRepository.countByArticleAuthorId(authorId),
-                commentRepository.countByArticleAuthorIdAndStatus(authorId, CommentStatus.PENDING.name()),
-                articleRepository.sumViewsCountByAuthorId(authorId),
-                tagRepository.countByAuthorId(authorId)
-        ).map(tuple -> {
-            var stats = new java.util.HashMap<String, Object>();
-            stats.put("totalArticles", tuple.getT1());
-            stats.put("publishedArticles", tuple.getT2());
-            stats.put("draftArticles", tuple.getT3());
-            stats.put("totalComments", tuple.getT4());
-            stats.put("pendingComments", tuple.getT5());
-            stats.put("totalUsers", 0L);               // DEV cannot see user management
-            stats.put("newsletterSubscribers", 0L);     // DEV cannot see newsletter
-            stats.put("totalViews", tuple.getT6());
-            stats.put("totalTags", tuple.getT7());
-            stats.put("timestamp", LocalDateTime.now().toString());
-            return (Map<String, Object>) stats;
-        });
-    }
-
-    // ==================== ACTIVITY FEEDS ====================
-
-    private Mono<List<Map<String, Object>>> getGlobalActivity() {
-        return articleRepository.findRecentlyUpdated(10)
-                .map(this::mapActivityItem)
-                .collectList();
-    }
-
-    private Mono<List<Map<String, Object>>> getScopedActivity(Long authorId) {
-        return articleRepository.findRecentlyUpdatedByAuthorId(authorId, 10)
-                .map(this::mapActivityItem)
-                .collectList();
-    }
-
-    private Map<String, Object> mapActivityItem(dev.catananti.entity.Article article) {
-        String action = article.getStatus() == ArticleStatus.PUBLISHED ? "published" : "updated";
-        String title = article.getTitle();
-        String createdAt = (article.getUpdatedAt() != null ? article.getUpdatedAt() : article.getCreatedAt()).toString();
-        return Map.of(
-                "id", article.getId(),
-                "type", "article",
-                "action", action,
-                "title", title,
-                "description", action + ": " + title,
-                "createdAt", createdAt
-        );
+        return getCurrentUser().flatMap(user ->
+                UserRole.ADMIN.matches(user.getRole())
+                        ? dashboardService.getGlobalActivity()
+                        : dashboardService.getScopedActivity(user.getId()));
     }
 
     // ==================== AUTH HELPER ====================
 
-    private Mono<dev.catananti.entity.User> getCurrentUser() {
+    private Mono<User> getCurrentUser() {
         return ReactiveSecurityContextHolder.getContext()
                 .map(SecurityContext::getAuthentication)
                 .filter(auth -> auth != null && auth.isAuthenticated())
                 .map(auth -> auth.getName())
-                .flatMap(email -> userRepository.findByEmail(email));
+                .flatMap(userRepository::findByEmail);
     }
 }

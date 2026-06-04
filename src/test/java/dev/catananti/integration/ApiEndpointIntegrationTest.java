@@ -1082,12 +1082,15 @@ class ApiEndpointIntegrationTest {
         @Mock private UserRepository userRepository;
         @Mock private SubscriberRepository subscriberRepository;
         @Mock private TagRepository tagRepository;
-        @InjectMocks private AdminDashboardController dashboardController;
+        private AdminDashboardController dashboardController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
+            var dashboardService = new dev.catananti.service.DashboardService(
+                    articleRepository, commentRepository, userRepository, subscriberRepository, tagRepository);
+            dashboardController = new AdminDashboardController(dashboardService, userRepository);
             lenient().when(userRepository.findByEmail("admin@test.com"))
                     .thenReturn(Mono.just(dev.catananti.entity.User.builder()
                             .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
