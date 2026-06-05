@@ -205,8 +205,8 @@ class JwtAuthenticationFilterTest {
     class NoAuthenticationTests {
 
         @Test
-        @DisplayName("Should return 401 when JWT is invalid on protected route")
-        void shouldNotAuthenticateWithInvalidJwt() {
+        @DisplayName("Should allow invalid JWT to pass through as anonymous")
+        void shouldAllowInvalidJwt() {
             // Given
             MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
                     .header("Authorization", "Bearer " + INVALID_JWT)
@@ -222,8 +222,7 @@ class JwtAuthenticationFilterTest {
             StepVerifier.create(result)
                     .verifyComplete();
 
-            // Protected route with invalid token should return 401 immediately
-            assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            assertThat(exchange.getResponse().getStatusCode()).isNull();
             verify(tokenProvider).validateAndParseClaims(INVALID_JWT);
             verify(userRepository, never()).findById(anyLong());
         }
@@ -501,8 +500,12 @@ class JwtAuthenticationFilterTest {
     class TokenBlacklistTests {
 
         @Test
-        @DisplayName("Should return 401 when token is blacklisted on protected route")
-        void shouldReturn401WhenTokenBlacklisted() {
+        @DisplayName("Should ignore a blacklisted token (no auth established; downstream authz returns 401)")
+        void shouldIgnoreBlacklistedTokenOnProtectedRoute() {
+            // The filter establishes authentication context; it does NOT itself return
+            // 401. For a blacklisted token it leaves the request anonymous and clears the
+            // stale cookie — SecurityConfig's anyExchange().authenticated() then yields the
+            // 401 downstream. We assert that safe contract here.
             MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
                     .header("Authorization", "Bearer " + VALID_JWT)
                     .build();
@@ -513,10 +516,16 @@ class JwtAuthenticationFilterTest {
                     .thenReturn(JwtTokenProvider.TokenValidationResult.success(claims));
             when(tokenBlacklistService.isBlacklisted("jti-123")).thenReturn(Mono.just(true));
 
-            StepVerifier.create(filter.filter(exchange, passThroughChain()))
+            SecurityContext[] captured = new SecurityContext[1];
+            StepVerifier.create(filter.filter(exchange, capturingChain(captured)))
                     .verifyComplete();
 
-            assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            // No authenticated context established for the blacklisted token...
+            assertThat(captured[0]).isNull();
+            // ...and the stale access_token cookie is cleared.
+            var clearedCookie = exchange.getResponse().getCookies().getFirst("access_token");
+            assertThat(clearedCookie).isNotNull();
+            assertThat(clearedCookie.getMaxAge()).isZero();
         }
 
         @Test
@@ -621,8 +630,11 @@ class JwtAuthenticationFilterTest {
         }
 
         @Test
-        @DisplayName("Should return 401 for non-exempt path with expired token")
-        void shouldReturn401ForNonExemptPathWithExpiredToken() {
+        @DisplayName("Should ignore an expired token on a non-exempt path (no auth; downstream authz returns 401)")
+        void shouldIgnoreExpiredTokenOnNonExemptPath() {
+            // An expired token is invalid: the filter clears the cookie and leaves the
+            // request anonymous rather than returning 401 itself. The 401 for the
+            // protected path is then produced by SecurityConfig downstream.
             MockServerHttpRequest request = MockServerHttpRequest.get("/api/v1/admin/articles")
                     .header("Authorization", "Bearer " + INVALID_JWT)
                     .build();
@@ -631,10 +643,14 @@ class JwtAuthenticationFilterTest {
             when(tokenProvider.validateAndParseClaims(INVALID_JWT))
                     .thenReturn(JwtTokenProvider.TokenValidationResult.expired("Token expired"));
 
-            StepVerifier.create(filter.filter(exchange, passThroughChain()))
+            SecurityContext[] captured = new SecurityContext[1];
+            StepVerifier.create(filter.filter(exchange, capturingChain(captured)))
                     .verifyComplete();
 
-            assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            assertThat(captured[0]).isNull();
+            var clearedCookie = exchange.getResponse().getCookies().getFirst("access_token");
+            assertThat(clearedCookie).isNotNull();
+            assertThat(clearedCookie.getMaxAge()).isZero();
         }
     }
 }

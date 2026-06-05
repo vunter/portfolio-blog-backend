@@ -36,15 +36,6 @@ public class JwtAuthenticationFilter implements WebFilter {
 
     private static final String ACCESS_TOKEN_COOKIE = "access_token";
 
-    /** Auth endpoints exempt from token rejection (needed for refresh/login/logout flow) */
-    private static final Set<String> AUTH_EXEMPT_PATHS = Set.of(
-            "/api/v1/admin/auth/login",
-            "/api/v1/admin/auth/login/v2",
-            "/api/v1/admin/auth/register",
-            "/api/v1/admin/auth/refresh",
-            "/api/v1/admin/auth/logout"
-    );
-
     public JwtAuthenticationFilter(JwtTokenProvider tokenProvider, UserRepository userRepository,
                                    TokenBlacklistService tokenBlacklistService, UserCacheService userCacheService) {
         this.tokenProvider = tokenProvider;
@@ -65,11 +56,6 @@ public class JwtAuthenticationFilter implements WebFilter {
             return cookie.getValue();
         }
         return null;
-    }
-
-    /** Check if the request path is exempt from token rejection (auth + public endpoints) */
-    private boolean isExemptPath(String path) {
-        return AUTH_EXEMPT_PATHS.contains(path) || path.startsWith("/api/v1/public/");
     }
 
     /** Clear the invalid/expired access_token cookie from the browser */
@@ -120,15 +106,8 @@ public class JwtAuthenticationFilter implements WebFilter {
         if (!validation.valid()) {
             // Clear the invalid/expired cookie so the browser stops sending it
             clearAccessTokenCookie(exchange);
-
-            // Allow auth & public endpoints to proceed without authentication
-            if (isExemptPath(path)) {
-                return chain.filter(exchange);
-            }
-
-            // For protected routes: deny access immediately with 401
-            log.warn("Access denied — {} for path: {}", validation.error(), path);
-            return unauthorizedResponse(exchange, validation.error());
+            log.warn("Ignoring invalid JWT for path {}: {}", path, validation.error());
+            return chain.filter(exchange);
         }
 
         // Token is valid (signature, encoding, and expiration all verified)
@@ -141,10 +120,7 @@ public class JwtAuthenticationFilter implements WebFilter {
         } catch (NumberFormatException | NullPointerException e) {
             log.warn("Access denied — JWT subject is not a numeric user id");
             clearAccessTokenCookie(exchange);
-            if (isExemptPath(path)) {
-                return chain.filter(exchange);
-            }
-            return unauthorizedResponse(exchange, "Invalid token subject");
+            return chain.filter(exchange);
         }
 
         // Check if the token has been blacklisted (e.g. after logout)
@@ -154,11 +130,8 @@ public class JwtAuthenticationFilter implements WebFilter {
                     .flatMap(blacklisted -> {
                         if (blacklisted) {
                             clearAccessTokenCookie(exchange);
-                            if (isExemptPath(path)) {
-                                return chain.filter(exchange);
-                            }
-                            log.warn("Access denied — blacklisted token for path: {}", path);
-                            return unauthorizedResponse(exchange, "Token revoked");
+                            log.warn("Ignoring blacklisted JWT for path: {}", path);
+                            return chain.filter(exchange);
                         }
                         return authenticateUser(exchange, chain, uid, role);
                     });

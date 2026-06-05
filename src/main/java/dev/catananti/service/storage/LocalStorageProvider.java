@@ -32,7 +32,17 @@ public class LocalStorageProvider implements StorageProvider {
     @Override
     public Mono<String> store(String key, byte[] data, String contentType) {
         return Mono.fromCallable(() -> {
-            Path filePath = Paths.get(uploadPath, key);
+            Path uploadRoot = Paths.get(uploadPath).toAbsolutePath().normalize();
+            Path filePath = Paths.get(uploadPath, key).toAbsolutePath().normalize();
+
+            // Defence-in-depth: refuse to write outside the upload root even if a
+            // future caller passes a user-influenced key (current callers use a
+            // server-generated date+UUID key, so this is a latent-risk guard).
+            if (!filePath.startsWith(uploadRoot)) {
+                log.warn("Path traversal attempt blocked in LocalStorageProvider.store: {}", key);
+                throw new IOException("Invalid storage key: path traversal detected");
+            }
+
             Files.createDirectories(filePath.getParent());
             Files.write(filePath, data);
             log.info("File stored locally: {} ({} bytes)", filePath, data.length);
