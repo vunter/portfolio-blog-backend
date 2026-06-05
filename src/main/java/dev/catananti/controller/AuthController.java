@@ -29,9 +29,11 @@ import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -169,14 +171,17 @@ public class AuthController {
                               ServerHttpResponse httpResponse,
                               ServerWebExchange exchange) {
         log.info("Logout requested");
-        // Extract tokens from cookies
-        String refreshToken = extractRefreshTokenFromCookie(httpRequest);
+        List<String> refreshTokens = extractRefreshTokensFromCookies(httpRequest);
         String accessToken = extractAccessTokenFromCookie(httpRequest);
 
-        // First blacklist tokens, THEN clear cookies, THEN rotate CSRF token
+        // First blacklist/revoke tokens, THEN clear cookies, THEN rotate CSRF token
         Mono<Void> logoutMono = Mono.empty();
-        if (refreshToken != null) {
-            logoutMono = authService.logout(refreshToken, accessToken);
+        if (!refreshTokens.isEmpty()) {
+            String primaryRefreshToken = refreshTokens.get(0);
+            logoutMono = authService.logout(primaryRefreshToken, accessToken)
+                    .then(Flux.fromIterable(refreshTokens.subList(1, refreshTokens.size()))
+                            .flatMap(refreshTokenService::revokeToken)
+                            .then());
         } else if (accessToken != null) {
             logoutMono = authService.logout(null, accessToken);
         }
@@ -284,9 +289,14 @@ public class AuthController {
         }
     }
 
-    private String extractRefreshTokenFromCookie(ServerHttpRequest request) {
-        HttpCookie cookie = request.getCookies().getFirst(REFRESH_TOKEN_COOKIE);
-        return cookie != null ? cookie.getValue() : null;
+    private List<String> extractRefreshTokensFromCookies(ServerHttpRequest request) {
+        return request.getCookies()
+                .getOrDefault(REFRESH_TOKEN_COOKIE, java.util.Collections.emptyList())
+                .stream()
+                .map(HttpCookie::getValue)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
     }
 
     private String extractAccessTokenFromCookie(ServerHttpRequest request) {
@@ -354,7 +364,9 @@ public class AuthController {
     public Mono<ResponseEntity<Void>> revokeAllOtherSessions(
             @AuthenticationPrincipal String email,
             ServerHttpRequest httpRequest) {
-        String currentRefreshToken = extractRefreshTokenFromCookie(httpRequest);
+        // The current session's refresh token identifies which session to preserve.
+        String currentRefreshToken = extractRefreshTokensFromCookies(httpRequest)
+                .stream().findFirst().orElse(null);
         if (currentRefreshToken == null) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
