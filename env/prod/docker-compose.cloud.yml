@@ -124,7 +124,13 @@ services:
     deploy:
       resources:
         limits:
+          # CPU ceiling prevents a PDF/Playwright/GC spike from starving nginx &
+          # postgres on the shared droplet; reservation guarantees a baseline.
+          cpus: "1.5"
           memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
     labels:
       com.datadoghq.ad.logs: '[{"source":"java","service":"portfolio-blog-api"}]'
 
@@ -157,11 +163,14 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "0.5"
           memory: 256M
 
   # Nginx Reverse Proxy (SSL termination)
   nginx:
-    image: nginx:alpine
+    # Pinned minor tag (matches dev) so a `docker compose pull` can't silently jump
+    # nginx versions on the TLS terminator. Bump deliberately via Dependabot.
+    image: nginx:1.27-alpine
     container_name: blog-nginx
     ports:
       - "80:80"
@@ -191,6 +200,7 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "0.5"
           memory: 256M
     labels:
       com.datadoghq.ad.logs: '[{"source":"nginx","service":"blog-nginx"}]'
@@ -230,6 +240,7 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "0.5"
           memory: 512M
 
 networks:
