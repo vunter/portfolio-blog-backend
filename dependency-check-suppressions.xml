@@ -7,4 +7,18 @@
         <cve>CVE-XXXX-XXXXX</cve>
     </suppress>
     -->
+
+    <!--
+      CVE-2026-40982 is a directory-traversal in spring-cloud-config-SERVER. This
+      service does not use Spring Cloud Config Server — it uses spring-cloud-starter-
+      vault-config. Dependency-Check matches the CVE to the spring-cloud-vault-config
+      artifact through the shared `spring_cloud_config` CPE, which is a false positive
+      (the vulnerable code path does not ship in the vault artifact). Re-evaluate if a
+      config-server dependency is ever introduced.
+    -->
+    <suppress>
+        <notes><![CDATA[CPE false positive: spring-cloud-config-server CVE matched against spring-cloud-vault-config, which is not a config server and is not affected.]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework\.cloud/spring-cloud-vault.*$</packageUrl>
+        <cve>CVE-2026-40982</cve>
+    </suppress>
 </suppressions>
