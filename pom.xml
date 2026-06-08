@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.2</version>
+		<version>4.0.6</version>
 		<relativePath/>
 	</parent>
 	<groupId>dev.catananti</groupId>
@@ -46,14 +46,21 @@
 		<lombok.version>1.18.42</lombok.version>
 		<jjwt.version>0.13.0</jjwt.version>
 		<testcontainers.version>1.21.0</testcontainers.version>
-		<spring-cloud.version>2025.1.0</spring-cloud.version>
+		<spring-cloud.version>2025.1.1</spring-cloud.version>
+		<!-- Override Boot-managed pgjdbc (4.0.6 manages 42.7.10, still vulnerable):
+		     42.7.11 fixes CVE-2026-42198 (SCRAM PBKDF2 iteration client-side DoS). -->
+		<postgresql.version>42.7.11</postgresql.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
+			<!-- Override Boot-managed netty (4.0.6 manages 4.2.12.Final, still vulnerable):
+			     4.2.15.Final fixes CVE-2026-42581/42579/42584 (HTTP request smuggling /
+			     info disclosure, fixed in 4.2.13.Final). netty-bom is imported first so it
+			     wins over the Spring Boot BOM. -->
 			<dependency>
 				<groupId>io.netty</groupId>
 				<artifactId>netty-bom</artifactId>
-				<version>4.2.1.Final</version>
+				<version>4.2.15.Final</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
