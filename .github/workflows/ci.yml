@@ -132,6 +132,7 @@ jobs:
           tags: portfolio-blog-backend:${{ github.sha }}
           build-args: |
             NEXUS_HOST=${{ secrets.NEXUS_HOST }}
+            PLAYWRIGHT_REMOTE=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
