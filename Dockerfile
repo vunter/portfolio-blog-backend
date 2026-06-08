@@ -64,7 +64,9 @@ LABEL org.opencontainers.image.title="Portfolio Blog API" \
 ARG PLAYWRIGHT_REMOTE=false
 
 # Node.js for Playwright PDF generation (driver always needed)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade patches the base image's OS packages so Trivy's fixable
+# CRITICAL/HIGH findings are cleared at build time.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
       nodejs \
       npm \
       wget \
