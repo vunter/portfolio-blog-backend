@@ -47,7 +47,7 @@ RUN cp target/*.jar application.jar && \
 
 # Download Datadog agent with version pinning and checksum verification (Q5.1)
 ARG DD_JAVA_AGENT_VERSION=1.45.1
-ARG DD_JAVA_AGENT_SHA256=a71eb47a3ea30d0c0fb19b4da3483cf7bb5ce18b89a8b1e7e08b6c0f33476c5e
+ARG DD_JAVA_AGENT_SHA256=1e64f52a1849a2e5fe3220a0380bcd6bda197a39552d94ea006c773043049a8b
 RUN wget -q -O /tmp/dd-java-agent.jar \
       "https://github.com/DataDog/dd-trace-java/releases/download/v${DD_JAVA_AGENT_VERSION}/dd-java-agent-${DD_JAVA_AGENT_VERSION}.jar" && \
     echo "${DD_JAVA_AGENT_SHA256}  /tmp/dd-java-agent.jar" | sha256sum -c -
