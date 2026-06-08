@@ -660,6 +660,11 @@
 					<nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
 					<skipProvidedScope>true</skipProvidedScope>
 					<skipRuntimeScope>false</skipRuntimeScope>
+					<!-- OSS Index (ossindex.sonatype.org) now returns 401 (auth required);
+					     its analyzer exception fails the build even though the NVD-based
+					     CVSS>=7.0 gate passes. NVD stays the CVE source of truth — disable
+					     the supplementary OSS Index analyzer. -->
+					<ossindexAnalyzerEnabled>false</ossindexAnalyzerEnabled>
 				</configuration>
 			</plugin>
 			<!--
