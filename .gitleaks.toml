@@ -1,0 +1,30 @@
+# gitleaks configuration — extends the bundled default ruleset.
+#
+# The CI "Secret Scan" job runs `gitleaks detect` over the FULL git history
+# (actions/checkout fetch-depth: 0), so historical commits are scanned as well
+# as the working tree. The allowlists below cover known-safe matches that are
+# NOT real credentials and therefore must not fail the build:
+#   - test fixtures: dummy keys/secrets hard-coded in *Test.java
+#   - i18n bundles: the word "LinkedIn" trips the linkedin-client-id rule
+#   - env/*/.env.example: placeholders, incl. Google's PUBLIC reCAPTCHA test keys
+#
+# None of these are secrets. Real credentials are sourced at runtime via Vault /
+# Doppler and never committed. Re-verify before adding new allowlist entries.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test fixtures, i18n message bundles, and example env files (no real secrets)"
+paths = [
+  '''src/test/java/.*Test\.java''',
+  '''src/main/resources/messages_.*\.properties''',
+  '''env/.*/\.env\.example''',
+]
+
+[[allowlists]]
+description = "Google public reCAPTCHA v2 test keys (published by Google, not secret)"
+regexes = [
+  '''6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI''',
+  '''6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe''',
+]
