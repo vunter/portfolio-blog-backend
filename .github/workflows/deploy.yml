@@ -763,7 +763,11 @@ jobs:
             doppler run -- docker compose -f docker-compose.cloud.yml pull --ignore-pull-failures app frontend
 
             echo "=== Running init containers (GeoIP, etc.) ==="
-            doppler run -- docker compose -f docker-compose.cloud.yml up geoip-init --remove-orphans
+            # The GeoIP DB is provided via a mounted volume and refreshed by
+            # scripts/geoip-init.sh (cron) — there is no geoip-init compose service.
+            # Guard so an absent service is skipped instead of aborting the deploy.
+            doppler run -- docker compose -f docker-compose.cloud.yml up geoip-init --remove-orphans 2>/dev/null \
+              || echo "No geoip-init service defined — skipping (GeoIP DB handled out-of-band)"
 
             echo "=== Ensuring Playwright sidecar is up (recreate only if image changed) ==="
             # --wait polls Compose healthchecks; the sidecar's healthcheck is a TCP probe
