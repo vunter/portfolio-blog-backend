@@ -615,6 +615,20 @@ jobs:
               command -v oras >/dev/null 2>&1 && echo "oras ready: $(oras version 2>/dev/null | head -1)" || echo "WARN: oras install failed"
             fi
 
+            # cosign verifies the signed config bundle and the container images.
+            # Install once if missing (same pattern as oras).
+            if ! command -v cosign >/dev/null 2>&1; then
+              echo "cosign not found — installing..."
+              TMP_COSIGN="$(mktemp -d)"
+              if curl -fsSL "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64" -o "$TMP_COSIGN/cosign"; then
+                chmod +x "$TMP_COSIGN/cosign"
+                sudo -n install -m 0755 "$TMP_COSIGN/cosign" /usr/local/bin/cosign 2>/dev/null \
+                  || { mkdir -p "$HOME/.local/bin"; install -m 0755 "$TMP_COSIGN/cosign" "$HOME/.local/bin/cosign"; export PATH="$HOME/.local/bin:$PATH"; }
+              fi
+              rm -rf "$TMP_COSIGN"
+              command -v cosign >/dev/null 2>&1 && echo "cosign ready: $(cosign version 2>/dev/null | head -1)" || echo "WARN: cosign install failed"
+            fi
+
             if command -v oras >/dev/null 2>&1; then
               echo "$GHCR_TOKEN" | oras login ghcr.io -u github-actions --password-stdin || echo "WARN: oras login to GHCR failed"
               if oras pull "${CONFIG_OCI}:${DEPLOY_SHA}"; then
