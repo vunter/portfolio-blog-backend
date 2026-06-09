@@ -599,6 +599,22 @@ jobs:
             # cosign verifies the bundle was signed by the deploy.yml workflow on this repo.
             echo "=== Downloading config bundle from GHCR (OCI) ==="
             BUNDLE_FETCHED=0
+
+            # The droplet needs the oras CLI to pull the signed OCI config bundle
+            # from GHCR. Install it once if missing (prefer /usr/local/bin via
+            # passwordless sudo; fall back to ~/.local/bin for this run).
+            if ! command -v oras >/dev/null 2>&1; then
+              echo "oras not found — installing..."
+              ORAS_VERSION="1.2.3"
+              TMP_ORAS="$(mktemp -d)"
+              if curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" | tar -xz -C "$TMP_ORAS" oras; then
+                sudo -n install -m 0755 "$TMP_ORAS/oras" /usr/local/bin/oras 2>/dev/null \
+                  || { mkdir -p "$HOME/.local/bin"; install -m 0755 "$TMP_ORAS/oras" "$HOME/.local/bin/oras"; export PATH="$HOME/.local/bin:$PATH"; }
+              fi
+              rm -rf "$TMP_ORAS"
+              command -v oras >/dev/null 2>&1 && echo "oras ready: $(oras version 2>/dev/null | head -1)" || echo "WARN: oras install failed"
+            fi
+
             if command -v oras >/dev/null 2>&1; then
               echo "$GHCR_TOKEN" | oras login ghcr.io -u github-actions --password-stdin || echo "WARN: oras login to GHCR failed"
               if oras pull "${CONFIG_OCI}:${DEPLOY_SHA}"; then
