@@ -600,8 +600,8 @@ jobs:
             echo "=== Downloading config bundle from GHCR (OCI) ==="
             BUNDLE_FETCHED=0
             if command -v oras >/dev/null 2>&1; then
-              echo "$GHCR_TOKEN" | oras login ghcr.io -u github-actions --password-stdin >/dev/null 2>&1 || true
-              if oras pull "${CONFIG_OCI}:${DEPLOY_SHA}" >/dev/null 2>&1; then
+              echo "$GHCR_TOKEN" | oras login ghcr.io -u github-actions --password-stdin || echo "WARN: oras login to GHCR failed"
+              if oras pull "${CONFIG_OCI}:${DEPLOY_SHA}"; then
                 BUNDLE_FETCHED=1
                 echo "Pulled config bundle from GHCR"
               fi
