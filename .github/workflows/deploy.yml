@@ -240,18 +240,15 @@ jobs:
 
           # Bundle only deployment config — no source code
           FILES=(
-            deploy/cloud/docker-compose.cloud.yml
-            deploy/cloud/docker-compose.infra.yml
-            deploy/cloud/nginx-cloud.conf
-            deploy/cloud/rollback.sh
-            deploy/cloud/init-db.sh
-            nginx/
-            prometheus.yml
+            env/prod/docker-compose.cloud.yml
+            env/prod/docker-compose.infra.yml
+            env/prod/nginx.conf
+            env/prod/rollback.sh
+            env/prod/init-db.sh
           )
 
           # Include optional directories if present
-          [ -d "deploy/cloud/scripts" ] && FILES+=(deploy/cloud/scripts/)
-          [ -d "prometheus" ] && FILES+=(prometheus/)
+          [ -d "env/prod/scripts" ] && FILES+=(env/prod/scripts/)
 
           tar czf "$BUNDLE" "${FILES[@]}"
           echo "Config bundle: $BUNDLE ($(du -h $BUNDLE | cut -f1))"
@@ -674,7 +671,7 @@ jobs:
             docker tag ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA} portfolio-blog-api:latest
             docker tag ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA} portfolio-blog-frontend:latest
 
-            cd deploy/cloud
+            cd env/prod
 
             echo "=== Ensuring infrastructure ==="
             if docker ps -q -f name=blog-postgres -f status=running | grep -q .; then
