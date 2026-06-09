@@ -268,8 +268,7 @@ jobs:
           echo "$GHCR_TOKEN" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
           # Push the bundle tagged by SHA (immutable) and as :latest.
           oras push \
-            "${{ env.CONFIG_OCI }}:${SHA}" \
-            "${{ env.CONFIG_OCI }}:latest" \
+            "${{ env.CONFIG_OCI }}:${SHA},latest" \
             --artifact-type application/vnd.catananti.portfolio-blog.config.v1+tar+gzip \
             "${BUNDLE}:application/gzip"
 
