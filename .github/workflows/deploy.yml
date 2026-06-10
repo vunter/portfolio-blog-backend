@@ -702,6 +702,13 @@ jobs:
 
             cd env/prod
 
+            # Pin the Compose project name to the one the running stack already uses
+            # ("cloud"), so this deploy ADOPTS and force-recreates the existing
+            # containers instead of colliding (the env/prod dir would otherwise derive
+            # project "prod" != "cloud") — and keeps using the existing cloud_* volumes
+            # (uploads, logs). Postgres/Redis are separate projects, left untouched.
+            export COMPOSE_PROJECT_NAME=cloud
+
             echo "=== Ensuring infrastructure ==="
             if docker ps -q -f name=blog-postgres -f status=running | grep -q .; then
               echo "Infrastructure already running"
