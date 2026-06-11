@@ -305,6 +305,11 @@ jobs:
   publish-jar:
     needs: [prepare, verify-ci]
     runs-on: ubuntu-latest
+    # Archival to the home Nexus is best-effort: the home K3s lab sleeps, so
+    # Nexus is often unreachable (HTTP 000). Images live in GHCR (cosign-signed)
+    # — the deploy source of truth — so a failed Nexus upload must not fail the
+    # production deploy run.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -434,6 +439,10 @@ jobs:
   publish-frontend:
     needs: [prepare, verify-ci]
     runs-on: ubuntu-latest
+    # Best-effort archival to the home Nexus (often asleep). The deployed
+    # frontend image is already in GHCR (cosign-signed), so a failed Nexus
+    # upload must not fail the production deploy run.
+    continue-on-error: true
     steps:
       - name: Checkout frontend
         uses: actions/checkout@v4
