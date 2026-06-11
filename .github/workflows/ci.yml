@@ -5,6 +5,11 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  # Nightly: re-scan main against newly-disclosed CVEs (a CVSS>=7 advisory can
+  # land against unchanged dependencies any day) and keep the NVD cache warm so
+  # weekday pushes stay fast. Does not deploy — deploy.yml triggers on tags only.
+  schedule:
+    - cron: '0 6 * * *'
 
 permissions:
   contents: read
@@ -55,10 +60,12 @@ jobs:
       - name: Make Maven wrapper executable
         run: chmod +x mvnw
 
-      - name: Run tests (with OWASP Dependency-Check)
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: ./mvnw -B -Pdep-scan verify
+      # OWASP Dependency-Check moved to the dedicated `dependency-scan` job so it
+      # runs in PARALLEL with these tests instead of serializing the multi-minute
+      # NVD scan here. Plain `verify` does NOT run the scan: the check binds to
+      # `verify` only via the `dep-scan` profile (pom.xml), omitted on purpose.
+      - name: Run tests
+        run: ./mvnw -B verify
 
       - name: Upload coverage to Codecov
         if: always()
@@ -90,6 +97,52 @@ jobs:
           name: test-reports
           path: target/surefire-reports/
           retention-days: 7
+
+  dependency-scan:
+    name: Dependency Scan (OWASP)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Make Maven wrapper executable
+        run: chmod +x mvnw
+
+      # The NVD H2 database gets its OWN cache, keyed on the ISO week and NOT on
+      # the pom.xml hash. setup-java's `cache: maven` is keyed on the pom hash,
+      # so a dependency bump (when the scan matters most) used to bust the NVD DB
+      # and force a full multi-hundred-MB re-download. restore-keys falls back to
+      # the most recent week, so we only ever pull a small incremental NVD delta.
+      # The week stamp is computed in its own step and referenced by output —
+      # never inline a self-referencing env, or the cache silently never restores.
+      - name: Compute NVD cache key (ISO week)
+        id: nvdkey
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OWASP NVD database
+        uses: actions/cache@v4
+        with:
+          path: .dependency-check/data
+          key: nvd-data-v12-${{ steps.nvdkey.outputs.week }}
+          restore-keys: |
+            nvd-data-v12-
+
+      # Same gate as before: the `dep-scan` profile binds OWASP Dependency-Check
+      # to `verify`, and failBuildOnCVSS=7 fails the build on any CVSS>=7 CVE.
+      # -DskipTests because the `test` job already runs them. This job stays in
+      # the SAME ci.yml run, so deploy.yml's verify-ci (whole-run == success)
+      # still blocks deploy on a dependency CVE — the security gate is unchanged.
+      - name: OWASP Dependency-Check (CVSS >= 7 fails the build)
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: ./mvnw -B -Pdep-scan -DskipTests verify
 
   secret-scan:
     name: Secret Scan
