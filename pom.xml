@@ -661,6 +661,13 @@
 				<version>12.1.1</version>
 				<configuration>
 					<failBuildOnCVSS>7</failBuildOnCVSS>
+					<!-- NVD H2 DB lives here (outside ~/.m2) so CI can cache it with a
+					     key independent of the pom hash. Before this, a dependency bump
+					     busted setup-java's pom-hashed maven cache and forced a full
+					     multi-hundred-MB NVD re-download — exactly when the scan matters
+					     most. autoUpdate stays on for small incremental NVD deltas. -->
+					<dataDirectory>${project.basedir}/.dependency-check/data</dataDirectory>
+					<autoUpdate>true</autoUpdate>
 					<suppressionFiles>
 						<suppressionFile>dependency-check-suppressions.xml</suppressionFile>
 					</suppressionFiles>

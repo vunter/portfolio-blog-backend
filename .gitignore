@@ -1,5 +1,7 @@
 ﻿# === Build output ===
 target/
+# OWASP Dependency-Check NVD database (relocated here via <dataDirectory>; cached by CI)
+.dependency-check/
 !**/src/main/**/target/
 !**/src/test/**/target/
 build/
