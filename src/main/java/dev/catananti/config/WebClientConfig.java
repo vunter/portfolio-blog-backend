@@ -4,8 +4,10 @@ import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.handler.timeout.WriteTimeoutHandler;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Scope;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
@@ -24,7 +26,14 @@ import java.util.concurrent.TimeUnit;
 @Configuration(proxyBeanMethods = false)
 public class WebClientConfig {
 
+    // Prototype scope: each injection point gets its OWN builder. The builder is
+    // mutable, and some callers set defaults on it (e.g. CloudflareEmailRoutingService
+    // adds a default Authorization header). With a shared singleton those defaults
+    // leaked into every WebClient built afterwards — the Cloudflare token was being
+    // sent to api.github.com and returning 401. Prototype isolates each caller, which
+    // is also how Spring Boot's own auto-configured WebClient.Builder behaves.
     @Bean
+    @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
     public WebClient.Builder webClientBuilder(
             @Value("${app.webclient.connect-timeout-ms:5000}") int connectTimeoutMs,
             @Value("${app.webclient.response-timeout-ms:15000}") int responseTimeoutMs,
