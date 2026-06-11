@@ -172,6 +172,7 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/languages").permitAll()
                         .pathMatchers("/api/v1/newsletter/**").permitAll()
                         .pathMatchers("/api/v1/status/**").permitAll()
+                        .pathMatchers("/api/v1/github/**").permitAll()
                         // F-016: Uses PUBLIC_AUTH_PATHS constant shared with CSRF exemption
                         .pathMatchers(PUBLIC_AUTH_PATHS.toArray(new String[0])).permitAll()
                         .pathMatchers("/api/v1/admin/auth/oauth2/authorize/**").permitAll()
