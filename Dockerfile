@@ -63,10 +63,15 @@ LABEL org.opencontainers.image.title="Portfolio Blog API" \
 # Chromium then runs in a sidecar container (deploy/cloud/playwright/).
 ARG PLAYWRIGHT_REMOTE=false
 
-# Node.js for Playwright PDF generation (driver always needed)
-# apt-get upgrade patches the base image's OS packages so Trivy's fixable
-# CRITICAL/HIGH findings are cleared at build time.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+# Daily cache-bust token — CI passes the build date. Without it, BuildKit's
+# layer cache (type=gha) served a STALE `apt-get upgrade`: openssl
+# 3.0.13-0ubuntu3.9 lingered after Ubuntu shipped the fix (…3.11) for
+# CVE-2026-45447, and Trivy's fixable-HIGH gate failed the build. Referencing
+# the token in the RUN re-executes apt with fresh metadata at most once a day,
+# so OS security patches stay current. Node.js is the Playwright PDF driver.
+ARG APT_SECURITY_REFRESH=manual
+RUN echo "apt security refresh: ${APT_SECURITY_REFRESH}" \
+    && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
       nodejs \
       npm \
       wget \

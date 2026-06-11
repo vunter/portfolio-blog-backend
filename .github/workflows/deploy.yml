@@ -150,6 +150,12 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
 
+      # Daily token so the Dockerfile's apt-get upgrade layer re-runs with fresh
+      # metadata, keeping OS security patches current (see Dockerfile comment).
+      - name: Compute apt cache-bust date
+        id: aptdate
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
       - name: Build & push API image
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -162,6 +168,7 @@ jobs:
           build-args: |
             NEXUS_HOST=${{ secrets.NEXUS_HOST }}
             PLAYWRIGHT_REMOTE=true
+            APT_SECURITY_REFRESH=${{ steps.aptdate.outputs.date }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
