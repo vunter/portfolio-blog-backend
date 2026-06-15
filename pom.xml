@@ -67,9 +67,9 @@
 			<dependency>
 				<groupId>org.apache.logging.log4j</groupId>
 				<artifactId>log4j-bom</artifactId>
-				<!-- 2.25.4 fixes CVE-2026-34477 (TLS hostname verify bypass) and
+				<!-- 2.26.0 fixes CVE-2026-34477 (TLS hostname verify bypass) and
 				     CVE-2026-34479 (Log4j1XmlLayout XML injection). -->
-				<version>2.25.4</version>
+				<version>2.26.0</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
