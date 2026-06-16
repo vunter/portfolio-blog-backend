@@ -57,6 +57,7 @@ class JwtAuthenticationFilterTest {
     private static final String TEST_ROLE = "ADMIN";
     private static final Long TEST_USER_ID = 1L;
     private static final Long INACTIVE_USER_ID = 2L;
+    private static final String DEFAULT_JTI = "default-jti";
 
     private User activeUser;
     private User inactiveUser;
@@ -76,6 +77,13 @@ class JwtAuthenticationFilterTest {
         inactiveUser.setName("Inactive User");
         inactiveUser.setRole("VIEWER");
         inactiveUser.setActive(false);
+
+        // SEG-10: tokens built via validClaims(...) now carry DEFAULT_JTI, so the filter
+        // consults the blacklist before authenticating. Default that jti to not-blacklisted
+        // (lenient: tests that never reach the blacklist check — invalid/expired/no-jwt — must
+        // not trip strict-stubbing). The dedicated TokenBlacklistTests register their own
+        // per-jti stubs, which take precedence over this default for their specific values.
+        lenient().when(tokenBlacklistService.isBlacklisted(DEFAULT_JTI)).thenReturn(Mono.just(false));
     }
 
     /**
@@ -479,11 +487,18 @@ class JwtAuthenticationFilterTest {
     }
 
     // --- Helpers ---
-    /** Builds a Claims mock with the user id encoded in {@code sub} (matches production JWTs). */
+    /**
+     * Builds a Claims mock with the user id encoded in {@code sub} and a non-blank {@code jti}
+     * (matches production JWTs: JwtTokenProvider always sets a jti). SEG-10: the filter now
+     * refuses to authenticate a validly-signed token whose jti is null/blank, so every test
+     * token that should authenticate must carry one. The matching not-blacklisted stub for this
+     * jti is registered leniently in {@link #setUp()}.
+     */
     private Claims validClaims(Long userId, String role) {
         Claims claims = mock(Claims.class);
         doReturn(String.valueOf(userId)).when(claims).getSubject();
         doReturn(role).when(claims).get("role", String.class);
+        doReturn(DEFAULT_JTI).when(claims).getId();
         return claims;
     }
 

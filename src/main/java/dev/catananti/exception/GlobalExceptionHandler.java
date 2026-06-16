@@ -242,9 +242,19 @@ public class GlobalExceptionHandler {
         String path = exchange.getRequest().getPath().value();
         log.warn("status=400 path={} Bad request input: {}", path, ex.getMessage(), ex);
         Locale locale = resolveLocale(exchange);
+        // PII-3: ex.getReason() can contain raw framework detail (parameter names, types, decoder internals).
+        // Mirror the IllegalArgumentException handler: resolve as an i18n key first, otherwise sanitize before
+        // exposing it to the client — never return the raw reason verbatim.
+        String reason = ex.getReason();
+        String safeMessage;
+        if (reason == null) {
+            safeMessage = msg(locale, "error.invalid_request");
+        } else {
+            String translated = msg(locale, reason);
+            safeMessage = translated.equals(reason) ? sanitizeErrorMessage(reason, locale) : translated;
+        }
         return Mono.just(buildErrorResponse(HttpStatus.BAD_REQUEST,
-                msg(locale, "error.bad_request"),
-                ex.getReason() != null ? ex.getReason() : msg(locale, "error.invalid_request"), exchange));
+                msg(locale, "error.bad_request"), safeMessage, exchange));
     }
 
     @ExceptionHandler(DuplicateKeyException.class)

@@ -4,8 +4,8 @@ import dev.catananti.dto.AnalyticsComparison;
 import dev.catananti.dto.AnalyticsSummary;
 import dev.catananti.dto.SearchAnalyticsResponse;
 import dev.catananti.entity.UserRole;
-import dev.catananti.repository.UserRepository;
 import dev.catananti.service.AnalyticsService;
+import dev.catananti.service.CurrentUserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -14,8 +14,6 @@ import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.context.ReactiveSecurityContextHolder;
-import org.springframework.security.core.context.SecurityContext;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
@@ -31,7 +29,7 @@ import reactor.core.publisher.Mono;
 public class AdminAnalyticsController {
 
     private final AnalyticsService analyticsService;
-    private final UserRepository userRepository;
+    private final CurrentUserService currentUserService;
 
     @GetMapping("/summary")
     @Operation(summary = "Get analytics summary", description = "Get analytics summary scoped by role")
@@ -83,12 +81,9 @@ public class AdminAnalyticsController {
         return analyticsService.getSearchAnalytics(days, 10);
     }
 
+    // ARCH-3: delegates to the shared CurrentUserService.
     private Mono<dev.catananti.entity.User> getCurrentUser() {
-        return ReactiveSecurityContextHolder.getContext()
-                .map(SecurityContext::getAuthentication)
-                .filter(auth -> auth != null && auth.isAuthenticated())
-                .map(auth -> auth.getName())
-                .flatMap(email -> userRepository.findByEmail(email));
+        return currentUserService.currentUser();
     }
 
     private int parsePeriod(String period) {

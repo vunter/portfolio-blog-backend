@@ -2,7 +2,6 @@ package dev.catananti.service;
 
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
-import dev.catananti.entity.ReadingHistory;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ReadingHistoryRepository;
 import dev.catananti.repository.UserRepository;
@@ -30,30 +29,21 @@ public class ReadingHistoryService {
     private final IdService idService;
 
     /**
-     * Record that a user read an article. Upserts: increments read_count if exists,
-     * creates new record otherwise.
+     * Record that a user read an article. Upserts atomically: increments read_count if a
+     * row already exists, creates a new record otherwise.
+     *
+     * <p>BUG-2: This delegates to an atomic INSERT ... ON CONFLICT upsert against the
+     * UNIQUE(user_id, article_id) constraint instead of a find-then-increment-or-insert
+     * sequence, which lost increments and threw an unhandled DuplicateKeyException when two
+     * reads for the same (user, article) raced.</p>
      */
     @Transactional
     public Mono<Void> recordReading(Long userId, Long articleId) {
-        return readingHistoryRepository.findByUserIdAndArticleId(userId, articleId)
-                .flatMap(existing -> {
-                    existing.setReadCount(existing.getReadCount() + 1);
-                    existing.setLastReadAt(LocalDateTime.now());
-                    existing.setNewRecord(false);
-                    return readingHistoryRepository.save(existing).then();
-                })
-                .switchIfEmpty(Mono.defer(() -> {
-                    ReadingHistory rh = ReadingHistory.builder()
-                            .id(idService.nextId())
-                            .userId(userId)
-                            .articleId(articleId)
-                            .lastReadAt(LocalDateTime.now())
-                            .readCount(1)
-                            .build();
-                    return readingHistoryRepository.save(rh)
-                            .doOnSuccess(_ -> log.debug("Reading history created: user={}, article={}", userId, articleId))
-                            .then();
-                }));
+        return readingHistoryRepository
+                .upsertReading(idService.nextId(), userId, articleId, LocalDateTime.now())
+                .doOnNext(rh -> log.debug("Reading history recorded: user={}, article={}, readCount={}",
+                        userId, articleId, rh.getReadCount()))
+                .then();
     }
 
     /**

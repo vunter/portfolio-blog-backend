@@ -27,6 +27,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -45,11 +46,27 @@ public class ArticleService {
     private final BlogMetrics blogMetrics;
     private final ResilienceConfig resilience;
     private final PaginationConfig paginationConfig;
+    private final CacheService cacheService;
 
     // Q4.2: Route search through Postgres FTS + article_i18n (multi-language) when enabled.
     // H2 dev/test fall back to LIKE-based methods.
     @Value("${app.search.use-fts:false}")
     private boolean useFts;
+
+    // PERF-1: Read-through Redis cache for the public list/detail endpoints. Keys use the
+    // same "articles::published_page_*" / "articles::slug_<slug>" / "articles::search_count_*"
+    // shapes that CacheService.invalidateArticle()/invalidateAllArticles() already delete, so
+    // invalidation and CacheWarmingService warming become real instead of operating on keys
+    // nothing ever wrote.
+    private static final String CACHE_KEY_PUBLISHED_PAGE = "articles::published_page_";
+    private static final String CACHE_KEY_SLUG = "articles::slug_";
+    private static final String CACHE_KEY_SEARCH_COUNT = "articles::search_count_";
+
+    @Value("${app.cache.article-ttl:PT10M}")
+    private Duration articleCacheTtl;
+
+    @Value("${app.cache.search-count-ttl:PT1M}")
+    private Duration searchCountCacheTtl;
 
     private Flux<Article> runSearchQuery(String status, String query, int limit, int offset) {
         return useFts
@@ -61,6 +78,24 @@ public class ArticleService {
         return useFts
                 ? articleRepository.countSearchByStatusAndQueryFts(status, query)
                 : articleRepository.countSearchByStatusAndQuery(status, query);
+    }
+
+    /**
+     * be-data-perf-3: Cache the full-text search COUNT per (status, query) for a short TTL so the
+     * expensive FTS predicate isn't re-run on every page of the same search. Keyed under
+     * "articles::search_count_*" which invalidateAllArticles() ("articles::*") clears on any article
+     * mutation. A Redis read failure degrades transparently to a fresh COUNT.
+     */
+    private Mono<Long> runSearchCountCached(String status, String query) {
+        if (cacheService == null) {
+            return runSearchCount(status, query);
+        }
+        String cacheKey = CACHE_KEY_SEARCH_COUNT + status + "_" + DigestUtils.sha256Hex(query);
+        Mono<Long> dbCount = runSearchCount(status, query)
+                .flatMap(count -> cacheService.set(cacheKey, count, searchCountCacheTtl).thenReturn(count));
+        return cacheService.get(cacheKey, Long.class)
+                .onErrorResume(e -> Mono.empty())
+                .switchIfEmpty(dbCount);
     }
 
     // ==================== PUBLIC ENDPOINTS ====================
@@ -82,8 +117,26 @@ public class ArticleService {
         return getPublishedArticles(page, size, locale, sort, dateFrom, dateTo, null);
     }
 
+    @SuppressWarnings("unchecked")
     public Mono<PageResponse<ArticleResponse>> getPublishedArticles(int page, int size, String locale, String sort,
                                                                       LocalDate dateFrom, LocalDate dateTo, String search) {
+        // PERF-1: Read-through cache. The key always starts with "articles::published_page_"
+        // so it is cleared by invalidateArticle()/invalidateAllArticles()'s "published_page_*"
+        // delete on any article mutation. A Redis read failure degrades to a normal DB load.
+        if (cacheService == null) {
+            return loadPublishedArticles(page, size, locale, sort, dateFrom, dateTo, search);
+        }
+        String cacheKey = buildPublishedPageCacheKey(page, size, locale, sort, dateFrom, dateTo, search);
+        Mono<PageResponse<ArticleResponse>> dbLoad = loadPublishedArticles(page, size, locale, sort, dateFrom, dateTo, search)
+                .flatMap(response -> cacheService.set(cacheKey, response, articleCacheTtl).thenReturn(response));
+
+        return cacheService.get(cacheKey, (Class<PageResponse<ArticleResponse>>) (Class<?>) PageResponse.class)
+                .onErrorResume(e -> Mono.empty())
+                .switchIfEmpty(dbLoad);
+    }
+
+    private Mono<PageResponse<ArticleResponse>> loadPublishedArticles(int page, int size, String locale, String sort,
+                                                                       LocalDate dateFrom, LocalDate dateTo, String search) {
         int offset = page * size;
         String status = ArticleStatus.PUBLISHED.name();
 
@@ -98,7 +151,7 @@ public class ArticleService {
         if (hasSearch) {
             String query = search.trim();
             articleFlux = runSearchQuery(status, query, size, offset);
-            countMono = runSearchCount(status, query);
+            countMono = runSearchCountCached(status, query);
         } else if (hasDateFilter) {
             articleFlux = articleRepository.findByStatusAndDateRangeOrderByPublishedAtDesc(status, from, to, size, offset);
             countMono = articleRepository.countByStatusAndDateRange(status, from, to);
@@ -124,11 +177,47 @@ public class ArticleService {
                 .transformDeferred(CircuitBreakerOperator.of(resilience.getDatabaseCircuitBreaker()));
     }
 
+    /**
+     * Build a deterministic cache key for a published-articles page. Always prefixed with
+     * "articles::published_page_" so invalidateArticle()/invalidateAllArticles() clear it.
+     */
+    private String buildPublishedPageCacheKey(int page, int size, String locale, String sort,
+                                              LocalDate dateFrom, LocalDate dateTo, String search) {
+        String localePart = (locale == null || locale.isBlank()) ? "en" : locale.toLowerCase(Locale.ROOT);
+        String sortPart = (sort == null || sort.isBlank()) ? "default" : sort;
+        String fromPart = dateFrom != null ? dateFrom.toString() : "-";
+        String toPart = dateTo != null ? dateTo.toString() : "-";
+        String searchPart = (search == null || search.isBlank())
+                ? "-"
+                : DigestUtils.sha256Hex(search.trim());
+        return CACHE_KEY_PUBLISHED_PAGE + page + "_" + size + "_" + localePart + "_" + sortPart
+                + "_" + fromPart + "_" + toPart + "_" + searchPart;
+    }
+
     public Mono<ArticleResponse> getPublishedArticleBySlug(String slug) {
         return getPublishedArticleBySlug(slug, null);
     }
 
     public Mono<ArticleResponse> getPublishedArticleBySlug(String slug, String locale) {
+        // PERF-1: Read-through cache keyed "articles::slug_<slug>[:<locale>]". The bare-slug
+        // prefix matches invalidateArticle()'s "slug_<slug>" delete. A Redis read failure
+        // degrades to a normal DB load.
+        if (cacheService == null) {
+            return loadPublishedArticleBySlug(slug, locale);
+        }
+        String localePart = (locale == null || locale.isBlank() || locale.equalsIgnoreCase("en"))
+                ? ""
+                : ":" + locale.toLowerCase(Locale.ROOT);
+        String cacheKey = CACHE_KEY_SLUG + slug + localePart;
+        Mono<ArticleResponse> dbLoad = loadPublishedArticleBySlug(slug, locale)
+                .flatMap(response -> cacheService.set(cacheKey, response, articleCacheTtl).thenReturn(response));
+
+        return cacheService.get(cacheKey, ArticleResponse.class)
+                .onErrorResume(e -> Mono.empty())
+                .switchIfEmpty(dbLoad);
+    }
+
+    private Mono<ArticleResponse> loadPublishedArticleBySlug(String slug, String locale) {
         return articleRepository.findBySlugAndStatus(slug, ArticleStatus.PUBLISHED.name())
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
                 .flatMap(article -> applyLocale(article, locale))
@@ -399,9 +488,13 @@ public class ArticleService {
         return articleRepository.findBySlugAndStatus(slug, ArticleStatus.PUBLISHED.name())
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
                 .flatMapMany(article ->
+                    // PERF-1b: Batch-enrich the related set once (4 constant queries) instead of
+                    // enriching each article individually inside flatMap (N+1, ~3*N queries).
                     articleRepository.findRelatedArticles(article.getId(), limit)
                             .switchIfEmpty(articleRepository.findRecentPublishedExcluding(article.getId(), limit))
-                            .flatMap(this::enrichArticleWithMetadata)
+                            .collectList()
+                            .flatMap(this::enrichArticlesWithMetadata)
+                            .flatMapMany(Flux::fromIterable)
                             .map(this::mapToResponse)
                 );
     }

@@ -46,7 +46,7 @@ class AdminDashboardControllerTest {
     void setUp() {
         var dashboardService = new DashboardService(
                 articleRepository, commentRepository, userRepository, subscriberRepository, tagRepository);
-        controller = new AdminDashboardController(dashboardService, userRepository);
+        controller = new AdminDashboardController(dashboardService, new dev.catananti.service.CurrentUserService(userRepository));
     }
 
     private <T> Mono<T> withAdminAuth(Mono<T> mono) {

@@ -57,7 +57,8 @@ class EmailOtpServiceTest {
                 6,   // otpLength
                 10,  // expirationMinutes
                 3,   // maxOtpSendsPerEmail
-                15   // otpEmailRateWindowMinutes
+                15,  // otpEmailRateWindowMinutes
+                5    // maxOtpVerifyAttempts
         );
 
         testUser = User.builder()
@@ -72,6 +73,15 @@ class EmailOtpServiceTest {
                 .build();
 
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+
+        // SEG-5: brute-force attempt counter. verifyOtp (and verifySetup, which calls it)
+        // increments a per-user counter, sets a TTL on first increment, and on success
+        // deletes both the OTP key and the attempt-counter key. Stub these leniently so the
+        // happy-path (attempts == 1, under the threshold of 5) and negative paths all work.
+        lenient().when(valueOperations.increment("mfa:otp-attempts:100")).thenReturn(Mono.just(1L));
+        lenient().when(redisTemplate.expire(eq("mfa:otp-attempts:100"), any(Duration.class)))
+                .thenReturn(Mono.just(true));
+        lenient().when(redisTemplate.delete("mfa:otp-attempts:100")).thenReturn(Mono.just(1L));
     }
 
     // ==================== verifyOtp ====================

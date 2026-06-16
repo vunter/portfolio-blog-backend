@@ -149,12 +149,22 @@ public class ArticleController {
                 .map(svc -> svc.hasLiked(slug, request)
                         .flatMap(alreadyLiked -> {
                             if (alreadyLiked) {
+                                // BUG-4: gate the decrement on the delete count — only adjust the
+                                // count when removeLike actually removed the dedup key, otherwise a
+                                // racing/duplicate unlike would deflate the count below the real total.
                                 return svc.removeLike(slug, request)
-                                        .then(articleService.unlikeArticle(slug))
+                                        .flatMap(removed -> Boolean.TRUE.equals(removed)
+                                                ? articleService.unlikeArticle(slug)
+                                                : Mono.<Void>empty())
                                         .thenReturn(false);
                             } else {
+                                // BUG-4: gate the increment on the SETNX result — only increment when
+                                // recordLikeIfNew reports a genuinely new like, otherwise the increment
+                                // always applied and inflated the count on duplicate likes.
                                 return svc.recordLikeIfNew(slug, request)
-                                        .then(articleService.likeArticle(slug))
+                                        .flatMap(isNew -> Boolean.TRUE.equals(isNew)
+                                                ? articleService.likeArticle(slug)
+                                                : Mono.<Void>empty())
                                         .thenReturn(true);
                             }
                         }))

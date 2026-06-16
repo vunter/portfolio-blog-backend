@@ -141,6 +141,13 @@ public class OAuth2Service {
 
     /**
      * Store OAuth2 state in Redis with short TTL for CSRF protection.
+     *
+     * <p>SEG-2: This Redis key is global (not bound to a browser) and serves as a one-time
+     * replay guard / defense in depth. The per-browser binding is enforced in
+     * {@code OAuth2Controller} via the short-lived {@code oauth_state} HttpOnly cookie, which
+     * must match the {@code state} query param before {@link #validateAndConsumeState(String)}
+     * is consulted — without that, this global state alone would allow login-CSRF /
+     * session-fixation.
      */
     public Mono<Boolean> storeState(String state) {
         return redisTemplate.opsForValue()

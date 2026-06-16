@@ -396,10 +396,6 @@ class ArticleServiceTest {
                 .thenReturn(Flux.just(related));
         when(articleRepository.findRecentPublishedExcluding(articleId, 3))
                 .thenReturn(Flux.empty());
-        when(tagRepository.findByArticleId(2L))
-                .thenReturn(Flux.empty());
-        when(commentRepository.countApprovedByArticleId(2L))
-                .thenReturn(Mono.just(0L));
 
         StepVerifier.create(articleService.getRelatedArticles("test-article", 3).collectList())
                 .assertNext(list -> {

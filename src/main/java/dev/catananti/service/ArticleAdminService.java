@@ -17,15 +17,12 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
-import dev.catananti.repository.UserRepository;
 import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.context.ReactiveSecurityContextHolder;
-import org.springframework.security.core.context.SecurityContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,7 +51,7 @@ public class ArticleAdminService {
     private final SubscriberRepository subscriberRepository;
     private final EmailService emailService;
     private final ArticleVersionService articleVersionService;
-    private final UserRepository userRepository;
+    private final CurrentUserService currentUserService;
     private final CacheService cacheService;
     private final IdService idService;
     private final NotificationEventService notificationEventService;
@@ -199,68 +196,75 @@ public class ArticleAdminService {
 
     @Transactional
     public Mono<ArticleResponse> createArticle(ArticleRequest request) {
+        // ARCH (LOW): flattened — the slug/author/tag resolution stages are chained
+        // linearly and the build+persist step is extracted to buildAndSaveArticle.
         return resolveUniqueSlug(request.getSlug())
                 .flatMap(uniqueSlug -> {
                     request.setSlug(uniqueSlug);
                     return getCurrentUser()
                             .map(User::getId)
-                            .switchIfEmpty(Mono.error(new IllegalStateException("No authenticated user")))
-                            .flatMap(authorId -> {
-                                return fetchOrCreateTags(request.getTagSlugs())
-                                        .collectList()
-                                        .flatMap(tags -> {
-                                            ArticleStatus status = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
+                            .switchIfEmpty(Mono.error(new IllegalStateException("No authenticated user")));
+                })
+                .flatMap(authorId -> fetchOrCreateTags(request.getTagSlugs())
+                        .collectList()
+                        .flatMap(tags -> buildAndSaveArticle(request, authorId, tags)));
+    }
 
-                                            if (request.getScheduledAt() != null && status != ArticleStatus.PUBLISHED) {
-                                                status = ArticleStatus.SCHEDULED;
-                                            }
+    /**
+     * Build the {@link Article} entity from the request, persist it together with its
+     * tag mappings, fire notifications, and map to the response. Extracted from
+     * {@link #createArticle(ArticleRequest)} to reduce nesting (ARCH).
+     */
+    private Mono<ArticleResponse> buildAndSaveArticle(ArticleRequest request, Long authorId, List<Tag> tags) {
+        ArticleStatus status = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
 
-                                            Article article = Article.builder()
-                                                    .id(idService.nextId())
-                                                    .slug(request.getSlug())
-                                                    .title(htmlSanitizerService.stripHtml(request.getTitle()))
-                                                    .subtitle(htmlSanitizerService.stripHtml(request.getSubtitle()))
-                                                    .content(htmlSanitizerService.sanitize(request.getContent()))
-                                                    .excerpt(htmlSanitizerService.stripHtml(request.getExcerpt()))
-                                                    .coverImageUrl(request.getCoverImageUrl())
-                                                    .authorId(authorId)
-                                                    .status(status)
-                                                    .scheduledAt(request.getScheduledAt())
-                                                    .readingTimeMinutes(calculateReadingTime(request.getContent()))
-                                                    .seoTitle(htmlSanitizerService.stripHtml(request.getSeoTitle()))
-                                                    .seoDescription(htmlSanitizerService.stripHtml(request.getSeoDescription()))
-                                                    .seoKeywords(htmlSanitizerService.stripHtml(request.getSeoKeywords()))
-                                                    .createdAt(LocalDateTime.now())
-                                                    .updatedAt(LocalDateTime.now())
-                                                    .build();
+        if (request.getScheduledAt() != null && status != ArticleStatus.PUBLISHED) {
+            status = ArticleStatus.SCHEDULED;
+        }
 
-                                            if (article.getStatus() == ArticleStatus.PUBLISHED) {
-                                                article.setPublishedAt(LocalDateTime.now());
-                                            }
+        Article article = Article.builder()
+                .id(idService.nextId())
+                .slug(request.getSlug())
+                .title(htmlSanitizerService.stripHtml(request.getTitle()))
+                .subtitle(htmlSanitizerService.stripHtml(request.getSubtitle()))
+                .content(htmlSanitizerService.sanitize(request.getContent()))
+                .excerpt(htmlSanitizerService.stripHtml(request.getExcerpt()))
+                .coverImageUrl(request.getCoverImageUrl())
+                .authorId(authorId)
+                .status(status)
+                .scheduledAt(request.getScheduledAt())
+                .readingTimeMinutes(calculateReadingTime(request.getContent()))
+                .seoTitle(htmlSanitizerService.stripHtml(request.getSeoTitle()))
+                .seoDescription(htmlSanitizerService.stripHtml(request.getSeoDescription()))
+                .seoKeywords(htmlSanitizerService.stripHtml(request.getSeoKeywords()))
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
 
-                                            return articleRepository.save(article)
-                                                    .onErrorResume(DataIntegrityViolationException.class, ex ->
-                                                            Mono.error(new DuplicateResourceException("Article", "slug", request.getSlug())))
-                                                    .flatMap(saved -> {
-                                                        if (tags.isEmpty()) {
-                                                            return Mono.just(saved);
-                                                        }
-                                                        return saveArticleTags(saved.getId(), tags)
-                                                                .then(Mono.just(saved));
-                                                    })
-                                                    .doOnSuccess(a -> {
-                                                        log.info("Article created: {} (status: {})", a.getSlug(), a.getStatus());
-                                                        if (a.getStatus() == ArticleStatus.PUBLISHED) {
-                                                            notificationEventService.articlePublished(a.getTitle(), a.getSlug());
-                                                        } else {
-                                                            notificationEventService.articleCreated(a.getTitle(), a.getSlug());
-                                                        }
-                                                    })
-                                                    .flatMap(articleService::enrichArticleWithMetadata)
-                                                    .map(articleService::mapToResponse);
-                                        });
-                            });
-                });
+        if (article.getStatus() == ArticleStatus.PUBLISHED) {
+            article.setPublishedAt(LocalDateTime.now());
+        }
+
+        return articleRepository.save(article)
+                .onErrorResume(DataIntegrityViolationException.class, ex ->
+                        Mono.error(new DuplicateResourceException("Article", "slug", request.getSlug())))
+                .flatMap(saved -> {
+                    if (tags.isEmpty()) {
+                        return Mono.just(saved);
+                    }
+                    return saveArticleTags(saved.getId(), tags)
+                            .then(Mono.just(saved));
+                })
+                .doOnSuccess(a -> {
+                    log.info("Article created: {} (status: {})", a.getSlug(), a.getStatus());
+                    if (a.getStatus() == ArticleStatus.PUBLISHED) {
+                        notificationEventService.articlePublished(a.getTitle(), a.getSlug());
+                    } else {
+                        notificationEventService.articleCreated(a.getTitle(), a.getSlug());
+                    }
+                })
+                .flatMap(articleService::enrichArticleWithMetadata)
+                .map(articleService::mapToResponse);
     }
 
     /**
@@ -566,12 +570,9 @@ public class ArticleAdminService {
         return Math.max(1, wordCount / WORDS_PER_MINUTE);
     }
 
+    // ARCH-3: delegates to the shared CurrentUserService.
     private Mono<User> getCurrentUser() {
-        return ReactiveSecurityContextHolder.getContext()
-                .map(SecurityContext::getAuthentication)
-                .filter(auth -> auth != null && auth.isAuthenticated())
-                .map(auth -> auth.getName())
-                .flatMap(email -> userRepository.findByEmail(email));
+        return currentUserService.currentUser();
     }
 
     // ==================== OWNERSHIP ENFORCEMENT ====================

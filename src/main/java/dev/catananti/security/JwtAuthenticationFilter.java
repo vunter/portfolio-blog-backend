@@ -123,21 +123,28 @@ public class JwtAuthenticationFilter implements WebFilter {
             return chain.filter(exchange);
         }
 
-        // Check if the token has been blacklisted (e.g. after logout)
-        if (jti != null) {
-            final Long uid = userId;
-            return tokenBlacklistService.isBlacklisted(jti)
-                    .flatMap(blacklisted -> {
-                        if (blacklisted) {
-                            clearAccessTokenCookie(exchange);
-                            log.warn("Ignoring blacklisted JWT for path: {}", path);
-                            return chain.filter(exchange);
-                        }
-                        return authenticateUser(exchange, chain, uid, role);
-                    });
+        // SEG-10: Fail safe on a missing jti. The logout blacklist is keyed by jti, so a
+        // validly-signed token without one could never be revoked and would silently bypass
+        // the blacklist. Treat that as suspicious: clear the cookie and continue UNAUTHENTICATED
+        // rather than authenticating. The happy path below requires a present jti so the
+        // blacklist check is always enforced.
+        if (!StringUtils.hasText(jti)) {
+            clearAccessTokenCookie(exchange);
+            log.warn("Ignoring JWT with missing jti (cannot enforce logout blacklist) for path: {}", path);
+            return chain.filter(exchange);
         }
 
-        return authenticateUser(exchange, chain, userId, role);
+        // Check if the token has been blacklisted (e.g. after logout)
+        final Long uid = userId;
+        return tokenBlacklistService.isBlacklisted(jti)
+                .flatMap(blacklisted -> {
+                    if (blacklisted) {
+                        clearAccessTokenCookie(exchange);
+                        log.warn("Ignoring blacklisted JWT for path: {}", path);
+                        return chain.filter(exchange);
+                    }
+                    return authenticateUser(exchange, chain, uid, role);
+                });
         }); // end Mono.fromCallable().flatMap()
     }
 

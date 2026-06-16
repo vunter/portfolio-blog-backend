@@ -78,7 +78,7 @@ public class RssFeedController {
         xml.append("    <link>").append(XmlUtil.escapeXml(siteUrl)).append("</link>\n");
         xml.append("    <description>").append(XmlUtil.escapeXml(siteDescription)).append("</description>\n");
         xml.append("    <language>en-us</language>\n");
-        xml.append("    <atom:link href=\"").append(siteUrl).append("/rss.xml\" rel=\"self\" type=\"application/rss+xml\"/>\n");
+        xml.append("    <atom:link href=\"").append(XmlUtil.escapeXml(siteUrl)).append("/rss.xml\" rel=\"self\" type=\"application/rss+xml\"/>\n");
         
         if (!items.isEmpty() && items.getFirst().publishedAt() != null) {
             xml.append("    <lastBuildDate>")
@@ -89,8 +89,8 @@ public class RssFeedController {
         for (RssFeedItem item : items) {
             xml.append("    <item>\n");
             xml.append("      <title>").append(XmlUtil.escapeXml(item.title())).append("</title>\n");
-            xml.append("      <link>").append(siteUrl).append("/blog/").append(XmlUtil.escapeXml(item.slug())).append("</link>\n");
-            xml.append("      <guid isPermaLink=\"true\">").append(siteUrl).append("/blog/").append(XmlUtil.escapeXml(item.slug())).append("</guid>\n");
+            xml.append("      <link>").append(XmlUtil.escapeXml(siteUrl)).append("/blog/").append(XmlUtil.escapeXml(item.slug())).append("</link>\n");
+            xml.append("      <guid isPermaLink=\"true\">").append(XmlUtil.escapeXml(siteUrl)).append("/blog/").append(XmlUtil.escapeXml(item.slug())).append("</guid>\n");
             
             if (item.excerpt() != null) {
                 xml.append("      <description>").append(XmlUtil.escapeXml(item.excerpt())).append("</description>\n");

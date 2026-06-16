@@ -87,41 +87,45 @@ class ReadingHistoryServiceTest {
     @Test
     @DisplayName("recordReading should create new history entry when none exists")
     void recordReading_ShouldCreateNewEntry_WhenNoneExists() {
-        when(readingHistoryRepository.findByUserIdAndArticleId(100L, 200L)).thenReturn(Mono.empty());
+        ReadingHistory created = ReadingHistory.builder()
+                .id(300L)
+                .userId(100L)
+                .articleId(200L)
+                .readCount(1)
+                .lastReadAt(LocalDateTime.now())
+                .build();
+
         when(idService.nextId()).thenReturn(300L);
-        when(readingHistoryRepository.save(any(ReadingHistory.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(readingHistoryRepository.upsertReading(eq(300L), eq(100L), eq(200L), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(created));
 
         StepVerifier.create(readingHistoryService.recordReading(100L, 200L))
                 .verifyComplete();
 
-        verify(readingHistoryRepository).save(argThat(rh ->
-                rh.getUserId().equals(100L)
-                        && rh.getArticleId().equals(200L)
-                        && rh.getReadCount() == 1
-                        && rh.getLastReadAt() != null
-        ));
+        verify(readingHistoryRepository).upsertReading(eq(300L), eq(100L), eq(200L), any(LocalDateTime.class));
     }
 
     @Test
     @DisplayName("recordReading should increment read count when entry exists")
     void recordReading_ShouldIncrementReadCount_WhenEntryExists() {
-        ReadingHistory existing = ReadingHistory.builder()
+        // The DB now performs the increment atomically via upsert; the returned row
+        // already carries the incremented read_count (was 3, now 4).
+        ReadingHistory incremented = ReadingHistory.builder()
                 .id(300L)
                 .userId(100L)
                 .articleId(200L)
-                .readCount(3)
-                .lastReadAt(LocalDateTime.now().minusDays(1))
+                .readCount(4)
+                .lastReadAt(LocalDateTime.now())
                 .build();
 
-        when(readingHistoryRepository.findByUserIdAndArticleId(100L, 200L)).thenReturn(Mono.just(existing));
-        when(readingHistoryRepository.save(any(ReadingHistory.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(idService.nextId()).thenReturn(300L);
+        when(readingHistoryRepository.upsertReading(eq(300L), eq(100L), eq(200L), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(incremented));
 
         StepVerifier.create(readingHistoryService.recordReading(100L, 200L))
                 .verifyComplete();
 
-        verify(readingHistoryRepository).save(argThat(rh ->
-                rh.getReadCount() == 4 && !rh.isNewRecord()
-        ));
+        verify(readingHistoryRepository).upsertReading(eq(300L), eq(100L), eq(200L), any(LocalDateTime.class));
     }
 
     // ==================== recordReadingByEmailAndSlug ====================
@@ -131,16 +135,16 @@ class ReadingHistoryServiceTest {
     void recordReadingByEmailAndSlug_ShouldResolveAndRecord() {
         when(userRepository.findByEmail("reader@example.com")).thenReturn(Mono.just(testUser));
         when(articleRepository.findBySlug("test-article")).thenReturn(Mono.just(testArticle));
-        when(readingHistoryRepository.findByUserIdAndArticleId(100L, 200L)).thenReturn(Mono.empty());
         when(idService.nextId()).thenReturn(300L);
-        when(readingHistoryRepository.save(any(ReadingHistory.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(readingHistoryRepository.upsertReading(eq(300L), eq(100L), eq(200L), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(testHistory));
 
         StepVerifier.create(readingHistoryService.recordReadingByEmailAndSlug("reader@example.com", "test-article"))
                 .verifyComplete();
 
         verify(userRepository).findByEmail("reader@example.com");
         verify(articleRepository).findBySlug("test-article");
-        verify(readingHistoryRepository).save(any(ReadingHistory.class));
+        verify(readingHistoryRepository).upsertReading(eq(300L), eq(100L), eq(200L), any(LocalDateTime.class));
     }
 
     @Test

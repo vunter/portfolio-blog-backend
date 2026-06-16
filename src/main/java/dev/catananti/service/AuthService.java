@@ -363,6 +363,14 @@ public class AuthService {
                         // Best-effort "someone tried to register your email" notification.
                         // Always returns 409 to the caller so the FE can render a clear
                         // conflict state rather than a 200 with null tokens.
+                        //
+                        // SEG-6 (accepted tradeoff — do NOT change to a neutral 202): the 409 +
+                        // email reveals that an account exists (account enumeration). This is an
+                        // INTENTIONAL, documented UX decision the register flow + tests depend on.
+                        // The enumeration risk is bounded because POST /register is rate-limited
+                        // (nginx login zone, 5r/m — see AuthController F-076) and gated by reCAPTCHA,
+                        // and the BCrypt hash above runs unconditionally so timing does not leak
+                        // existence either.
                         return emailService.sendTextEmail(email,
                                         "Account registration attempt",
                                         "An account with this email already exists. If this was you, try logging in.")

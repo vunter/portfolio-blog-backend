@@ -133,6 +133,7 @@ class OAuth2ControllerTest {
 
             webTestClient
                     .get().uri("/api/v1/admin/auth/oauth2/callback/google?code=code123&state=" + validState)
+                    .cookie("oauth_state", validState)
                     .exchange()
                     .expectStatus().isFound()
                     .expectHeader().valueMatches("Location", ".*/auth/oauth-callback.*");

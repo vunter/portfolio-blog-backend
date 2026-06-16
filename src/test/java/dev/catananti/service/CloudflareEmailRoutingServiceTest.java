@@ -27,7 +27,8 @@ class CloudflareEmailRoutingServiceTest {
             new dev.catananti.config.ResilienceProperties(
                     new dev.catananti.config.ResilienceProperties.Database(10, 3, 100, 1000, 50, 30, 10, 5),
                     new dev.catananti.config.ResilienceProperties.Redis(5),
-                    new dev.catananti.config.ResilienceProperties.External(30, 50, 60, 10, 3)));
+                    new dev.catananti.config.ResilienceProperties.External(30, 50, 60, 10, 3)),
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
     @BeforeEach
     void setUp() throws IOException {

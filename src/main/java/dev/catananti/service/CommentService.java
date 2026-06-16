@@ -16,8 +16,6 @@ import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.context.ReactiveSecurityContextHolder;
-import org.springframework.security.core.context.SecurityContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
@@ -42,6 +40,7 @@ public class CommentService {
     private final NotificationEventService notificationEventService;
     private final BlogMetrics blogMetrics;
     private final PaginationConfig paginationConfig;
+    private final CurrentUserService currentUserService;
 
     private static final long TRUSTED_COMMENTER_THRESHOLD = 3;
 
@@ -272,17 +271,23 @@ public class CommentService {
 
     @Transactional
     public Flux<CommentResponse> bulkApprove(List<Long> ids) {
-        return Flux.fromIterable(ids).flatMap(this::approveComment, 8);
+        // R2DBC transactions are bound to a single connection, so concurrent flatMap
+        // would not be atomic. Use concatMap to serialize updates within the tx.
+        return Flux.fromIterable(ids).concatMap(this::approveComment);
     }
 
     @Transactional
     public Flux<CommentResponse> bulkReject(List<Long> ids) {
-        return Flux.fromIterable(ids).flatMap(this::rejectComment, 8);
+        // R2DBC transactions are bound to a single connection, so concurrent flatMap
+        // would not be atomic. Use concatMap to serialize updates within the tx.
+        return Flux.fromIterable(ids).concatMap(this::rejectComment);
     }
 
     @Transactional
     public Flux<CommentResponse> bulkMarkAsSpam(List<Long> ids) {
-        return Flux.fromIterable(ids).flatMap(this::markAsSpam, 8);
+        // R2DBC transactions are bound to a single connection, so concurrent flatMap
+        // would not be atomic. Use concatMap to serialize updates within the tx.
+        return Flux.fromIterable(ids).concatMap(this::markAsSpam);
     }
 
     @Transactional
@@ -501,13 +506,10 @@ public class CommentService {
 
     /**
      * Get the current authenticated user from the reactive security context.
+     * ARCH-3: delegates to the shared {@link CurrentUserService}.
      */
     private Mono<dev.catananti.entity.User> getCurrentUser() {
-        return ReactiveSecurityContextHolder.getContext()
-                .map(SecurityContext::getAuthentication)
-                .filter(auth -> auth != null && auth.isAuthenticated())
-                .map(auth -> auth.getName())
-                .flatMap(email -> userRepository.findByEmail(email));
+        return currentUserService.currentUser();
     }
 
     /**

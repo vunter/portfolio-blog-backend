@@ -202,6 +202,16 @@ public class LinkedInPortabilityService {
     }
 
     private Mono<String> callSnapshotApi(String accessToken, String uri) {
+        // SSRF guard: the OAuth Bearer token is attached below, so we MUST only ever
+        // dereference api.linkedin.com over https. The base WebClient has no fixed
+        // baseUrl and pagination links ('next' hrefs) are taken from the response body,
+        // so an attacker-controlled response could otherwise redirect the authenticated
+        // request to an arbitrary host and leak the member's token.
+        try {
+            validateSnapshotUri(uri);
+        } catch (SecurityException e) {
+            return Mono.error(e);
+        }
         return webClient.get()
                 .uri(uri)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
@@ -210,6 +220,44 @@ public class LinkedInPortabilityService {
                 .retrieve()
                 .bodyToMono(String.class)
                 .timeout(Duration.ofSeconds(30));
+    }
+
+    /**
+     * Reject any URL that is not exactly https://api.linkedin.com/... before the
+     * authenticated request is dispatched. Applies to both the initial domain URI
+     * and every response-derived pagination href.
+     */
+    private void validateSnapshotUri(String uri) {
+        if (uri == null || uri.isBlank()) {
+            throw new SecurityException("Refusing to call LinkedIn snapshot API with empty URI");
+        }
+        final java.net.URI parsed;
+        try {
+            parsed = java.net.URI.create(uri);
+        } catch (IllegalArgumentException e) {
+            throw new SecurityException("Refusing to call malformed LinkedIn snapshot URI", e);
+        }
+        String scheme = parsed.getScheme();
+        String host = parsed.getHost();
+        if (!"https".equals(scheme)) {
+            throw new SecurityException("Refusing non-https LinkedIn snapshot URI: scheme=" + scheme);
+        }
+        if (host == null || !host.equalsIgnoreCase("api.linkedin.com")) {
+            throw new SecurityException("Refusing LinkedIn snapshot URI with disallowed host: " + host);
+        }
+        // Reject IP literals (IPv4 / bracketed IPv6) — only the named host is permitted.
+        if (isIpLiteral(host)) {
+            throw new SecurityException("Refusing LinkedIn snapshot URI with IP-literal host: " + host);
+        }
+    }
+
+    private boolean isIpLiteral(String host) {
+        // Bracketed IPv6 literal, e.g. [::1]
+        if (host.startsWith("[") && host.endsWith("]")) {
+            return true;
+        }
+        // IPv4 dotted-quad, e.g. 127.0.0.1
+        return host.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}");
     }
 
     // ── Mapping ──────────────────────────────────────────────────────────

@@ -645,6 +645,15 @@ class MfaServiceTest {
                     .build();
             when(mfaConfigRepository.findByUserId(USER_ID)).thenReturn(Flux.just(totpConfig));
             when(aesEncryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(realBase64Secret);
+            // SEG-8: verifyAnyCode now routes TOTP through the hardened verifyTotp(),
+            // which loads the config itself and runs the Redis attempts/reuse-lock ops.
+            when(mfaConfigRepository.findByUserIdAndMethod(USER_ID, "TOTP")).thenReturn(Mono.just(totpConfig));
+            when(valueOperations.increment(anyString())).thenReturn(Mono.just(1L));
+            when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+            // setIfAbsent returns true (code not reused), then attempts counter is cleared
+            when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class)))
+                    .thenReturn(Mono.just(true));
+            when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
 
             StepVerifier.create(mfaService.verifyAnyCode(USER_ID, totpCode))
                     .assertNext(result -> assertThat(result).isTrue())
@@ -670,6 +679,12 @@ class MfaServiceTest {
 
             when(mfaConfigRepository.findByUserId(USER_ID)).thenReturn(Flux.just(totpConfig, emailConfig));
             when(aesEncryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(RAW_SECRET);
+            // SEG-8: TOTP now goes through hardened verifyTotp() — it loads the config and
+            // runs the attempts counter. The wrong code fails verifyTotpCode, so no reuse-lock
+            // or counter-clear ops are reached; verifyTotp returns false and email OTP is tried.
+            when(mfaConfigRepository.findByUserIdAndMethod(USER_ID, "TOTP")).thenReturn(Mono.just(totpConfig));
+            when(valueOperations.increment(anyString())).thenReturn(Mono.just(1L));
+            when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
             // TOTP will fail with wrong code, then email OTP should be tried
             when(emailOtpService.verifyOtp(USER_ID, "654321")).thenReturn(Mono.just(true));
 
@@ -717,6 +732,11 @@ class MfaServiceTest {
 
             when(mfaConfigRepository.findByUserId(USER_ID)).thenReturn(Flux.just(totpConfig, emailConfig));
             when(aesEncryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(RAW_SECRET);
+            // SEG-8: TOTP routes through hardened verifyTotp(); wrong code fails verifyTotpCode
+            // so verifyTotp returns false without reaching reuse-lock/counter-clear, then email fails too.
+            when(mfaConfigRepository.findByUserIdAndMethod(USER_ID, "TOTP")).thenReturn(Mono.just(totpConfig));
+            when(valueOperations.increment(anyString())).thenReturn(Mono.just(1L));
+            when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
             when(emailOtpService.verifyOtp(USER_ID, "000000")).thenReturn(Mono.just(false));
 
             StepVerifier.create(mfaService.verifyAnyCode(USER_ID, "000000"))

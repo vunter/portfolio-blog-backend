@@ -200,9 +200,13 @@ public class MfaService {
                                 return verifyTotpCode(rawSecret, code)
                                         .flatMap(valid -> {
                                             if (!valid) return Mono.just(false);
-                                            // Prevent code reuse within the same window
+                                            // Prevent code reuse within the same window.
+                                            // SEG-4: TTL must cover the full acceptance span. The drift loop accepts
+                                            // -1..+1 windows (~3*periodSeconds), so a TTL of periodSeconds*2 left a gap
+                                            // where a code could be replayed. Use periodSeconds*3 (= periodSeconds*(2*driftWindows+1))
+                                            // to cover the entire span the verifier will accept.
                                             String usedKey = TOTP_USED_PREFIX + userId + ":" + code;
-                                            return redisTemplate.opsForValue().setIfAbsent(usedKey, "1", Duration.ofSeconds(periodSeconds * 2L))
+                                            return redisTemplate.opsForValue().setIfAbsent(usedKey, "1", Duration.ofSeconds(periodSeconds * 3L))
                                                     .flatMap(wasAbsent -> {
                                                         if (Boolean.FALSE.equals(wasAbsent)) {
                                                             log.warn("TOTP code reuse detected for userId={}", userId);
@@ -300,16 +304,16 @@ public class MfaService {
                 .collectList()
                 .flatMap(configs -> {
                     Mono<Boolean> result = Mono.just(false);
-                    for (UserMfaConfig config : configs) {
-                        if ("TOTP".equals(config.getMethod()) && config.getSecretEncrypted() != null) {
-                            // F-ASYNC-06: Offload AES decrypt from reactive thread
-                            result = result.flatMap(valid -> valid ? Mono.just(true)
-                                    : Mono.fromCallable(() -> aesEncryptor.decrypt(config.getSecretEncrypted()))
-                                            .subscribeOn(Schedulers.boundedElastic())
-                                            .flatMap(decryptedSecret -> verifyTotpCode(decryptedSecret, code)));
-                        }
+                    // SEG-8: Route TOTP through the hardened verifyTotp() path so codes are
+                    // marked used (reuse prevention) and per-user brute-force attempts are counted,
+                    // matching the login challenge. verifyTotp() loads the verified TOTP config itself.
+                    boolean hasTotp = configs.stream()
+                            .anyMatch(c -> "TOTP".equals(c.getMethod()) && c.getSecretEncrypted() != null);
+                    if (hasTotp) {
+                        result = result.flatMap(valid -> valid ? Mono.just(true)
+                                : verifyTotp(userId, code));
                     }
-                    // Also try EMAIL OTP via Redis
+                    // Also try EMAIL OTP via Redis — same hardened EmailOtpService.verifyOtp path.
                     boolean hasEmail = configs.stream().anyMatch(c -> "EMAIL".equals(c.getMethod()));
                     if (hasEmail) {
                         result = result.flatMap(valid -> valid ? Mono.just(true)

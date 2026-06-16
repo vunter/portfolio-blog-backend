@@ -8,6 +8,8 @@ import dev.catananti.util.IpAddressExtractor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpCookie;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -49,6 +51,9 @@ public class OAuth2Controller {
         );
     }
 
+    /** SEG-2: short-lived cookie binding the OAuth2 'state' nonce to the initiating browser. */
+    private static final String OAUTH_STATE_COOKIE = "oauth_state";
+
     @GetMapping("/authorize/{provider}")
     public Mono<ResponseEntity<Void>> authorize(@PathVariable String provider) {
         String state = UUID.randomUUID().toString();
@@ -58,10 +63,30 @@ public class OAuth2Controller {
             case "linkedin" -> oAuth2Service.getLinkedinAuthUrl(state);
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.unsupported_provider");
         };
+        // SEG-2: bind the state nonce to this browser via a short-lived HttpOnly cookie so
+        // the callback can require it to match the 'state' query param (anti login-CSRF /
+        // session-fixation). The Redis one-time-state check remains as defense in depth.
+        ResponseCookie.ResponseCookieBuilder stateBuilder = ResponseCookie.from(OAUTH_STATE_COOKIE, state)
+                .httpOnly(true).secure(cookieSecure).sameSite("Lax").path("/").maxAge(Duration.ofMinutes(5));
+        if (cookieDomain != null && !cookieDomain.isBlank()) {
+            stateBuilder.domain(cookieDomain);
+        }
+        ResponseCookie stateCookie = stateBuilder.build();
         return oAuth2Service.storeState(state)
                 .thenReturn(ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(authUrl))
+                        .header(HttpHeaders.SET_COOKIE, stateCookie.toString())
                         .<Void>build());
+    }
+
+    /** SEG-2: clear the short-lived state-binding cookie once it has been consumed/rejected. */
+    private void clearStateCookie(ServerHttpResponse httpResponse) {
+        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(OAUTH_STATE_COOKIE, "")
+                .httpOnly(true).secure(cookieSecure).sameSite("Lax").path("/").maxAge(0);
+        if (cookieDomain != null && !cookieDomain.isBlank()) {
+            builder.domain(cookieDomain);
+        }
+        httpResponse.addCookie(builder.build());
     }
 
     private static final java.util.regex.Pattern UUID_PATTERN =
@@ -79,6 +104,21 @@ public class OAuth2Controller {
             return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Invalid OAuth2 state parameter"));
         }
+        // SEG-2: bind state to the initiating browser — the 'oauth_state' cookie set in
+        // authorize() must be present and equal to the 'state' query param. A mismatch/absence
+        // means the callback was not initiated by this browser (login-CSRF / session-fixation),
+        // so fail with an auth error BEFORE consuming the one-time Redis state.
+        HttpCookie stateCookie = httpRequest.getCookies().getFirst(OAUTH_STATE_COOKIE);
+        String cookieState = stateCookie != null ? stateCookie.getValue() : null;
+        if (cookieState == null || cookieState.isBlank() || !cookieState.equals(state)) {
+            log.warn("OAuth2 callback state/cookie mismatch for provider={} (cookie present={})",
+                    provider, stateCookie != null);
+            clearStateCookie(httpResponse);
+            return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                    "Invalid or expired OAuth2 state. Please try again."));
+        }
+        // One-time state binding has served its purpose; drop the cookie regardless of outcome.
+        clearStateCookie(httpResponse);
         return oAuth2Service.validateAndConsumeState(state)
                 .flatMap(valid -> {
                     if (!valid) {

@@ -1,5 +1,6 @@
 package dev.catananti.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -10,7 +11,12 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class TokenResponse {
+    // SEG-1: WRITE_ONLY so the tokens are never serialized OUT in login/register/refresh
+    // JSON bodies (HttpOnly-cookie-only design — keeps XSS from reading them). The getters
+    // still work for the controllers that read them to set cookies (field annotation + @Data).
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String accessToken;
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String refreshToken;
     @Builder.Default
     private String tokenType = "Bearer";

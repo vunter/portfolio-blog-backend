@@ -2,7 +2,7 @@ package dev.catananti.controller;
 
 import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
-import dev.catananti.repository.UserRepository;
+import dev.catananti.service.CurrentUserService;
 import dev.catananti.service.DashboardService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -10,8 +10,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.context.ReactiveSecurityContextHolder;
-import org.springframework.security.core.context.SecurityContext;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
@@ -37,7 +35,7 @@ import java.util.Map;
 public class AdminDashboardController {
 
     private final DashboardService dashboardService;
-    private final UserRepository userRepository;
+    private final CurrentUserService currentUserService;
 
     @GetMapping("/stats")
     @Operation(summary = "Get dashboard statistics", description = "Get overview statistics scoped by role")
@@ -61,11 +59,8 @@ public class AdminDashboardController {
 
     // ==================== AUTH HELPER ====================
 
+    // ARCH-3: delegates to the shared CurrentUserService.
     private Mono<User> getCurrentUser() {
-        return ReactiveSecurityContextHolder.getContext()
-                .map(SecurityContext::getAuthentication)
-                .filter(auth -> auth != null && auth.isAuthenticated())
-                .map(auth -> auth.getName())
-                .flatMap(userRepository::findByEmail);
+        return currentUserService.currentUser();
     }
 }
