@@ -4,11 +4,12 @@ import dev.catananti.dto.AnalyticsComparison;
 import dev.catananti.dto.AnalyticsSummary;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.service.AnalyticsService;
+import dev.catananti.service.CurrentUserService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -32,8 +33,16 @@ class AdminAnalyticsControllerTest {
     @Mock
     private UserRepository userRepository;
 
-    @InjectMocks
     private AdminAnalyticsController controller;
+
+    @BeforeEach
+    void setUp() {
+        // ARCH-3: controller now depends on CurrentUserService instead of UserRepository.
+        // Wrap the mocked userRepository in a real CurrentUserService so the existing
+        // security-context + findByEmail stubs in withAdminAuth keep working unchanged.
+        controller = new AdminAnalyticsController(
+                analyticsService, new CurrentUserService(userRepository));
+    }
 
     private <T> Mono<T> withAdminAuth(Mono<T> mono) {
         lenient().when(userRepository.findByEmail("admin@test.com"))

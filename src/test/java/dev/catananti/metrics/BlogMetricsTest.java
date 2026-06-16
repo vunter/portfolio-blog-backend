@@ -178,8 +178,8 @@ class BlogMetricsTest {
         void shouldIncrementArticleViews() {
             blogMetrics.incrementArticleViews("test-slug");
 
-            // F-054: Counter now includes slug tag
-            Counter counter = meterRegistry.find("blog.article.views.total").tag("slug", "test-slug").counter();
+            // Aggregate counter (no per-slug tag) — bounded cardinality.
+            Counter counter = meterRegistry.find("blog.article.views.total").counter();
             assertThat(counter).isNotNull();
             assertThat(counter.count()).isEqualTo(1.0);
         }
@@ -191,10 +191,8 @@ class BlogMetricsTest {
             blogMetrics.incrementArticleViews("slug-2");
             blogMetrics.incrementArticleViews("slug-3");
 
-            // F-054: Each slug has its own counter; total across all slugs is 3
-            assertThat(meterRegistry.find("blog.article.views.total").tag("slug", "slug-1").counter().count()).isEqualTo(1.0);
-            assertThat(meterRegistry.find("blog.article.views.total").counters().stream()
-                    .mapToDouble(Counter::count).sum()).isEqualTo(3.0);
+            // Single aggregate counter accumulates all increments (no per-slug series).
+            assertThat(meterRegistry.find("blog.article.views.total").counter().count()).isEqualTo(3.0);
         }
 
         @Test
@@ -202,8 +200,8 @@ class BlogMetricsTest {
         void shouldIncrementArticleLikes() {
             blogMetrics.incrementArticleLikes("test-slug");
 
-            // F-054: Counter now includes slug tag
-            Counter counter = meterRegistry.find("blog.article.likes.total").tag("slug", "test-slug").counter();
+            // Aggregate counter (no per-slug tag).
+            Counter counter = meterRegistry.find("blog.article.likes.total").counter();
             assertThat(counter).isNotNull();
             assertThat(counter.count()).isEqualTo(1.0);
         }

@@ -2,12 +2,17 @@ package dev.catananti.config;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import reactor.util.retry.Retry;
 
+import java.io.IOException;
+import java.net.ConnectException;
 import java.time.Duration;
 
 /**
@@ -43,7 +48,7 @@ public class ResilienceConfig {
     private final CircuitBreaker emailCircuitBreaker;
     private final CircuitBreaker storageCircuitBreaker;
 
-    public ResilienceConfig(ResilienceProperties props) {
+    public ResilienceConfig(ResilienceProperties props, MeterRegistry meterRegistry) {
         ResilienceProperties.Database db = props.database();
         ResilienceProperties.External ext = props.external();
         this.databaseTimeout = Duration.ofSeconds(db.timeoutSeconds());
@@ -53,6 +58,10 @@ public class ResilienceConfig {
         this.databaseRetryMinBackoff = Duration.ofMillis(db.retryMinBackoffMs());
         this.databaseRetryMaxBackoff = Duration.ofMillis(db.retryMaxBackoffMs());
 
+        // OBS-1: Build every breaker via a shared registry so resilience4j_circuitbreaker_*
+        // metrics are emitted to Micrometer (powers the DatabaseCircuitBreakerOpen alert).
+        CircuitBreakerRegistry registry = CircuitBreakerRegistry.ofDefaults();
+
         // Q9.2: Circuit breaker for database operations — fast-fails when DB is down
         CircuitBreakerConfig dbCbConfig = CircuitBreakerConfig.custom()
                 .failureRateThreshold(db.cbFailureRate())
@@ -60,7 +69,7 @@ public class ResilienceConfig {
                 .slidingWindowSize(db.cbSlidingWindowSize())
                 .minimumNumberOfCalls(db.cbMinCalls())
                 .build();
-        this.databaseCircuitBreaker = CircuitBreaker.of("database", dbCbConfig);
+        this.databaseCircuitBreaker = registry.circuitBreaker("database", dbCbConfig);
 
         // Q3.4: Circuit breakers for external services
         CircuitBreakerConfig extCbConfig = CircuitBreakerConfig.custom()
@@ -69,10 +78,14 @@ public class ResilienceConfig {
                 .slidingWindowSize(ext.cbSlidingWindowSize())
                 .minimumNumberOfCalls(ext.cbMinCalls())
                 .build();
-        this.oauthCircuitBreaker = CircuitBreaker.of("oauth2", extCbConfig);
-        this.cloudflareCircuitBreaker = CircuitBreaker.of("cloudflare", extCbConfig);
-        this.emailCircuitBreaker = CircuitBreaker.of("email", extCbConfig);
-        this.storageCircuitBreaker = CircuitBreaker.of("storage", extCbConfig);
+        this.oauthCircuitBreaker = registry.circuitBreaker("oauth2", extCbConfig);
+        this.cloudflareCircuitBreaker = registry.circuitBreaker("cloudflare", extCbConfig);
+        this.emailCircuitBreaker = registry.circuitBreaker("email", extCbConfig);
+        this.storageCircuitBreaker = registry.circuitBreaker("storage", extCbConfig);
+
+        // OBS-1: Bind the registry to Micrometer so circuit-breaker state/calls/failure-rate
+        // gauges are exported (added via resilience4j-micrometer).
+        TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registry).bindTo(meterRegistry);
 
         log.info("Resilience configuration initialized (DB circuit breaker: failureRate={}%, window={}, waitOpen={}s)",
                 db.cbFailureRate(), db.cbSlidingWindowSize(), db.cbWaitOpenSeconds());
@@ -99,8 +112,21 @@ public class ResilienceConfig {
 
     /**
      * Determines if an exception is retryable (transient errors only).
+     *
+     * <p>OBS-6: classifies by exception <em>type</em> first — R2DBC transient
+     * exceptions and low-level connectivity errors are inherently retryable
+     * regardless of (possibly {@code null}) message text. The message-substring
+     * heuristic below is kept only as a fallback to broaden coverage.</p>
      */
     private boolean isRetryableException(Throwable throwable) {
+        if (throwable instanceof io.r2dbc.spi.R2dbcTransientException
+                || throwable instanceof io.r2dbc.spi.R2dbcTransientResourceException
+                || throwable instanceof io.r2dbc.spi.R2dbcTimeoutException
+                || throwable instanceof IOException
+                || throwable instanceof ConnectException) {
+            return true;
+        }
+
         String message = throwable.getMessage();
         if (message == null) return false;
 

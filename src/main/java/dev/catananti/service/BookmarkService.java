@@ -73,7 +73,15 @@ public class BookmarkService {
                                     .build();
                             return bookmarkRepository.save(bookmark)
                                     .doOnSuccess(b -> log.debug("Bookmark added: article={}, visitor={}", articleSlug, visitorId))
-                                    .map(_ -> true);
+                                    .map(_ -> true)
+                                    // BUG-3: TOCTOU vs uq_bookmark_visitor — a concurrent insert makes
+                                    // the loser throw DuplicateKeyException (otherwise surfaced as 500).
+                                    // It already exists, so treat it as already-bookmarked (idempotent).
+                                    .onErrorResume(org.springframework.dao.DuplicateKeyException.class, e -> {
+                                        log.debug("Bookmark already existed (concurrent insert): article={}, visitor={}",
+                                                articleSlug, visitorId);
+                                        return Mono.just(true);
+                                    });
                         })))
                 .defaultIfEmpty(false);
     }

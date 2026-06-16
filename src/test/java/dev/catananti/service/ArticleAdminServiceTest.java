@@ -13,7 +13,6 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
-import dev.catananti.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -63,7 +62,7 @@ class ArticleAdminServiceTest {
     private ArticleVersionService articleVersionService;
 
     @Mock
-    private UserRepository userRepository;
+    private CurrentUserService currentUserService;
 
     @Mock
     private CacheService cacheService;
@@ -90,7 +89,10 @@ class ArticleAdminServiceTest {
     private ArticleAdminService articleAdminService;
 
     private <T> Mono<T> withAdminAuth(Mono<T> mono) {
-        lenient().when(userRepository.findByEmail("admin@test.com"))
+        // ARCH-3: current-user resolution now flows through CurrentUserService instead of
+        // UserRepository#findByEmail + the reactive security context. Stub the collaborator
+        // directly. The security-context write is retained to document the auth intent.
+        when(currentUserService.currentUser())
                 .thenReturn(Mono.just(User.builder()
                         .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
         var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
@@ -129,6 +131,12 @@ class ArticleAdminServiceTest {
 
         lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
 
+        // ARCH-3: default to "no authenticated user". This mirrors the pre-refactor behavior
+        // where tests without an explicit security context had getCurrentUser() resolve empty,
+        // so verifyOwnership(...) passes through (ADMIN/owner check is skipped). Tests that need
+        // an admin override this via withAdminAuth(...).
+        lenient().when(currentUserService.currentUser()).thenReturn(Mono.empty());
+
         // Pass-through TransactionalOperator: tests don't exercise rollback semantics
         lenient().when(transactionalOperator.transactional(any(Mono.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -140,6 +148,16 @@ class ArticleAdminServiceTest {
     @Nested
     @DisplayName("getAllArticles")
     class GetAllArticles {
+
+        // getAllArticles() captures getCurrentUser() eagerly at assembly time (the real
+        // CurrentUserService.currentUser() defers to the reactive context, but the mock returns
+        // a concrete Mono the moment it is called — before the withAdminAuth re-stub would apply).
+        // Stub the admin user here so it is in place before each getAllArticles(...) call.
+        @BeforeEach
+        void authAsAdmin() {
+            when(currentUserService.currentUser()).thenReturn(Mono.just(
+                    User.builder().id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
+        }
 
         @Test
         @DisplayName("Should return all articles without status filter")
@@ -154,7 +172,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null, "newest")))
+            StepVerifier.create(articleAdminService.getAllArticles(0, 10, null, "newest"))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                         assertThat(page.getTotalElements()).isEqualTo(1);
@@ -176,7 +194,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(testArticleResponse);
 
             // When & Then
-            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, "published", "newest")))
+            StepVerifier.create(articleAdminService.getAllArticles(0, 10, "published", "newest"))
                     .assertNext(page -> {
                         assertThat(page.getContent()).hasSize(1);
                     })
@@ -194,7 +212,7 @@ class ArticleAdminServiceTest {
                     .thenReturn(Mono.just(List.of()));
 
             // When & Then
-            StepVerifier.create(withAdminAuth(articleAdminService.getAllArticles(0, 10, null, "newest")))
+            StepVerifier.create(articleAdminService.getAllArticles(0, 10, null, "newest"))
                     .assertNext(page -> {
                         assertThat(page.getContent()).isEmpty();
                         assertThat(page.getTotalElements()).isZero();

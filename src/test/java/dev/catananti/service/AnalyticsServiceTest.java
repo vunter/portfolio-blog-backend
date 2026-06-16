@@ -351,6 +351,122 @@ class AnalyticsServiceTest {
     }
 
     @Nested
+    @DisplayName("getAnalyticsSummaryByAuthor")
+    class GetAnalyticsSummaryByAuthor {
+
+        private static final long AUTHOR_ID = 7L;
+
+        @Test
+        @DisplayName("Should scope summary to the author and return expected shape")
+        @SuppressWarnings("unchecked")
+        void shouldReturnAuthorScopedSummary() {
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("VIEW"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(120L));
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("LIKE"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(18L));
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("SHARE"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(4L));
+
+            when(databaseClient.sql(anyString())).thenReturn(executeSpec);
+            when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
+            when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
+            when(rowsFetchSpec.all()).thenReturn(Flux.empty());
+            when(rowsFetchSpec.one()).thenReturn(Mono.empty());
+
+            StepVerifier.create(analyticsService.getAnalyticsSummaryByAuthor(30, AUTHOR_ID))
+                    .assertNext(summary -> {
+                        assertThat(summary.getTotalViews()).isEqualTo(120L);
+                        assertThat(summary.getTotalLikes()).isEqualTo(18L);
+                        assertThat(summary.getTotalShares()).isEqualTo(4L);
+                        assertThat(summary.getDailyViews()).isEmpty();
+                        assertThat(summary.getTopArticles()).isEmpty();
+                        assertThat(summary.getTopReferrers()).isEmpty();
+                        assertThat(summary.getUniqueVisitors()).isZero();
+                    })
+                    .verifyComplete();
+
+            // Author-scoped repository counters are used (never the global ones)
+            verify(analyticsRepository).countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("VIEW"), any(LocalDateTime.class));
+            verify(analyticsRepository, never()).countByEventTypeSince(anyString(), any(LocalDateTime.class));
+            // The author_id predicate is bound into the underlying analytics queries
+            verify(executeSpec, atLeastOnce()).bind("authorId", AUTHOR_ID);
+        }
+
+        @Test
+        @DisplayName("Should fall back to author view counts when VIEW count is zero (not the global sum)")
+        @SuppressWarnings("unchecked")
+        void shouldFallbackToAuthorViewCounts() {
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("VIEW"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(0L));
+            when(articleRepository.sumViewsCountByAuthorId(AUTHOR_ID)).thenReturn(Mono.just(640L));
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("LIKE"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(0L));
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("SHARE"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(0L));
+
+            when(databaseClient.sql(anyString())).thenReturn(executeSpec);
+            when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
+            when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
+            when(rowsFetchSpec.all()).thenReturn(Flux.empty());
+            when(rowsFetchSpec.one()).thenReturn(Mono.empty());
+
+            StepVerifier.create(analyticsService.getAnalyticsSummaryByAuthor(7, AUTHOR_ID))
+                    .assertNext(summary -> {
+                        assertThat(summary.getTotalViews()).isEqualTo(640L);
+                        // LIKE has no author fallback: stays at zero (never uses global sumLikesCount)
+                        assertThat(summary.getTotalLikes()).isZero();
+                        assertThat(summary.getTotalShares()).isZero();
+                    })
+                    .verifyComplete();
+
+            verify(articleRepository).sumViewsCountByAuthorId(AUTHOR_ID);
+            verify(articleRepository, never()).sumViewsCount();
+            verify(articleRepository, never()).sumLikesCount();
+        }
+    }
+
+    @Nested
+    @DisplayName("getAnalyticsComparisonByAuthor")
+    class GetAnalyticsComparisonByAuthor {
+
+        private static final long AUTHOR_ID = 9L;
+
+        @Test
+        @DisplayName("Should scope comparison to the author and bind author_id on period queries")
+        @SuppressWarnings("unchecked")
+        void shouldReturnAuthorScopedComparison() {
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("VIEW"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(50L));
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("LIKE"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(8L));
+            when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("SHARE"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(2L));
+
+            // Previous-period counts go through DatabaseClient; one() -> 0L via defaultIfEmpty
+            when(databaseClient.sql(anyString())).thenReturn(executeSpec);
+            when(executeSpec.bind(anyString(), any())).thenReturn(executeSpec);
+            when(executeSpec.map(any(BiFunction.class))).thenReturn(rowsFetchSpec);
+            when(rowsFetchSpec.one()).thenReturn(Mono.empty());
+
+            StepVerifier.create(analyticsService.getAnalyticsComparisonByAuthor(30, AUTHOR_ID))
+                    .assertNext(comparison -> {
+                        assertThat(comparison.getCurrentViews()).isEqualTo(50L);
+                        assertThat(comparison.getCurrentLikes()).isEqualTo(8L);
+                        assertThat(comparison.getCurrentShares()).isEqualTo(2L);
+                        assertThat(comparison.getPreviousViews()).isZero();
+                        assertThat(comparison.getPreviousLikes()).isZero();
+                        assertThat(comparison.getPreviousShares()).isZero();
+                    })
+                    .verifyComplete();
+
+            // Author-scoped "since" counters used, global ones untouched
+            verify(analyticsRepository, never()).countByEventTypeSince(anyString(), any(LocalDateTime.class));
+            // The previous-period between-queries bind the author_id predicate
+            verify(executeSpec, atLeastOnce()).bind("authorId", AUTHOR_ID);
+        }
+    }
+
+    @Nested
     @DisplayName("trackEvent - edge cases")
     class TrackEventEdgeCases {
 

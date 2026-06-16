@@ -37,7 +37,7 @@ class IdempotencyKeyFilterTest {
 
     @BeforeEach
     void setUp() {
-        filter = new IdempotencyKeyFilter(redisTemplate, 24);
+        filter = new IdempotencyKeyFilter(redisTemplate, 24, 60);
     }
 
     @Nested

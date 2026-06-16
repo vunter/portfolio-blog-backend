@@ -179,20 +179,31 @@ public class AnalyticsService {
                 .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCount());
         Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since)
                 .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumLikesCount());
+        Mono<Long> totalSharesMono = analyticsRepository.countByEventTypeSince("SHARE", since);
 
-        Mono<List<AnalyticsSummary.DeviceStat>> devicesMono = getTopDevices(since);
-        Mono<List<AnalyticsSummary.BrowserStat>> browsersMono = getTopBrowsers(since);
-        Mono<List<AnalyticsSummary.CountryStat>> countriesMono = getTopCountries(since);
+        return buildSummary(since, null, totalViewsMono, totalLikesMono, totalSharesMono);
+    }
+
+    // ARCH-2: shared assembly for the plain + *ByAuthor summaries. The two public methods
+    // differ only in how the total view/like/share counts are sourced; everything below
+    // (unique visitors, daily views, top-N breakdowns and the builder) is identical and is
+    // scoped to the author when authorId is non-null.
+    private Mono<AnalyticsSummary> buildSummary(LocalDateTime since, Long authorId,
+                                                Mono<Long> totalViewsMono, Mono<Long> totalLikesMono,
+                                                Mono<Long> totalSharesMono) {
+        Mono<List<AnalyticsSummary.DeviceStat>> devicesMono = getTopDevices(since, authorId);
+        Mono<List<AnalyticsSummary.BrowserStat>> browsersMono = getTopBrowsers(since, authorId);
+        Mono<List<AnalyticsSummary.CountryStat>> countriesMono = getTopCountries(since, authorId);
 
         return Mono.zip(
                 totalViewsMono,
                 totalLikesMono,
-                analyticsRepository.countByEventTypeSince("SHARE", since),
-                getUniqueVisitors(since),
-                getDailyViews(since),
-                getTopArticles(since, 10),
-                getTopReferrers(since, 10),
-                getTopSources(since, 10)
+                totalSharesMono,
+                getUniqueVisitors(since, authorId),
+                getDailyViews(since, authorId),
+                getTopArticles(since, 10, authorId),
+                getTopReferrers(since, 10, authorId),
+                getTopSources(since, 10, authorId)
         ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono, countriesMono)
                 .map(extra -> AnalyticsSummary.builder()
                 .totalViews(tuple.getT1())
@@ -209,38 +220,54 @@ public class AnalyticsService {
                 .build()));
     }
 
-    private Mono<Long> getUniqueVisitors(LocalDateTime since) {
-        return databaseClient.sql(
-                "SELECT COUNT(DISTINCT user_ip) AS cnt FROM analytics_events WHERE event_type = 'VIEW' AND created_at >= :since")
-                .bind("since", since)
-                .map((row, meta) -> row.get("cnt", Long.class))
-                .one()
-                .defaultIfEmpty(0L);
+    // ARCH-2: SQL fragment helpers shared by every plain/*ByAuthor query pair below.
+    // When authorId is non-null they splice in the articles join + author_id predicate
+    // and bind the parameter; when null they are no-ops, leaving the plain query intact.
+    // All analytics_events queries alias the table as "ae" so the same column references
+    // (ae.<col>) are valid with or without the join.
+    private static String authorJoin(Long authorId) {
+        return authorId != null ? " JOIN articles a ON ae.article_id = a.id" : "";
     }
 
-    private Mono<Long> getUniqueVisitorsByAuthor(LocalDateTime since, Long authorId) {
-        return databaseClient.sql(
-                "SELECT COUNT(DISTINCT ae.user_ip) AS cnt FROM analytics_events ae JOIN articles a ON ae.article_id = a.id " +
-                "WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since AND a.author_id = :authorId")
-                .bind("since", since)
-                .bind("authorId", authorId)
+    private static String authorPredicate(Long authorId) {
+        return authorId != null ? " AND a.author_id = :authorId" : "";
+    }
+
+    private static DatabaseClient.GenericExecuteSpec bindAuthor(DatabaseClient.GenericExecuteSpec spec, Long authorId) {
+        return authorId != null ? spec.bind("authorId", authorId) : spec;
+    }
+
+    // ARCH-2: shared impl for the plain + *ByAuthor variants. When authorId is non-null
+    // an articles join + author_id predicate are appended; otherwise behaviour is unchanged.
+    private Mono<Long> getUniqueVisitors(LocalDateTime since, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT COUNT(DISTINCT ae.user_ip) AS cnt FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since"
+                        + authorPredicate(authorId))
+                .bind("since", since);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> row.get("cnt", Long.class))
                 .one()
                 .defaultIfEmpty(0L);
     }
 
     // BUG-12: Replaced Object[] queries with DatabaseClient row mapping
-    private Mono<List<AnalyticsSummary.DailyStat>> getDailyViews(LocalDateTime since) {
-        return databaseClient.sql("""
-                SELECT CAST(created_at AS DATE) AS stat_date, COUNT(*) AS cnt
-                FROM analytics_events
-                WHERE event_type = :eventType AND created_at >= :since
-                GROUP BY CAST(created_at AS DATE)
-                ORDER BY stat_date
-                LIMIT 366
-                """)
+    private Mono<List<AnalyticsSummary.DailyStat>> getDailyViews(LocalDateTime since, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT CAST(ae.created_at AS DATE) AS stat_date, COUNT(*) AS cnt"
+                        + " FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.event_type = :eventType AND ae.created_at >= :since"
+                        + authorPredicate(authorId)
+                        + " GROUP BY CAST(ae.created_at AS DATE)"
+                        + " ORDER BY stat_date"
+                        + " LIMIT 366")
                 .bind("eventType", "VIEW")
-                .bind("since", since)
+                .bind("since", since);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> AnalyticsSummary.DailyStat.builder()
                         .date(row.get("stat_date", LocalDate.class))
                         .count(row.get("cnt", Long.class))
@@ -249,17 +276,20 @@ public class AnalyticsService {
                 .collectList();
     }
 
-    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticles(LocalDateTime since, int limit) {
-        return databaseClient.sql("""
-                SELECT article_id, COUNT(*) AS cnt
-                FROM analytics_events
-                WHERE event_type = 'VIEW' AND created_at >= :since
-                GROUP BY article_id
-                ORDER BY cnt DESC
-                LIMIT :limit
-                """)
+    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticles(LocalDateTime since, int limit, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT ae.article_id, COUNT(*) AS cnt"
+                        + " FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since"
+                        + authorPredicate(authorId)
+                        + " GROUP BY ae.article_id"
+                        + " ORDER BY cnt DESC"
+                        + " LIMIT :limit")
                 .bind("since", since)
-                .bind("limit", limit)
+                .bind("limit", limit);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> Map.entry(
                         row.get("article_id", Long.class),
                         row.get("cnt", Long.class)))
@@ -282,19 +312,21 @@ public class AnalyticsService {
                                     })
                                     .toList());
                 })
-                .flatMap(list -> list.isEmpty() ? getTopArticlesFromViewCounts(limit) : Mono.just(list));
+                .flatMap(list -> list.isEmpty() ? getTopArticlesFromViewCounts(limit, authorId) : Mono.just(list));
     }
 
     // BUG-RT6: Fallback to article view counts when analytics_events table has no data
-    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesFromViewCounts(int limit) {
-        return databaseClient.sql("""
-                SELECT id, title, slug, views_count
-                FROM articles
-                WHERE views_count > 0
-                ORDER BY views_count DESC
-                LIMIT :limit
-                """)
-                .bind("limit", limit)
+    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesFromViewCounts(int limit, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT id, title, slug, views_count"
+                        + " FROM articles"
+                        + " WHERE views_count > 0"
+                        + (authorId != null ? " AND author_id = :authorId" : "")
+                        + " ORDER BY views_count DESC"
+                        + " LIMIT :limit")
+                .bind("limit", limit);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> AnalyticsSummary.TopArticle.builder()
                         .articleId(row.get("id", Long.class).toString())
                         .title(row.get("title", String.class))
@@ -305,17 +337,20 @@ public class AnalyticsService {
                 .collectList();
     }
 
-    private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrers(LocalDateTime since, int limit) {
-        return databaseClient.sql("""
-                SELECT referrer, COUNT(*) AS cnt
-                FROM analytics_events
-                WHERE referrer IS NOT NULL AND referrer != '' AND created_at >= :since
-                GROUP BY referrer
-                ORDER BY cnt DESC
-                LIMIT :limit
-                """)
+    private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrers(LocalDateTime since, int limit, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT ae.referrer, COUNT(*) AS cnt"
+                        + " FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.referrer IS NOT NULL AND ae.referrer != '' AND ae.created_at >= :since"
+                        + authorPredicate(authorId)
+                        + " GROUP BY ae.referrer"
+                        + " ORDER BY cnt DESC"
+                        + " LIMIT :limit")
                 .bind("since", since)
-                .bind("limit", limit)
+                .bind("limit", limit);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> AnalyticsSummary.TopReferrer.builder()
                         .referrer(row.get("referrer", String.class))
                         .count(row.get("cnt", Long.class))
@@ -324,17 +359,20 @@ public class AnalyticsService {
                 .collectList();
     }
 
-    private Mono<List<AnalyticsSummary.TopSource>> getTopSources(LocalDateTime since, int limit) {
-        return databaseClient.sql("""
-                SELECT metadata->>'utm_source' AS source, metadata->>'utm_medium' AS medium, COUNT(*) AS cnt
-                FROM analytics_events
-                WHERE metadata IS NOT NULL AND metadata->>'utm_source' IS NOT NULL AND created_at >= :since
-                GROUP BY metadata->>'utm_source', metadata->>'utm_medium'
-                ORDER BY cnt DESC
-                LIMIT :limit
-                """)
+    private Mono<List<AnalyticsSummary.TopSource>> getTopSources(LocalDateTime since, int limit, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT ae.metadata->>'utm_source' AS source, ae.metadata->>'utm_medium' AS medium, COUNT(*) AS cnt"
+                        + " FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.metadata IS NOT NULL AND ae.metadata->>'utm_source' IS NOT NULL AND ae.created_at >= :since"
+                        + authorPredicate(authorId)
+                        + " GROUP BY ae.metadata->>'utm_source', ae.metadata->>'utm_medium'"
+                        + " ORDER BY cnt DESC"
+                        + " LIMIT :limit")
                 .bind("since", since)
-                .bind("limit", limit)
+                .bind("limit", limit);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> AnalyticsSummary.TopSource.builder()
                         .source(row.get("source", String.class))
                         .medium(row.get("medium", String.class))
@@ -352,39 +390,27 @@ public class AnalyticsService {
      * Compare current period metrics with the previous period of the same length.
      */
     public Mono<AnalyticsComparison> getAnalyticsComparison(int days) {
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime currentStart = now.minusDays(days);
-        LocalDateTime previousStart = now.minusDays(days * 2L);
-
-        return Mono.zip(
-                analyticsRepository.countByEventTypeSince("VIEW", currentStart),
-                analyticsRepository.countByEventTypeSince("LIKE", currentStart),
-                analyticsRepository.countByEventTypeSince("SHARE", currentStart),
-                countByEventTypeBetween("VIEW", previousStart, currentStart),
-                countByEventTypeBetween("LIKE", previousStart, currentStart),
-                countByEventTypeBetween("SHARE", previousStart, currentStart)
-        ).map(tuple -> AnalyticsComparison.builder()
-                .currentViews(tuple.getT1())
-                .currentLikes(tuple.getT2())
-                .currentShares(tuple.getT3())
-                .previousViews(tuple.getT4())
-                .previousLikes(tuple.getT5())
-                .previousShares(tuple.getT6())
-                .build());
+        return buildComparison(days, null);
     }
 
     public Mono<AnalyticsComparison> getAnalyticsComparisonByAuthor(int days, Long authorId) {
+        return buildComparison(days, authorId);
+    }
+
+    // ARCH-2: shared impl for the plain + *ByAuthor comparison. When authorId is non-null
+    // every count is scoped to that author; otherwise behaviour is unchanged.
+    private Mono<AnalyticsComparison> buildComparison(int days, Long authorId) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime currentStart = now.minusDays(days);
         LocalDateTime previousStart = now.minusDays(days * 2L);
 
         return Mono.zip(
-                analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", currentStart),
-                analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", currentStart),
-                analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", currentStart),
-                countByAuthorIdAndEventTypeBetween(authorId, "VIEW", previousStart, currentStart),
-                countByAuthorIdAndEventTypeBetween(authorId, "LIKE", previousStart, currentStart),
-                countByAuthorIdAndEventTypeBetween(authorId, "SHARE", previousStart, currentStart)
+                countSinceScoped("VIEW", currentStart, authorId),
+                countSinceScoped("LIKE", currentStart, authorId),
+                countSinceScoped("SHARE", currentStart, authorId),
+                countByEventTypeBetween("VIEW", previousStart, currentStart, authorId),
+                countByEventTypeBetween("LIKE", previousStart, currentStart, authorId),
+                countByEventTypeBetween("SHARE", previousStart, currentStart, authorId)
         ).map(tuple -> AnalyticsComparison.builder()
                 .currentViews(tuple.getT1())
                 .currentLikes(tuple.getT2())
@@ -395,25 +421,23 @@ public class AnalyticsService {
                 .build());
     }
 
-    private Mono<Long> countByEventTypeBetween(String eventType, LocalDateTime from, LocalDateTime to) {
-        return databaseClient.sql(
-                "SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = :eventType AND created_at >= :from AND created_at < :to")
-                .bind("eventType", eventType)
-                .bind("from", from)
-                .bind("to", to)
-                .map((row, meta) -> row.get("cnt", Long.class))
-                .one()
-                .defaultIfEmpty(0L);
+    private Mono<Long> countSinceScoped(String eventType, LocalDateTime since, Long authorId) {
+        return authorId != null
+                ? analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, eventType, since)
+                : analyticsRepository.countByEventTypeSince(eventType, since);
     }
 
-    private Mono<Long> countByAuthorIdAndEventTypeBetween(Long authorId, String eventType, LocalDateTime from, LocalDateTime to) {
-        return databaseClient.sql(
-                "SELECT COUNT(*) AS cnt FROM analytics_events ae JOIN articles a ON ae.article_id = a.id " +
-                "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :from AND ae.created_at < :to")
-                .bind("authorId", authorId)
+    private Mono<Long> countByEventTypeBetween(String eventType, LocalDateTime from, LocalDateTime to, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT COUNT(*) AS cnt FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.event_type = :eventType AND ae.created_at >= :from AND ae.created_at < :to"
+                        + authorPredicate(authorId))
                 .bind("eventType", eventType)
                 .bind("from", from)
-                .bind("to", to)
+                .bind("to", to);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> row.get("cnt", Long.class))
                 .one()
                 .defaultIfEmpty(0L);
@@ -430,167 +454,23 @@ public class AnalyticsService {
                 .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCountByAuthorId(authorId));
         Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since)
                 .flatMap(count -> count > 0 ? Mono.just(count) : Mono.just(0L));
+        Mono<Long> totalSharesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", since);
 
-        Mono<List<AnalyticsSummary.DeviceStat>> devicesMono = getTopDevicesByAuthor(since, authorId);
-        Mono<List<AnalyticsSummary.BrowserStat>> browsersMono = getTopBrowsersByAuthor(since, authorId);
-        Mono<List<AnalyticsSummary.CountryStat>> countriesMono = getTopCountriesByAuthor(since, authorId);
-
-        return Mono.zip(
-                totalViewsMono,
-                totalLikesMono,
-                analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", since),
-                getUniqueVisitorsByAuthor(since, authorId),
-                getDailyViewsByAuthor(since, authorId),
-                getTopArticlesByAuthor(since, 10, authorId),
-                getTopReferrersByAuthor(since, 10, authorId),
-                getTopSourcesByAuthor(since, 10, authorId)
-        ).flatMap(tuple -> Mono.zip(devicesMono, browsersMono, countriesMono)
-                .map(extra -> AnalyticsSummary.builder()
-                .totalViews(tuple.getT1())
-                .totalLikes(tuple.getT2())
-                .totalShares(tuple.getT3())
-                .uniqueVisitors(tuple.getT4())
-                .dailyViews(tuple.getT5())
-                .topArticles(tuple.getT6())
-                .topReferrers(tuple.getT7())
-                .topSources(tuple.getT8())
-                .topDevices(extra.getT1())
-                .topBrowsers(extra.getT2())
-                .topCountries(extra.getT3())
-                .build()));
+        return buildSummary(since, authorId, totalViewsMono, totalLikesMono, totalSharesMono);
     }
 
-    private Mono<List<AnalyticsSummary.DailyStat>> getDailyViewsByAuthor(LocalDateTime since, Long authorId) {
-        return databaseClient.sql("""
-                SELECT CAST(ae.created_at AS DATE) AS stat_date, COUNT(*) AS cnt
-                FROM analytics_events ae
-                JOIN articles a ON ae.article_id = a.id
-                WHERE ae.event_type = :eventType AND ae.created_at >= :since AND a.author_id = :authorId
-                GROUP BY CAST(ae.created_at AS DATE)
-                ORDER BY stat_date
-                LIMIT 366
-                """)
-                .bind("eventType", "VIEW")
-                .bind("since", since)
-                .bind("authorId", authorId)
-                .map((row, meta) -> AnalyticsSummary.DailyStat.builder()
-                        .date(row.get("stat_date", LocalDate.class))
-                        .count(row.get("cnt", Long.class))
-                        .build())
-                .all()
-                .collectList();
-    }
-
-    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesByAuthor(LocalDateTime since, int limit, Long authorId) {
-        return databaseClient.sql("""
-                SELECT ae.article_id, COUNT(*) AS cnt
-                FROM analytics_events ae
-                JOIN articles a ON ae.article_id = a.id
-                WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since AND a.author_id = :authorId
-                GROUP BY ae.article_id
-                ORDER BY cnt DESC
-                LIMIT :limit
-                """)
-                .bind("since", since)
-                .bind("authorId", authorId)
-                .bind("limit", limit)
-                .map((row, meta) -> Map.entry(
-                        row.get("article_id", Long.class),
-                        row.get("cnt", Long.class)))
-                .all()
-                .collectList()
-                .flatMap(entries -> {
-                    if (entries.isEmpty()) return getTopArticlesFromViewCountsByAuthor(limit, authorId);
-                    List<Long> articleIds = entries.stream().map(Map.Entry::getKey).toList();
-                    return articleRepository.findAllById(articleIds)
-                            .collectMap(article -> article.getId(), article -> article)
-                            .map(articleMap -> entries.stream()
-                                    .map(entry -> {
-                                        var article = articleMap.get(entry.getKey());
-                                        return AnalyticsSummary.TopArticle.builder()
-                                                .articleId(entry.getKey().toString())
-                                                .title(article != null ? article.getTitle() : "Unknown")
-                                                .slug(article != null ? article.getSlug() : "unknown")
-                                                .views(entry.getValue())
-                                                .build();
-                                    })
-                                    .toList());
-                });
-    }
-
-    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesFromViewCountsByAuthor(int limit, Long authorId) {
-        return databaseClient.sql("""
-                SELECT id, title, slug, views_count
-                FROM articles
-                WHERE author_id = :authorId AND views_count > 0
-                ORDER BY views_count DESC
-                LIMIT :limit
-                """)
-                .bind("authorId", authorId)
-                .bind("limit", limit)
-                .map((row, meta) -> AnalyticsSummary.TopArticle.builder()
-                        .articleId(row.get("id", Long.class).toString())
-                        .title(row.get("title", String.class))
-                        .slug(row.get("slug", String.class))
-                        .views(row.get("views_count", Long.class))
-                        .build())
-                .all()
-                .collectList();
-    }
-
-    private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrersByAuthor(LocalDateTime since, int limit, Long authorId) {
-        return databaseClient.sql("""
-                SELECT ae.referrer, COUNT(*) AS cnt
-                FROM analytics_events ae
-                JOIN articles a ON ae.article_id = a.id
-                WHERE ae.referrer IS NOT NULL AND ae.referrer != '' AND ae.created_at >= :since AND a.author_id = :authorId
-                GROUP BY ae.referrer
-                ORDER BY cnt DESC
-                LIMIT :limit
-                """)
-                .bind("since", since)
-                .bind("authorId", authorId)
-                .bind("limit", limit)
-                .map((row, meta) -> AnalyticsSummary.TopReferrer.builder()
-                        .referrer(row.get("referrer", String.class))
-                        .count(row.get("cnt", Long.class))
-                        .build())
-                .all()
-                .collectList();
-    }
-
-    private Mono<List<AnalyticsSummary.TopSource>> getTopSourcesByAuthor(LocalDateTime since, int limit, Long authorId) {
-        return databaseClient.sql("""
-                SELECT ae.metadata->>'utm_source' AS source, ae.metadata->>'utm_medium' AS medium, COUNT(*) AS cnt
-                FROM analytics_events ae
-                JOIN articles a ON ae.article_id = a.id
-                WHERE ae.metadata IS NOT NULL AND ae.metadata->>'utm_source' IS NOT NULL
-                  AND ae.created_at >= :since AND a.author_id = :authorId
-                GROUP BY ae.metadata->>'utm_source', ae.metadata->>'utm_medium'
-                ORDER BY cnt DESC
-                LIMIT :limit
-                """)
-                .bind("since", since)
-                .bind("authorId", authorId)
-                .bind("limit", limit)
-                .map((row, meta) -> AnalyticsSummary.TopSource.builder()
-                        .source(row.get("source", String.class))
-                        .medium(row.get("medium", String.class))
-                        .count(row.get("cnt", Long.class))
-                        .build())
-                .all()
-                .collectList();
-    }
-
-    private Mono<List<AnalyticsSummary.DeviceStat>> getTopDevices(LocalDateTime since) {
-        return databaseClient.sql("""
-                SELECT device_type, COUNT(*) AS cnt
-                FROM analytics_events
-                WHERE device_type IS NOT NULL AND device_type != 'UNKNOWN' AND created_at >= :since
-                GROUP BY device_type
-                ORDER BY cnt DESC
-                """)
-                .bind("since", since)
+    private Mono<List<AnalyticsSummary.DeviceStat>> getTopDevices(LocalDateTime since, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT ae.device_type, COUNT(*) AS cnt"
+                        + " FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.device_type IS NOT NULL AND ae.device_type != 'UNKNOWN' AND ae.created_at >= :since"
+                        + authorPredicate(authorId)
+                        + " GROUP BY ae.device_type"
+                        + " ORDER BY cnt DESC")
+                .bind("since", since);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> AnalyticsSummary.DeviceStat.builder()
                         .deviceType(row.get("device_type", String.class))
                         .count(row.get("cnt", Long.class))
@@ -599,36 +479,19 @@ public class AnalyticsService {
                 .collectList();
     }
 
-    private Mono<List<AnalyticsSummary.DeviceStat>> getTopDevicesByAuthor(LocalDateTime since, Long authorId) {
-        return databaseClient.sql("""
-                SELECT ae.device_type, COUNT(*) AS cnt
-                FROM analytics_events ae
-                JOIN articles a ON ae.article_id = a.id
-                WHERE ae.device_type IS NOT NULL AND ae.device_type != 'UNKNOWN'
-                  AND ae.created_at >= :since AND a.author_id = :authorId
-                GROUP BY ae.device_type
-                ORDER BY cnt DESC
-                """)
-                .bind("since", since)
-                .bind("authorId", authorId)
-                .map((row, meta) -> AnalyticsSummary.DeviceStat.builder()
-                        .deviceType(row.get("device_type", String.class))
-                        .count(row.get("cnt", Long.class))
-                        .build())
-                .all()
-                .collectList();
-    }
-
-    private Mono<List<AnalyticsSummary.BrowserStat>> getTopBrowsers(LocalDateTime since) {
-        return databaseClient.sql("""
-                SELECT browser_family, COUNT(*) AS cnt
-                FROM analytics_events
-                WHERE browser_family IS NOT NULL AND browser_family != 'Unknown' AND created_at >= :since
-                GROUP BY browser_family
-                ORDER BY cnt DESC
-                LIMIT 10
-                """)
-                .bind("since", since)
+    private Mono<List<AnalyticsSummary.BrowserStat>> getTopBrowsers(LocalDateTime since, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT ae.browser_family, COUNT(*) AS cnt"
+                        + " FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.browser_family IS NOT NULL AND ae.browser_family != 'Unknown' AND ae.created_at >= :since"
+                        + authorPredicate(authorId)
+                        + " GROUP BY ae.browser_family"
+                        + " ORDER BY cnt DESC"
+                        + " LIMIT 10")
+                .bind("since", since);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> AnalyticsSummary.BrowserStat.builder()
                         .browser(row.get("browser_family", String.class))
                         .count(row.get("cnt", Long.class))
@@ -637,57 +500,19 @@ public class AnalyticsService {
                 .collectList();
     }
 
-    private Mono<List<AnalyticsSummary.BrowserStat>> getTopBrowsersByAuthor(LocalDateTime since, Long authorId) {
-        return databaseClient.sql("""
-                SELECT ae.browser_family, COUNT(*) AS cnt
-                FROM analytics_events ae
-                JOIN articles a ON ae.article_id = a.id
-                WHERE ae.browser_family IS NOT NULL AND ae.browser_family != 'Unknown'
-                  AND ae.created_at >= :since AND a.author_id = :authorId
-                GROUP BY ae.browser_family
-                ORDER BY cnt DESC
-                LIMIT 10
-                """)
-                .bind("since", since)
-                .bind("authorId", authorId)
-                .map((row, meta) -> AnalyticsSummary.BrowserStat.builder()
-                        .browser(row.get("browser_family", String.class))
-                        .count(row.get("cnt", Long.class))
-                        .build())
-                .all()
-                .collectList();
-    }
-
-    private Mono<List<AnalyticsSummary.CountryStat>> getTopCountries(LocalDateTime since) {
-        return databaseClient.sql("""
-                SELECT country_code, COUNT(*) AS cnt
-                FROM analytics_events
-                WHERE country_code IS NOT NULL AND created_at >= :since
-                GROUP BY country_code
-                ORDER BY cnt DESC
-                LIMIT 10
-                """)
-                .bind("since", since)
-                .map((row, meta) -> AnalyticsSummary.CountryStat.builder()
-                        .countryCode(row.get("country_code", String.class))
-                        .count(row.get("cnt", Long.class))
-                        .build())
-                .all()
-                .collectList();
-    }
-
-    private Mono<List<AnalyticsSummary.CountryStat>> getTopCountriesByAuthor(LocalDateTime since, Long authorId) {
-        return databaseClient.sql("""
-                SELECT ae.country_code, COUNT(*) AS cnt
-                FROM analytics_events ae
-                JOIN articles a ON ae.article_id = a.id
-                WHERE ae.country_code IS NOT NULL AND ae.created_at >= :since AND a.author_id = :authorId
-                GROUP BY ae.country_code
-                ORDER BY cnt DESC
-                LIMIT 10
-                """)
-                .bind("since", since)
-                .bind("authorId", authorId)
+    private Mono<List<AnalyticsSummary.CountryStat>> getTopCountries(LocalDateTime since, Long authorId) {
+        var spec = databaseClient.sql(
+                "SELECT ae.country_code, COUNT(*) AS cnt"
+                        + " FROM analytics_events ae"
+                        + authorJoin(authorId)
+                        + " WHERE ae.country_code IS NOT NULL AND ae.created_at >= :since"
+                        + authorPredicate(authorId)
+                        + " GROUP BY ae.country_code"
+                        + " ORDER BY cnt DESC"
+                        + " LIMIT 10")
+                .bind("since", since);
+        spec = bindAuthor(spec, authorId);
+        return spec
                 .map((row, meta) -> AnalyticsSummary.CountryStat.builder()
                         .countryCode(row.get("country_code", String.class))
                         .count(row.get("cnt", Long.class))

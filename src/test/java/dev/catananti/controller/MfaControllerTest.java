@@ -203,8 +203,15 @@ class MfaControllerTest {
                     .exchange()
                     .expectStatus().isOk()
                     .expectBody()
-                    .jsonPath("$.accessToken").isEqualTo("access-token")
-                    .jsonPath("$.email").isEqualTo("admin@test.com");
+                    // SEG-1: accessToken/refreshToken are WRITE_ONLY and must NOT appear in the
+                    // JSON body anymore. Assert MFA login still succeeds via the still-present
+                    // body fields, and that the tokens are absent.
+                    .jsonPath("$.email").isEqualTo("admin@test.com")
+                    .jsonPath("$.name").isEqualTo("Admin")
+                    .jsonPath("$.tokenType").isEqualTo("Bearer")
+                    .jsonPath("$.expiresIn").isEqualTo(3600)
+                    .jsonPath("$.accessToken").doesNotExist()
+                    .jsonPath("$.refreshToken").doesNotExist();
         }
     }
 

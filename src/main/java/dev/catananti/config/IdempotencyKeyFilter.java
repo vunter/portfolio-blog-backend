@@ -47,12 +47,18 @@ public class IdempotencyKeyFilter implements WebFilter {
 
     private final ReactiveStringRedisTemplate redisTemplate;
     private final Duration ttl;
+    private final Duration processingTtl;
 
     public IdempotencyKeyFilter(
             ReactiveStringRedisTemplate redisTemplate,
-            @Value("${app.idempotency.ttl-hours:24}") int ttlHours) {
+            @Value("${app.idempotency.ttl-hours:24}") int ttlHours,
+            @Value("${app.idempotency.processing-ttl-seconds:60}") int processingTtlSeconds) {
         this.redisTemplate = redisTemplate;
         this.ttl = Duration.ofHours(ttlHours);
+        // BUG-5: short-lived marker so a crash mid-processing does not orphan the key for the
+        // full TTL (which would 409 every retry forever). The marker is extended to the full
+        // TTL only once processing completes successfully.
+        this.processingTtl = Duration.ofSeconds(processingTtlSeconds);
     }
 
     @Override
@@ -87,8 +93,11 @@ public class IdempotencyKeyFilter implements WebFilter {
 
     private Mono<Void> processWithKey(ServerWebExchange exchange, WebFilterChain chain,
                                       String redisKey, String idempotencyKey) {
+        // BUG-5: write the 'processing' marker with a SHORT TTL. If the chain crashes before
+        // the success handler runs (orphaning the key), the marker self-expires within the
+        // short window instead of blocking retries for the full TTL.
         return redisTemplate.opsForValue()
-                .setIfAbsent(redisKey, "processing", ttl)
+                .setIfAbsent(redisKey, "processing", processingTtl)
                 .flatMap(wasSet -> {
                     if (Boolean.TRUE.equals(wasSet)) {
                         return chain.filter(exchange)

@@ -399,15 +399,20 @@ class ApiEndpointIntegrationTest {
             when(authService.loginWithRefreshToken(any(LoginRequest.class), anyString(), any()))
                     .thenReturn(Mono.just(resp));
 
-            // When & Then
+            // When & Then — SEG-1: access/refresh tokens are now @JsonProperty(WRITE_ONLY),
+            // so they are NOT in the JSON body; they are delivered via HttpOnly cookies.
+            // Assert the access_token Set-Cookie is present and the still-serialized body fields.
             client.post().uri("/api/v1/admin/auth/login")
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(new LoginRequest("admin@test.com", "password12345", false, null))
                     .exchange()
                     .expectStatus().isOk()
                     .expectHeader().exists("Set-Cookie")
+                    .expectCookie().exists("access_token")
+                    .expectCookie().valueEquals("access_token", "access-jwt")
                     .expectBody()
-                    .jsonPath("$.accessToken").isEqualTo("access-jwt")
+                    .jsonPath("$.accessToken").doesNotExist()
+                    .jsonPath("$.tokenType").isEqualTo("Bearer")
                     .jsonPath("$.email").isEqualTo("admin@test.com")
                     .jsonPath("$.expiresIn").isEqualTo(86400);
         }
@@ -1090,7 +1095,7 @@ class ApiEndpointIntegrationTest {
         void setUp() {
             var dashboardService = new dev.catananti.service.DashboardService(
                     articleRepository, commentRepository, userRepository, subscriberRepository, tagRepository);
-            dashboardController = new AdminDashboardController(dashboardService, userRepository);
+            dashboardController = new AdminDashboardController(dashboardService, new dev.catananti.service.CurrentUserService(userRepository));
             lenient().when(userRepository.findByEmail("admin@test.com"))
                     .thenReturn(Mono.just(dev.catananti.entity.User.builder()
                             .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));
@@ -1172,12 +1177,17 @@ class ApiEndpointIntegrationTest {
 
         @Mock private AnalyticsService analyticsService;
         @Mock private UserRepository userRepository;
-        @InjectMocks private AdminAnalyticsController analyticsController;
+        private AdminAnalyticsController analyticsController;
 
         private WebTestClient client;
 
         @BeforeEach
         void setUp() {
+            // ARCH-3: AdminAnalyticsController now resolves the current user via the shared
+            // CurrentUserService (constructed from userRepository) instead of the repository
+            // directly, so wire it the same way as the dashboard controller.
+            analyticsController = new AdminAnalyticsController(
+                    analyticsService, new dev.catananti.service.CurrentUserService(userRepository));
             lenient().when(userRepository.findByEmail("admin@test.com"))
                     .thenReturn(Mono.just(dev.catananti.entity.User.builder()
                             .id(1L).email("admin@test.com").name("Admin").role("ADMIN").build()));

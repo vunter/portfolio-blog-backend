@@ -7,26 +7,19 @@ import dev.catananti.dto.ResumeProfileRequest;
 import dev.catananti.dto.ResumeProfileResponse;
 import dev.catananti.entity.*;
 import dev.catananti.util.DigestUtils;
-import dev.catananti.util.HtmlUtils;
 import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import jakarta.annotation.PostConstruct;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Properties;
 import java.util.Set;
 import java.util.stream.IntStream;
 
@@ -53,35 +46,9 @@ public class ResumeProfileService {
     private final ResumeProficiencyRepository proficiencyRepository;
     private final ResumeProjectRepository projectRepository;
     private final ResumeLearningTopicRepository learningTopicRepository;
-    private final HtmlSanitizerService htmlSanitizer;
+    private final ResumeHtmlRenderer htmlRenderer;
     private final IdService idService;
     private final org.springframework.r2dbc.core.DatabaseClient databaseClient;
-
-    // Contact-line SVG icons used by the PDF renderer. Loaded once from
-    // classpath:/templates/resume/contact-icons.properties — keeping markup
-    // out of the service body makes icon updates a no-recompile change.
-    private String ICON_EMAIL;
-    private String ICON_LINKEDIN;
-    private String ICON_GITHUB;
-    private String ICON_GLOBE;
-    private String ICON_LOCATION;
-    private String ICON_PHONE;
-
-    @PostConstruct
-    void loadContactIcons() {
-        Properties props = new Properties();
-        try (InputStream in = new ClassPathResource("templates/resume/contact-icons.properties").getInputStream()) {
-            props.load(new java.io.InputStreamReader(in, StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            log.error("Failed to load resume contact icons; PDF contact lines will render without glyphs", e);
-        }
-        this.ICON_EMAIL = props.getProperty("email", "");
-        this.ICON_LINKEDIN = props.getProperty("linkedin", "");
-        this.ICON_GITHUB = props.getProperty("github", "");
-        this.ICON_GLOBE = props.getProperty("globe", "");
-        this.ICON_LOCATION = props.getProperty("location", "");
-        this.ICON_PHONE = props.getProperty("phone", "");
-    }
 
     /**
      * Get the full resume profile for a user in a specific locale.
@@ -167,7 +134,7 @@ public class ResumeProfileService {
         String headerLang = resolvedLang.contains("-") ? resolvedLang.split("-")[0] : resolvedLang;
         log.info("Generating resume HTML for ownerId={}, lang='{}'", ownerId, resolvedLang);
         return getProfileByOwnerIdWithFallback(ownerId, resolvedLang)
-                .map(profile -> renderHtml(profile, headerLang));
+                .map(profile -> htmlRenderer.renderHtml(profile, headerLang));
     }
 
     /**
@@ -260,209 +227,193 @@ public class ResumeProfileService {
 
     // ==================== F-214: Inline Merge Methods ====================
 
-    private Mono<Void> mergeAdditionalInfo(Long profileId, List<ResumeProfileRequest.AdditionalInfoEntry> incoming) {
+    /**
+     * Per-entity update/build logic for {@link #mergeChildren}. Given an incoming
+     * request entry, the matching existing entity (or {@code null} for an insert),
+     * the resolved sortOrder and the shared timestamp, returns the entity to save.
+     * For updates the caller mutates and returns {@code existing}; for inserts it
+     * builds a fresh entity (with a new id and {@code newRecord(true)}).
+     */
+    @FunctionalInterface
+    private interface EntryUpserter<E, T> {
+        T upsert(E entry, T existing, int sortOrder, LocalDateTime now, Long profileId);
+    }
+
+    /**
+     * F-214: Generic merge scaffold shared by the repository-managed child types.
+     * Mirrors {@link #deleteAndSave}: null = skip, empty = delete-all, otherwise
+     * load existing by id, iterate incoming (defaulting sortOrder to the index),
+     * update-or-build via {@code upserter}, then delete removed + save kept/new.
+     */
+    private <E, T> Mono<Void> mergeChildren(
+            Long profileId,
+            List<E> incoming,
+            Flux<T> existingFlux,
+            Mono<Void> deleteAllMono,
+            java.util.function.Function<T, Long> entityId,
+            java.util.function.Function<E, String> entryId,
+            java.util.function.Function<E, Integer> entrySortOrder,
+            org.springframework.data.repository.reactive.ReactiveCrudRepository<T, Long> repo,
+            EntryUpserter<E, T> upserter) {
         if (incoming == null) {
             return Mono.empty(); // null = field not sent, preserve existing data
         }
         if (incoming.isEmpty()) {
-            return additionalInfoRepository.deleteByProfileId(profileId);
+            return deleteAllMono;
         }
-        return additionalInfoRepository.findByProfileIdOrderBySortOrderAsc(profileId)
-                .collectMap(ResumeAdditionalInfo::getId)
+        return existingFlux
+                .collectMap(entityId)
                 .flatMap(existingMap -> {
                     var now = LocalDateTime.now();
                     Set<Long> keepIds = new HashSet<>();
-                    List<ResumeAdditionalInfo> toSave = new ArrayList<>();
+                    List<T> toSave = new ArrayList<>();
                     for (int i = 0; i < incoming.size(); i++) {
                         var e = incoming.get(i);
-                        Long eid = parseId(e.getId());
-                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
+                        Long eid = parseId(entryId.apply(e));
+                        Integer rawSort = entrySortOrder.apply(e);
+                        int sortOrder = rawSort != null ? rawSort : i;
                         if (eid != null && existingMap.containsKey(eid)) {
-                            var entity = existingMap.get(eid);
-                            entity.setLabel(e.getLabel()); entity.setContent(e.getContent());
-                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
-                            keepIds.add(eid); toSave.add(entity);
+                            toSave.add(upserter.upsert(e, existingMap.get(eid), sortOrder, now, profileId));
+                            keepIds.add(eid);
                         } else {
-                            toSave.add(ResumeAdditionalInfo.builder().id(idService.nextId()).profileId(profileId)
-                                    .label(e.getLabel()).content(e.getContent()).sortOrder(sortOrder)
-                                    .createdAt(now).updatedAt(now).newRecord(true).build());
+                            toSave.add(upserter.upsert(e, null, sortOrder, now, profileId));
                         }
                     }
-                    return deleteAndSave(existingMap.keySet(), keepIds, additionalInfoRepository, toSave);
+                    return deleteAndSave(existingMap.keySet(), keepIds, repo, toSave);
+                });
+    }
+
+    private Mono<Void> mergeAdditionalInfo(Long profileId, List<ResumeProfileRequest.AdditionalInfoEntry> incoming) {
+        return mergeChildren(profileId, incoming,
+                additionalInfoRepository.findByProfileIdOrderBySortOrderAsc(profileId),
+                additionalInfoRepository.deleteByProfileId(profileId),
+                ResumeAdditionalInfo::getId,
+                ResumeProfileRequest.AdditionalInfoEntry::getId,
+                ResumeProfileRequest.AdditionalInfoEntry::getSortOrder,
+                additionalInfoRepository,
+                (e, entity, sortOrder, now, pid) -> {
+                    if (entity != null) {
+                        entity.setLabel(e.getLabel()); entity.setContent(e.getContent());
+                        entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                        return entity;
+                    }
+                    return ResumeAdditionalInfo.builder().id(idService.nextId()).profileId(pid)
+                            .label(e.getLabel()).content(e.getContent()).sortOrder(sortOrder)
+                            .createdAt(now).updatedAt(now).newRecord(true).build();
                 });
     }
 
     private Mono<Void> mergeHomeCustomization(Long profileId, List<ResumeProfileRequest.HomeCustomizationEntry> incoming) {
-        if (incoming == null) {
-            return Mono.empty(); // null = field not sent, preserve existing data
-        }
-        if (incoming.isEmpty()) {
-            return homeCustomizationRepository.deleteByProfileId(profileId);
-        }
-        return homeCustomizationRepository.findByProfileIdOrderBySortOrderAsc(profileId)
-                .collectMap(ResumeHomeCustomization::getId)
-                .flatMap(existingMap -> {
-                    var now = LocalDateTime.now();
-                    Set<Long> keepIds = new HashSet<>();
-                    List<ResumeHomeCustomization> toSave = new ArrayList<>();
-                    for (int i = 0; i < incoming.size(); i++) {
-                        var e = incoming.get(i);
-                        Long eid = parseId(e.getId());
-                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
-                        if (eid != null && existingMap.containsKey(eid)) {
-                            var entity = existingMap.get(eid);
-                            entity.setLabel(e.getLabel()); entity.setContent(e.getContent());
-                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
-                            keepIds.add(eid); toSave.add(entity);
-                        } else {
-                            toSave.add(ResumeHomeCustomization.builder().id(idService.nextId()).profileId(profileId)
-                                    .label(e.getLabel()).content(e.getContent()).sortOrder(sortOrder)
-                                    .createdAt(now).updatedAt(now).newRecord(true).build());
-                        }
+        return mergeChildren(profileId, incoming,
+                homeCustomizationRepository.findByProfileIdOrderBySortOrderAsc(profileId),
+                homeCustomizationRepository.deleteByProfileId(profileId),
+                ResumeHomeCustomization::getId,
+                ResumeProfileRequest.HomeCustomizationEntry::getId,
+                ResumeProfileRequest.HomeCustomizationEntry::getSortOrder,
+                homeCustomizationRepository,
+                (e, entity, sortOrder, now, pid) -> {
+                    if (entity != null) {
+                        entity.setLabel(e.getLabel()); entity.setContent(e.getContent());
+                        entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                        return entity;
                     }
-                    return deleteAndSave(existingMap.keySet(), keepIds, homeCustomizationRepository, toSave);
+                    return ResumeHomeCustomization.builder().id(idService.nextId()).profileId(pid)
+                            .label(e.getLabel()).content(e.getContent()).sortOrder(sortOrder)
+                            .createdAt(now).updatedAt(now).newRecord(true).build();
                 });
     }
 
     private Mono<Void> mergeTestimonials(Long profileId, List<ResumeProfileRequest.TestimonialEntry> incoming) {
-        if (incoming == null) {
-            return Mono.empty(); // null = field not sent, preserve existing data
-        }
-        if (incoming.isEmpty()) {
-            return testimonialRepository.deleteByProfileId(profileId);
-        }
-        return testimonialRepository.findByProfileIdOrderBySortOrderAsc(profileId)
-                .collectMap(ResumeTestimonial::getId)
-                .flatMap(existingMap -> {
-                    var now = LocalDateTime.now();
-                    Set<Long> keepIds = new HashSet<>();
-                    List<ResumeTestimonial> toSave = new ArrayList<>();
-                    for (int i = 0; i < incoming.size(); i++) {
-                        var e = incoming.get(i);
-                        Long eid = parseId(e.getId());
-                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
-                        if (eid != null && existingMap.containsKey(eid)) {
-                            var entity = existingMap.get(eid);
-                            entity.setAuthorName(e.getAuthorName()); entity.setAuthorRole(e.getAuthorRole());
-                            entity.setAuthorCompany(e.getAuthorCompany()); entity.setAuthorImageUrl(DigestUtils.sanitizeUrl(e.getAuthorImageUrl()));
-                            entity.setText(e.getText()); entity.setAccentColor(e.getAccentColor());
-                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
-                            keepIds.add(eid); toSave.add(entity);
-                        } else {
-                            toSave.add(ResumeTestimonial.builder().id(idService.nextId()).profileId(profileId)
-                                    .authorName(e.getAuthorName()).authorRole(e.getAuthorRole())
-                                    .authorCompany(e.getAuthorCompany()).authorImageUrl(DigestUtils.sanitizeUrl(e.getAuthorImageUrl()))
-                                    .text(e.getText()).accentColor(e.getAccentColor()).sortOrder(sortOrder)
-                                    .createdAt(now).updatedAt(now).newRecord(true).build());
-                        }
+        return mergeChildren(profileId, incoming,
+                testimonialRepository.findByProfileIdOrderBySortOrderAsc(profileId),
+                testimonialRepository.deleteByProfileId(profileId),
+                ResumeTestimonial::getId,
+                ResumeProfileRequest.TestimonialEntry::getId,
+                ResumeProfileRequest.TestimonialEntry::getSortOrder,
+                testimonialRepository,
+                (e, entity, sortOrder, now, pid) -> {
+                    if (entity != null) {
+                        entity.setAuthorName(e.getAuthorName()); entity.setAuthorRole(e.getAuthorRole());
+                        entity.setAuthorCompany(e.getAuthorCompany()); entity.setAuthorImageUrl(DigestUtils.sanitizeUrl(e.getAuthorImageUrl()));
+                        entity.setText(e.getText()); entity.setAccentColor(e.getAccentColor());
+                        entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                        return entity;
                     }
-                    return deleteAndSave(existingMap.keySet(), keepIds, testimonialRepository, toSave);
+                    return ResumeTestimonial.builder().id(idService.nextId()).profileId(pid)
+                            .authorName(e.getAuthorName()).authorRole(e.getAuthorRole())
+                            .authorCompany(e.getAuthorCompany()).authorImageUrl(DigestUtils.sanitizeUrl(e.getAuthorImageUrl()))
+                            .text(e.getText()).accentColor(e.getAccentColor()).sortOrder(sortOrder)
+                            .createdAt(now).updatedAt(now).newRecord(true).build();
                 });
     }
 
     private Mono<Void> mergeProficiencies(Long profileId, List<ResumeProfileRequest.ProficiencyEntry> incoming) {
-        if (incoming == null) {
-            return Mono.empty(); // null = field not sent, preserve existing data
-        }
-        if (incoming.isEmpty()) {
-            return proficiencyRepository.deleteByProfileId(profileId);
-        }
-        return proficiencyRepository.findByProfileIdOrderBySortOrderAsc(profileId)
-                .collectMap(ResumeProficiency::getId)
-                .flatMap(existingMap -> {
-                    var now = LocalDateTime.now();
-                    Set<Long> keepIds = new HashSet<>();
-                    List<ResumeProficiency> toSave = new ArrayList<>();
-                    for (int i = 0; i < incoming.size(); i++) {
-                        var e = incoming.get(i);
-                        Long eid = parseId(e.getId());
-                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
-                        if (eid != null && existingMap.containsKey(eid)) {
-                            var entity = existingMap.get(eid);
-                            entity.setCategory(e.getCategory()); entity.setSkillName(e.getSkillName());
-                            entity.setPercentage(e.getPercentage()); entity.setIcon(e.getIcon());
-                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
-                            keepIds.add(eid); toSave.add(entity);
-                        } else {
-                            toSave.add(ResumeProficiency.builder().id(idService.nextId()).profileId(profileId)
-                                    .category(e.getCategory()).skillName(e.getSkillName())
-                                    .percentage(e.getPercentage()).icon(e.getIcon()).sortOrder(sortOrder)
-                                    .createdAt(now).updatedAt(now).newRecord(true).build());
-                        }
+        return mergeChildren(profileId, incoming,
+                proficiencyRepository.findByProfileIdOrderBySortOrderAsc(profileId),
+                proficiencyRepository.deleteByProfileId(profileId),
+                ResumeProficiency::getId,
+                ResumeProfileRequest.ProficiencyEntry::getId,
+                ResumeProfileRequest.ProficiencyEntry::getSortOrder,
+                proficiencyRepository,
+                (e, entity, sortOrder, now, pid) -> {
+                    if (entity != null) {
+                        entity.setCategory(e.getCategory()); entity.setSkillName(e.getSkillName());
+                        entity.setPercentage(e.getPercentage()); entity.setIcon(e.getIcon());
+                        entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                        return entity;
                     }
-                    return deleteAndSave(existingMap.keySet(), keepIds, proficiencyRepository, toSave);
+                    return ResumeProficiency.builder().id(idService.nextId()).profileId(pid)
+                            .category(e.getCategory()).skillName(e.getSkillName())
+                            .percentage(e.getPercentage()).icon(e.getIcon()).sortOrder(sortOrder)
+                            .createdAt(now).updatedAt(now).newRecord(true).build();
                 });
     }
 
     private Mono<Void> mergeProjects(Long profileId, List<ResumeProfileRequest.ProjectEntry> incoming) {
-        if (incoming == null) {
-            return Mono.empty(); // null = field not sent, preserve existing data
-        }
-        if (incoming.isEmpty()) {
-            return projectRepository.deleteByProfileId(profileId);
-        }
-        return projectRepository.findByProfileIdOrderBySortOrderAsc(profileId)
-                .collectMap(ResumeProject::getId)
-                .flatMap(existingMap -> {
-                    var now = LocalDateTime.now();
-                    Set<Long> keepIds = new HashSet<>();
-                    List<ResumeProject> toSave = new ArrayList<>();
-                    for (int i = 0; i < incoming.size(); i++) {
-                        var e = incoming.get(i);
-                        Long eid = parseId(e.getId());
-                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
-                        String tagsJson = e.getTechTags() != null ? toJsonArray(e.getTechTags()) : "[]";
-                        if (eid != null && existingMap.containsKey(eid)) {
-                            var entity = existingMap.get(eid);
-                            entity.setTitle(e.getTitle()); entity.setDescription(e.getDescription());
-                            entity.setImageUrl(DigestUtils.sanitizeUrl(e.getImageUrl())); entity.setProjectUrl(DigestUtils.sanitizeUrl(e.getProjectUrl()));
-                            entity.setRepoUrl(DigestUtils.sanitizeUrl(e.getRepoUrl())); entity.setTechTags(tagsJson);
-                            entity.setFeatured(e.getFeatured());
-                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
-                            keepIds.add(eid); toSave.add(entity);
-                        } else {
-                            toSave.add(ResumeProject.builder().id(idService.nextId()).profileId(profileId)
-                                    .title(e.getTitle()).description(e.getDescription())
-                                    .imageUrl(DigestUtils.sanitizeUrl(e.getImageUrl())).projectUrl(DigestUtils.sanitizeUrl(e.getProjectUrl()))
-                                    .repoUrl(DigestUtils.sanitizeUrl(e.getRepoUrl())).techTags(tagsJson).featured(e.getFeatured())
-                                    .sortOrder(sortOrder).createdAt(now).updatedAt(now).newRecord(true).build());
-                        }
+        return mergeChildren(profileId, incoming,
+                projectRepository.findByProfileIdOrderBySortOrderAsc(profileId),
+                projectRepository.deleteByProfileId(profileId),
+                ResumeProject::getId,
+                ResumeProfileRequest.ProjectEntry::getId,
+                ResumeProfileRequest.ProjectEntry::getSortOrder,
+                projectRepository,
+                (e, entity, sortOrder, now, pid) -> {
+                    String tagsJson = e.getTechTags() != null ? toJsonArray(e.getTechTags()) : "[]";
+                    if (entity != null) {
+                        entity.setTitle(e.getTitle()); entity.setDescription(e.getDescription());
+                        entity.setImageUrl(DigestUtils.sanitizeUrl(e.getImageUrl())); entity.setProjectUrl(DigestUtils.sanitizeUrl(e.getProjectUrl()));
+                        entity.setRepoUrl(DigestUtils.sanitizeUrl(e.getRepoUrl())); entity.setTechTags(tagsJson);
+                        entity.setFeatured(e.getFeatured());
+                        entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                        return entity;
                     }
-                    return deleteAndSave(existingMap.keySet(), keepIds, projectRepository, toSave);
+                    return ResumeProject.builder().id(idService.nextId()).profileId(pid)
+                            .title(e.getTitle()).description(e.getDescription())
+                            .imageUrl(DigestUtils.sanitizeUrl(e.getImageUrl())).projectUrl(DigestUtils.sanitizeUrl(e.getProjectUrl()))
+                            .repoUrl(DigestUtils.sanitizeUrl(e.getRepoUrl())).techTags(tagsJson).featured(e.getFeatured())
+                            .sortOrder(sortOrder).createdAt(now).updatedAt(now).newRecord(true).build();
                 });
     }
 
     private Mono<Void> mergeLearningTopics(Long profileId, List<ResumeProfileRequest.LearningTopicEntry> incoming) {
-        if (incoming == null) {
-            return Mono.empty(); // null = field not sent, preserve existing data
-        }
-        if (incoming.isEmpty()) {
-            return learningTopicRepository.deleteByProfileId(profileId);
-        }
-        return learningTopicRepository.findByProfileIdOrderBySortOrderAsc(profileId)
-                .collectMap(ResumeLearningTopic::getId)
-                .flatMap(existingMap -> {
-                    var now = LocalDateTime.now();
-                    Set<Long> keepIds = new HashSet<>();
-                    List<ResumeLearningTopic> toSave = new ArrayList<>();
-                    for (int i = 0; i < incoming.size(); i++) {
-                        var e = incoming.get(i);
-                        Long eid = parseId(e.getId());
-                        int sortOrder = e.getSortOrder() != null ? e.getSortOrder() : i;
-                        if (eid != null && existingMap.containsKey(eid)) {
-                            var entity = existingMap.get(eid);
-                            entity.setTitle(e.getTitle()); entity.setEmoji(e.getEmoji());
-                            entity.setDescription(e.getDescription()); entity.setColorTheme(e.getColorTheme());
-                            entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
-                            keepIds.add(eid); toSave.add(entity);
-                        } else {
-                            toSave.add(ResumeLearningTopic.builder().id(idService.nextId()).profileId(profileId)
-                                    .title(e.getTitle()).emoji(e.getEmoji()).description(e.getDescription())
-                                    .colorTheme(e.getColorTheme()).sortOrder(sortOrder)
-                                    .createdAt(now).updatedAt(now).newRecord(true).build());
-                        }
+        return mergeChildren(profileId, incoming,
+                learningTopicRepository.findByProfileIdOrderBySortOrderAsc(profileId),
+                learningTopicRepository.deleteByProfileId(profileId),
+                ResumeLearningTopic::getId,
+                ResumeProfileRequest.LearningTopicEntry::getId,
+                ResumeProfileRequest.LearningTopicEntry::getSortOrder,
+                learningTopicRepository,
+                (e, entity, sortOrder, now, pid) -> {
+                    if (entity != null) {
+                        entity.setTitle(e.getTitle()); entity.setEmoji(e.getEmoji());
+                        entity.setDescription(e.getDescription()); entity.setColorTheme(e.getColorTheme());
+                        entity.setSortOrder(sortOrder); entity.setUpdatedAt(now); entity.setNewRecord(false);
+                        return entity;
                     }
-                    return deleteAndSave(existingMap.keySet(), keepIds, learningTopicRepository, toSave);
+                    return ResumeLearningTopic.builder().id(idService.nextId()).profileId(pid)
+                            .title(e.getTitle()).emoji(e.getEmoji()).description(e.getDescription())
+                            .colorTheme(e.getColorTheme()).sortOrder(sortOrder)
+                            .createdAt(now).updatedAt(now).newRecord(true).build();
                 });
     }
 
@@ -481,23 +432,6 @@ public class ResumeProfileService {
     private static Long parseId(String id) {
         if (id == null || id.isBlank()) return null;
         try { return Long.parseLong(id); } catch (NumberFormatException e) { return null; }
-    }
-
-    // F-214: Upsert/merge pattern applied — see merge*() methods in child services
-    private Mono<Void> deleteChildEntities(Long profileId) {
-        return Mono.when(
-                educationService.deleteByProfileId(profileId),
-                experienceService.deleteByProfileId(profileId),
-                skillService.deleteByProfileId(profileId),
-                languageService.deleteByProfileId(profileId),
-                certificationService.deleteByProfileId(profileId),
-                additionalInfoRepository.deleteByProfileId(profileId),
-                homeCustomizationRepository.deleteByProfileId(profileId),
-                testimonialRepository.deleteByProfileId(profileId),
-                proficiencyRepository.deleteByProfileId(profileId),
-                projectRepository.deleteByProfileId(profileId),
-                learningTopicRepository.deleteByProfileId(profileId)
-        );
     }
 
     /**
@@ -763,282 +697,8 @@ public class ResumeProfileService {
     }
 
     // ============================================
-    // HTML GENERATION
-    // ============================================
-
-    private String renderHtml(ResumeProfileResponse profile, String lang) {
-        boolean isPt = "pt".equalsIgnoreCase(lang);
-        var sb = new StringBuilder();
-        sb.append("""
-                <!DOCTYPE html>
-                <html lang="%s">
-                <head>
-                    <meta charset="UTF-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>%s - %s</title>
-                    <style>
-                """.formatted(lang, escapeHtml(profile.getFullName()), isPt ? "Currículo" : "Resume"));
-        sb.append(getResumeStyles());
-        sb.append("""
-                    </style>
-                </head>
-                <body>
-                    <div class="page">
-                """);
-
-        // Header
-        sb.append("""
-                        <div class="header">
-                            <div class="name">%s</div>
-                """.formatted(escapeHtml(profile.getFullName()).toUpperCase()));
-        if (profile.getTitle() != null) {
-            sb.append("            <div class=\"title\">%s</div>\n".formatted(escapeHtml(profile.getTitle())));
-        }
-        var contactParts = new ArrayList<String>();
-        if (StringUtils.hasText(profile.getLocation())) contactParts.add(ICON_LOCATION + " " + escapeHtml(profile.getLocation()));
-        if (StringUtils.hasText(profile.getEmail())) contactParts.add(ICON_EMAIL + " <a href=\"mailto:%s\">%s</a>".formatted(escapeHtml(profile.getEmail()), escapeHtml(profile.getEmail())));
-        if (StringUtils.hasText(profile.getLinkedin())) contactParts.add(ICON_LINKEDIN + " " + contactLink(profile.getLinkedin()));
-        if (StringUtils.hasText(profile.getGithub())) contactParts.add(ICON_GITHUB + " " + contactLink(profile.getGithub()));
-        if (StringUtils.hasText(profile.getWebsite())) contactParts.add(ICON_GLOBE + " " + contactLink(profile.getWebsite()));
-        if (StringUtils.hasText(profile.getPhone())) contactParts.add(ICON_PHONE + " " + escapeHtml(profile.getPhone()));
-        if (!contactParts.isEmpty()) {
-            sb.append("            <div class=\"contact-info\">%s</div>\n".formatted(String.join(" | ", contactParts)));
-        }
-        sb.append("        </div>\n");
-
-        // Professional Summary
-        if (profile.getProfessionalSummary() != null && !profile.getProfessionalSummary().isBlank()) {
-            sb.append("        <div class=\"section-header\">%s</div>\n".formatted(isPt ? "RESUMO PROFISSIONAL" : "PROFESSIONAL SUMMARY"));
-            sb.append("        <div class=\"professional-summary\">%s</div>\n".formatted(sanitizeHtml(profile.getProfessionalSummary())));
-        }
-
-        // Education & Languages
-        boolean hasEducation = profile.getEducations() != null && !profile.getEducations().isEmpty();
-        boolean hasLanguages = profile.getLanguages() != null && !profile.getLanguages().isEmpty();
-        if (hasEducation || hasLanguages) {
-            sb.append("        <div class=\"section-header\">%s</div>\n".formatted(isPt ? "FORMAÇÃO & IDIOMAS" : "EDUCATION & LANGUAGES"));
-            sb.append("        <div class=\"education-languages\">\n");
-            if (hasEducation) {
-                sb.append("            <div class=\"education-col\">\n");
-                boolean firstEdu = true;
-                for (var edu : profile.getEducations()) {
-                    if (!firstEdu) {
-                        sb.append("                <hr class=\"edu-divider\"/>\n");
-                    }
-                    firstEdu = false;
-                    if (edu.getInstitution() != null) sb.append("                <strong>%s</strong>\n".formatted(escapeHtml(edu.getInstitution())));
-                    if (edu.getLocation() != null) sb.append("                <div>%s</div>\n".formatted(escapeHtml(edu.getLocation())));
-                    String dates = formatDateRange(edu.getStartDate(), edu.getEndDate());
-                    if (!dates.isEmpty()) sb.append("                <div>%s</div>\n".formatted(dates));
-                    if (edu.getDegree() != null) {
-                        String degreeText = escapeHtml(edu.getDegree());
-                        if (edu.getFieldOfStudy() != null && !edu.getFieldOfStudy().isBlank()) {
-                            degreeText += " in " + escapeHtml(edu.getFieldOfStudy());
-                        }
-                        sb.append("                <div><strong>%s</strong></div>\n".formatted(degreeText));
-                    }
-                    if (edu.getDescription() != null && !edu.getDescription().isBlank()) {
-                        sb.append("                <div>%s</div>\n".formatted(sanitizeHtml(edu.getDescription())));
-                    }
-                }
-                sb.append("            </div>\n");
-            }
-            if (hasLanguages) {
-                sb.append("            <div class=\"languages-col\">\n");
-                sb.append("                <strong>%s</strong>\n".formatted(isPt ? "Idiomas" : "Languages"));
-                for (var language : profile.getLanguages()) {
-                    sb.append("                <div><strong>%s</strong> - %s</div>\n"
-                            .formatted(escapeHtml(language.getName()), escapeHtml(language.getProficiency())));
-                }
-                sb.append("            </div>\n");
-            }
-            sb.append("        </div>\n");
-        }
-
-        // Technical Skills
-        if (profile.getSkills() != null && !profile.getSkills().isEmpty()) {
-            sb.append("        <div class=\"section-header\">%s</div>\n".formatted(isPt ? "HABILIDADES TÉCNICAS" : "TECHNICAL SKILLS"));
-            sb.append("        <div class=\"skills-section\">\n");
-            for (var skill : profile.getSkills()) {
-                sb.append("            <div class=\"skill-line\">\n");
-                sb.append("                <span class=\"skill-category\">%s:</span>\n".formatted(escapeHtml(skill.getCategory())));
-                sb.append("                <span class=\"skill-content\">%s</span>\n".formatted(sanitizeHtml(skill.getContent())));
-                sb.append("            </div>\n");
-            }
-            sb.append("        </div>\n");
-        }
-
-        // Interests
-        if (profile.getInterests() != null && !profile.getInterests().isBlank()) {
-            sb.append("        <div class=\"section-header\">%s</div>\n".formatted(isPt ? "INTERESSES" : "INTERESTS"));
-            sb.append("        <div class=\"interests-text\">%s</div>\n".formatted(escapeHtml(profile.getInterests())));
-        }
-
-        // Professional Experience
-        if (profile.getExperiences() != null && !profile.getExperiences().isEmpty()) {
-            sb.append("        <div class=\"section-header\">%s</div>\n".formatted(isPt ? "EXPERIÊNCIA PROFISSIONAL" : "PROFESSIONAL EXPERIENCE"));
-            sb.append("        <div class=\"experience-section\">\n");
-            // Merge consecutive entries with same company and date range (multi-position support)
-            var experiences = profile.getExperiences();
-            int i = 0;
-            while (i < experiences.size()) {
-                var exp = experiences.get(i);
-                String dates = formatDateRange(exp.getStartDate(), exp.getEndDate());
-                // Find all consecutive entries sharing same company + dates
-                int j = i + 1;
-                while (j < experiences.size()
-                        && exp.getCompany() != null
-                        && exp.getCompany().equals(experiences.get(j).getCompany())
-                        && dates.equals(formatDateRange(experiences.get(j).getStartDate(), experiences.get(j).getEndDate()))) {
-                    j++;
-                }
-                // Render company header once
-                sb.append("            <div class=\"experience-item\">\n");
-                sb.append("                <div class=\"experience-header\">\n");
-                sb.append("                    <span class=\"company-title\">%s</span>\n".formatted(escapeHtml(exp.getCompany())));
-                if (!dates.isEmpty()) {
-                    sb.append("                    <span class=\"date-range\">%s</span>\n".formatted(dates));
-                }
-                sb.append("                </div>\n");
-                // Render all positions in this group
-                for (int k = i; k < j; k++) {
-                    var entry = experiences.get(k);
-                    if (entry.getPosition() != null) {
-                        sb.append("                <div class=\"position\">> %s</div>\n".formatted(escapeHtml(entry.getPosition())));
-                    }
-                    if (entry.getBullets() != null && !entry.getBullets().isEmpty()) {
-                        sb.append("                <div class=\"experience-details\">\n");
-                        sb.append("                    <ul>\n");
-                        for (var bullet : entry.getBullets()) {
-                            sb.append("                        <li>%s</li>\n".formatted(sanitizeHtml(bullet)));
-                        }
-                        sb.append("                    </ul>\n");
-                        sb.append("                </div>\n");
-                    }
-                }
-                sb.append("            </div>\n");
-                i = j;
-            }
-            sb.append("        </div>\n");
-        }
-
-        // Certifications
-        if (profile.getCertifications() != null && !profile.getCertifications().isEmpty()) {
-            sb.append("        <div class=\"section-header\">%s</div>\n".formatted(isPt ? "CERTIFICAÇÕES" : "CERTIFICATIONS"));
-            for (var cert : profile.getCertifications()) {
-                sb.append("        <div class=\"additional-section\">\n");
-                var certText = new StringBuilder();
-                if (cert.getName() != null) certText.append("<strong>%s</strong>".formatted(escapeHtml(cert.getName())));
-                if (cert.getIssuer() != null) certText.append(" %s %s".formatted(isPt ? "por" : "by", escapeHtml(cert.getIssuer())));
-                if (cert.getIssueDate() != null && !cert.getIssueDate().isBlank()) certText.append(" (%s)".formatted(escapeHtml(cert.getIssueDate())));
-                if (cert.getDescription() != null) certText.append(". %s".formatted(sanitizeHtml(cert.getDescription())));
-                if (cert.getCredentialUrl() != null && !cert.getCredentialUrl().isBlank()) {
-                    certText.append(" <a href=\"%s\" class=\"cert-link\">%s</a>".formatted(
-                            escapeHtml(cert.getCredentialUrl()), isPt ? "Ver Certificado" : "View Certificate"));
-                }
-                sb.append("            %s\n".formatted(certText));
-                sb.append("        </div>\n");
-            }
-        }
-
-        // Additional Information
-        if (profile.getAdditionalInfo() != null && !profile.getAdditionalInfo().isEmpty()) {
-            sb.append("        <div class=\"section-header\">%s</div>\n".formatted(isPt ? "INFORMAÇÕES ADICIONAIS" : "ADDITIONAL INFORMATION"));
-            for (var info : profile.getAdditionalInfo()) {
-                sb.append("        <div class=\"additional-section\">\n");
-                sb.append("            <strong>%s:</strong> %s\n".formatted(
-                        escapeHtml(info.getLabel()), sanitizeHtml(info.getContent())));
-                sb.append("        </div>\n");
-            }
-        }
-
-        sb.append("""
-                    </div>
-                </body>
-                </html>
-                """);
-
-        return sb.toString();
-    }
-
-    private String getResumeStyles() {
-        return """
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { font-family: 'Arial', 'Helvetica', sans-serif; background-color: #f5f5f5; padding: 20px; margin: 0; }
-                @page { size: A4; margin: 8mm 8mm 8mm 8mm; }
-                .page { width: 210mm; background-color: white; margin: 0 auto 20px; padding: 8mm 8mm; box-shadow: 0 0 10px rgba(0,0,0,0.1); line-height: 1.4; font-size: 10px; color: #333; }
-                .header { text-align: center; margin-bottom: 14px; padding-bottom: 0; }
-                .name { font-size: 18px; font-weight: bold; color: #000; margin-bottom: 2px; letter-spacing: 0.5px; }
-                .title { font-size: 10px; color: #666; margin-bottom: 4px; }
-                .contact-info { font-size: 9px; color: #666; letter-spacing: 0px; }
-                .contact-info a { color: #0066cc; text-decoration: none; }
-                .section-header { font-size: 10px; font-weight: bold; color: #000; padding: 2px 0; margin-top: 6px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #ccc; page-break-after: avoid; }
-                .professional-summary { text-align: justify; margin-bottom: 8px; line-height: 1.4; font-size: 10px; }
-                .skills-section { margin-bottom: 8px; }
-                .skill-line { margin-bottom: 3px; text-align: justify; line-height: 1.4; font-size: 10px; }
-                .skill-category { font-weight: bold; display: inline; margin-right: 3px; }
-                .skill-content { display: inline; }
-                .education-languages { display: flex; gap: 40px; margin-bottom: 8px; font-size: 10px; }
-                .education-col strong, .languages-col strong { font-weight: bold; display: block; margin-bottom: 2px; }
-                .education-col, .languages-col { flex: 1; }
-                .education-col div, .languages-col div { margin-bottom: 1px; }
-                .edu-divider { border: none; border-top: 1px solid #ccc; margin: 6px 0; }
-                .interests-text { text-align: justify; margin-bottom: 8px; line-height: 1.4; font-size: 10px; }
-                .experience-section { margin-bottom: 0px; }
-                .experience-item { margin-bottom: 8px; page-break-inside: avoid; orphans: 3; widows: 3; }
-                .experience-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1px; }
-                .company-title { font-weight: bold; font-size: 10px; }
-                .date-range { font-size: 10px; color: #666; }
-                .position { font-weight: bold; font-size: 10px; margin-bottom: 2px; margin-top: 1px; }
-                .experience-details { margin-left: 16px; font-size: 10px; }
-                .experience-details ul { margin: 2px 0; padding-left: 12px; }
-                .experience-details li { margin-bottom: 2px; line-height: 1.4; text-align: justify; }
-                .experience-details strong { font-weight: bold; }
-                .additional-section { margin-bottom: 8px; text-align: justify; line-height: 1.4; font-size: 10px; }
-                .cert-link { color: #0066cc; text-decoration: none; }
-                @media print {
-                    body { padding: 0; margin: 0; background-color: white; }
-                    @page { size: A4; margin: 8mm 8mm; }
-                    .page { width: 100%; min-height: auto; padding: 0; box-shadow: none; margin: 0; }
-                    .section-header { page-break-after: avoid; }
-                    .experience-item { page-break-inside: avoid; orphans: 3; widows: 3; }
-                    .header { page-break-after: avoid; }
-                    .skills-section { page-break-inside: avoid; }
-                    .education-languages { page-break-inside: avoid; }
-                }
-                """;
-    }
-
-    // ============================================
     // UTILITIES
     // ============================================
-
-    private String formatDateRange(String start, String end) {
-        if (start == null && end == null) return "";
-        if (end == null || end.isBlank()) return "Since " + (start != null ? start : "");
-        return (start != null ? start : "") + " - " + end;
-    }
-
-    private String escapeHtml(String text) {
-        return HtmlUtils.escapeHtml(text);
-    }
-
-    /** Wrap a URL in a clickable <a> tag, displaying the domain path without protocol. */
-    private String contactLink(String url) {
-        String escaped = escapeHtml(url);
-        String href = escaped.startsWith("http") ? escaped : "https://" + escaped;
-        String display = escaped.replaceFirst("^https?://", "");
-        return "<a href=\"%s\">%s</a>".formatted(href, display);
-    }
-
-    /**
-     * Sanitize HTML content for resume fields that support rich text (links, bold, italic).
-     * Allows safe inline tags while stripping dangerous elements.
-     */
-    private String sanitizeHtml(String text) {
-        if (text == null) return "";
-        return htmlSanitizer.sanitizeResumeContent(text);
-    }
 
     private String toJsonArray(List<String> items) {
         if (items == null || items.isEmpty()) return "[]";

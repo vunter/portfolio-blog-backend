@@ -43,6 +43,13 @@ class ResumeProfileServiceTest {
     @Mock private ResumeProjectRepository projectRepository;
     @Mock private ResumeLearningTopicRepository learningTopicRepository;
     @Spy private HtmlSanitizerService htmlSanitizer = new HtmlSanitizerService();
+    // ARCH-1: HTML/CSS rendering was extracted into ResumeHtmlRenderer, which
+    // ResumeProfileService now delegates to. Spy a real renderer (built with the
+    // real sanitizer) so @InjectMocks wires it and generateResumeHtml produces
+    // byte-identical HTML. @PostConstruct loadContactIcons() does not run under
+    // @Spy (icons stay null), which is fine: assertions use .contains(...) and
+    // never check icon glyphs.
+    @Spy private ResumeHtmlRenderer htmlRenderer = new ResumeHtmlRenderer(htmlSanitizer);
     @Mock private IdService idService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 

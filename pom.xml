@@ -53,6 +53,17 @@
 	</properties>
 	<dependencyManagement>
 		<dependencies>
+			<!-- Override Boot-managed Spring Framework (parent 4.0.7 manages 7.0.7, affected
+			     by CVE-2026-41842, CVSS 7.5, which trips the failBuildOnCVSS=7 dependency-check
+			     gate): 7.0.8 ships the fix. Imported first so it wins over the Spring Boot BOM.
+			     Remove once Spring Boot 4.0.8 (managing 7.0.8) is adopted. -->
+			<dependency>
+				<groupId>org.springframework</groupId>
+				<artifactId>spring-framework-bom</artifactId>
+				<version>7.0.8</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
 			<!-- Override Boot-managed netty (4.0.6 manages 4.2.12.Final, still vulnerable):
 			     4.2.15.Final fixes CVE-2026-42581/42579/42584 (HTTP request smuggling /
 			     info disclosure, fixed in 4.2.13.Final). netty-bom is imported first so it
@@ -155,6 +166,13 @@
 			<groupId>io.micrometer</groupId>
 			<artifactId>micrometer-registry-datadog</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+		<!-- OBS-2a: Reactor context <-> ThreadLocal/MDC propagation
+		     (enables Hooks.enableAutomaticContextPropagation + MDC accessor).
+		     Version managed by spring-boot-dependencies. -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>context-propagation</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
@@ -274,7 +292,9 @@
 			<artifactId>playwright</artifactId>
 			<version>1.51.0</version>
 		</dependency>
-		<!-- JSoup for HTML parsing/cleaning -->
+		<!-- JSoup for HTML parsing/cleaning.
+		     1.18.1 is staleness-only (no unpatched CVE) — pin kept to avoid an
+		     unverified bump breaking the HTML sanitizer; current-enough for the gate. -->
 		<dependency>
 			<groupId>org.jsoup</groupId>
 			<artifactId>jsoup</artifactId>
@@ -290,6 +310,12 @@
 		<dependency>
 			<groupId>io.github.resilience4j</groupId>
 			<artifactId>resilience4j-reactor</artifactId>
+			<version>2.3.0</version>
+		</dependency>
+		<!-- OBS-1: exports circuit-breaker metrics to Micrometer (wired by ResilienceConfig) -->
+		<dependency>
+			<groupId>io.github.resilience4j</groupId>
+			<artifactId>resilience4j-micrometer</artifactId>
 			<version>2.3.0</version>
 		</dependency>
 

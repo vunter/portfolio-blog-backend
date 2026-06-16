@@ -120,13 +120,15 @@ public class BlogMetrics {
 
     // Counter for specific events - call from services
     public void incrementArticleViews(String slug) {
-        // F-054: Added slug tag for per-article view tracking
-        meterRegistry.counter("blog.article.views.total", "slug", slug).increment();
+        // Cardinality: no per-slug tag — one Micrometer/Datadog series per article slug is an
+        // unbounded foot-gun. Per-article view counts live in the DB (articles.views_count);
+        // this is the aggregate, alertable counter. The slug param is kept for call-site clarity.
+        meterRegistry.counter("blog.article.views.total").increment();
     }
 
     public void incrementArticleLikes(String slug) {
-        // F-054: Added slug tag for per-article like tracking
-        meterRegistry.counter("blog.article.likes.total", "slug", slug).increment();
+        // Cardinality: aggregate counter only (no per-slug tag) — see incrementArticleViews.
+        meterRegistry.counter("blog.article.likes.total").increment();
     }
 
     public void incrementCommentCreated() {

@@ -130,10 +130,13 @@ public class PerformanceMonitoringAspect {
         Timer timer = getOrCreateTimer(metricName, className, methodName, "error");
         timer.record(duration, TimeUnit.NANOSECONDS);
 
-        // Expected business exceptions → WARN; unexpected infrastructure errors → ERROR
+        // Expected business exceptions → DEBUG (no stack trace); unexpected infrastructure errors → ERROR.
+        // OBS-5: Expected 4xx-style failures (404 / bad creds / validation / etc.) are normal traffic; logging a
+        // full stack trace per occurrence floods logs and inflates Datadog cost. Drop the trailing Throwable and
+        // log only the message, at DEBUG — aligning with the 4xx=DEBUG policy in RequestLoggingConfig.
         if (isExpectedException(error)) {
-            log.warn("Operation failed: {}.{} after {}ms: {}",
-                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage(), error);
+            log.debug("Operation failed: {}.{} after {}ms: {}",
+                    className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage());
         } else {
             log.error("Operation failed: {}.{} after {}ms: {}",
                     className, methodName, TimeUnit.NANOSECONDS.toMillis(duration), error.getMessage(), error);

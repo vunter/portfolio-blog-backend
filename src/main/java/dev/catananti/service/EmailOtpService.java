@@ -26,8 +26,10 @@ public class EmailOtpService {
 
     private static final String REDIS_PREFIX = "mfa:email-otp:";
     private static final String OTP_EMAIL_RATE_PREFIX = "mfa:otp:email:";
+    private static final String OTP_ATTEMPTS_PREFIX = "mfa:otp-attempts:";
     private final int maxOtpSendsPerEmail;
     private final Duration otpEmailRateWindow;
+    private final int maxOtpVerifyAttempts;
     private final SecureRandom secureRandom = new SecureRandom();
 
     private final ReactiveStringRedisTemplate redisTemplate;
@@ -47,7 +49,8 @@ public class EmailOtpService {
                            @Value("${mfa.email-otp.length:6}") int otpLength,
                            @Value("${mfa.email-otp.expiration-minutes:10}") int expirationMinutes,
                            @Value("${mfa.email-otp.max-sends:3}") int maxOtpSendsPerEmail,
-                           @Value("${mfa.email-otp.rate-window-minutes:15}") int otpEmailRateWindowMinutes) {
+                           @Value("${mfa.email-otp.rate-window-minutes:15}") int otpEmailRateWindowMinutes,
+                           @Value("${mfa.email-otp.max-verify-attempts:5}") int maxOtpVerifyAttempts) {
         this.redisTemplate = redisTemplate;
         this.emailService = emailService;
         this.mfaConfigRepository = mfaConfigRepository;
@@ -57,6 +60,7 @@ public class EmailOtpService {
         this.expirationMinutes = expirationMinutes;
         this.maxOtpSendsPerEmail = maxOtpSendsPerEmail;
         this.otpEmailRateWindow = Duration.ofMinutes(otpEmailRateWindowMinutes);
+        this.maxOtpVerifyAttempts = maxOtpVerifyAttempts;
     }
 
     /**
@@ -178,21 +182,42 @@ public class EmailOtpService {
 
     /**
      * Verify the OTP code provided by the user during login.
+     *
+     * SEG-5: Brute-force protection. Each verify attempt increments a counter keyed by
+     * userId (TTL = OTP validity, set on the first increment). Once the counter reaches
+     * the configured threshold, the OTP Redis key is invalidated (deleted) and the attempt
+     * is rejected, so a static 6-digit code cannot be guessed across repeated logins.
+     * On success both the OTP key and the attempt counter are removed.
      */
     public Mono<Boolean> verifyOtp(Long userId, String code) {
         String redisKey = REDIS_PREFIX + userId;
-        return redisTemplate.opsForValue().get(redisKey)
-                .flatMap(storedOtp -> {
-                    if (java.security.MessageDigest.isEqual(
-                            storedOtp.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                            code.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
-                        // Delete OTP after successful verification (one-time use)
-                        return redisTemplate.delete(redisKey)
-                                .thenReturn(true);
-                    }
-                    return Mono.just(false);
-                })
-                .defaultIfEmpty(false);
+        String attemptsKey = OTP_ATTEMPTS_PREFIX + userId;
+        return redisTemplate.opsForValue().increment(attemptsKey)
+                .flatMap(attempts -> {
+                    Mono<Boolean> ttlSet = attempts == 1
+                            ? redisTemplate.expire(attemptsKey, Duration.ofMinutes(expirationMinutes))
+                            : Mono.just(true);
+                    return ttlSet.then(Mono.defer(() -> {
+                        if (attempts > maxOtpVerifyAttempts) {
+                            // Too many guesses — invalidate the OTP so a fresh login cannot keep guessing it.
+                            log.warn("Email OTP brute force limit reached for userId={}", userId);
+                            return redisTemplate.delete(redisKey).thenReturn(false);
+                        }
+                        return redisTemplate.opsForValue().get(redisKey)
+                                .flatMap(storedOtp -> {
+                                    if (java.security.MessageDigest.isEqual(
+                                            storedOtp.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                                            code.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                                        // Delete OTP and attempt counter after successful verification (one-time use)
+                                        return redisTemplate.delete(redisKey)
+                                                .then(redisTemplate.delete(attemptsKey))
+                                                .thenReturn(true);
+                                    }
+                                    return Mono.just(false);
+                                })
+                                .defaultIfEmpty(false);
+                    }));
+                });
     }
 
     private String generateOtp() {
