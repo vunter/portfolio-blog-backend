@@ -398,15 +398,6 @@ public class CommentService {
                 .map(this::toResponse);
     }
 
-    private Mono<Comment> enrichWithReplies(Comment comment) {
-        return commentRepository.findApprovedRepliesByParentId(comment.getId())
-                .collectList()
-                .map(replies -> {
-                    comment.setReplies(replies);
-                    return comment;
-                });
-    }
-
     /**
      * Q9.1: Batch-load all replies for a list of root comments in a single query,
      * eliminating the N+1 problem from the paginated endpoint.
