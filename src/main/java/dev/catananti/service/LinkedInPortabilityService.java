@@ -501,5 +501,9 @@ public class LinkedInPortabilityService {
                 .toList();
     }
 
+    // skipcq: JAVA-W0324 — false positive: this record is constructed via
+    // `new SnapshotPage(...)` in fetchDomainPage and consumed via the `SnapshotPage::data`
+    // method reference in fetchDomain; DeepSource's call graph does not link record
+    // construction to the canonical constructor it reports as "never called".
     private record SnapshotPage(List<Map<String, Object>> data, String nextHref) {}
 }

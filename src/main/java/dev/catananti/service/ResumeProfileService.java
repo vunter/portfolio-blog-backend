@@ -456,6 +456,9 @@ public class ResumeProfileService {
                 .reduce(0L, Long::sum);
     }
 
+    // skipcq: JAVA-R1000 — fan-out persistence: complexity comes from conditionally
+    // enqueuing one save op per optional child collection; splitting the method would
+    // not reduce the essential branching, only scatter it.
     private Mono<Void> saveChildEntities(Long profileId, ResumeProfileRequest request) {
         var now = LocalDateTime.now();
         List<Mono<Void>> ops = new ArrayList<>();
