@@ -50,6 +50,36 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
            "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
     Mono<Long> countSearchByStatusAndQuery(String status, String query);
 
+    // Admin-facing search — spans ALL statuses (DRAFT/SCHEDULED/REVIEW/ARCHIVED/PUBLISHED),
+    // unlike the public search which is PUBLISHED-only. LIKE-based so it works on both
+    // Postgres and the H2 test profile.
+    @Query("SELECT * FROM articles WHERE " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+           "ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Article> adminSearchByQuery(String query, int limit, int offset);
+
+    @Query("SELECT COUNT(*) FROM articles WHERE " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
+    Mono<Long> countAdminSearchByQuery(String query);
+
+    // Author-scoped admin search — DEV users only see their own articles.
+    @Query("SELECT * FROM articles WHERE author_id = :authorId AND " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+           "ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Article> adminSearchByAuthorAndQuery(Long authorId, String query, int limit, int offset);
+
+    @Query("SELECT COUNT(*) FROM articles WHERE author_id = :authorId AND " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
+    Mono<Long> countAdminSearchByAuthorAndQuery(Long authorId, String query);
+
     // Q4.2: PostgreSQL FTS variants — match against base article OR any article_i18n translation.
     // Uses 'simple' config for language-agnostic matching (PT/ES/IT/EN all work equally).
     // Backed by GIN indexes in V14 (articles) and V16 (article_i18n).

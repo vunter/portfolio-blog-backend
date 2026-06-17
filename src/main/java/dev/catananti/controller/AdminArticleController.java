@@ -9,7 +9,6 @@ import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.ArticleReview;
 import dev.catananti.entity.ArticleStatus;
 import dev.catananti.service.ArticleAdminService;
-import dev.catananti.service.ArticleService;
 import dev.catananti.service.ArticleTranslationService;
 import jakarta.validation.Valid;
 import dev.catananti.config.PaginationConfig;
@@ -39,7 +38,6 @@ import java.util.Set;
 public class AdminArticleController {
 
     private final ArticleAdminService articleAdminService;
-    private final ArticleService articleService;
     private final ArticleTranslationService articleTranslationService;
     private final PaginationConfig paginationConfig;
 
@@ -56,7 +54,9 @@ public class AdminArticleController {
         size = paginationConfig.clampPageSize(size);
         log.debug("Admin fetching articles: page={}, size={}, status={}, sort={}", page, size, status, sort);
         if (search != null && !search.isBlank()) {
-            return articleService.searchArticles(search.trim(), page, size);
+            // Admin search spans all statuses and is author-scoped for DEV users
+            // (public searchArticles is PUBLISHED-only and ignores ownership).
+            return articleAdminService.searchArticles(search.trim(), page, size);
         }
         return articleAdminService.getAllArticles(page, size, status, sort);
     }

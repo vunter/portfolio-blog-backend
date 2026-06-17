@@ -105,6 +105,36 @@ public class ArticleAdminService {
         });
     }
 
+    /**
+     * Admin-facing search across the caller's articles. Unlike the public
+     * {@link ArticleService#searchArticles} (PUBLISHED-only), this spans ALL statuses so an
+     * author can find DRAFT/SCHEDULED/REVIEW/ARCHIVED articles. DEV users are scoped to their
+     * own articles; ADMIN sees everything.
+     */
+    public Mono<PageResponse<ArticleResponse>> searchArticles(String query, int page, int size) {
+        int offset = page * size;
+
+        return getCurrentUser().flatMap(user -> {
+            Flux<Article> articlesFlux;
+            Mono<Long> countMono;
+            if (isAdmin(user)) {
+                articlesFlux = articleRepository.adminSearchByQuery(query, size, offset);
+                countMono = articleRepository.countAdminSearchByQuery(query);
+            } else {
+                articlesFlux = articleRepository.adminSearchByAuthorAndQuery(user.getId(), query, size, offset);
+                countMono = articleRepository.countAdminSearchByAuthorAndQuery(user.getId(), query);
+            }
+            return articlesFlux
+                    .collectList()
+                    .flatMap(articleService::enrichArticlesWithMetadata)
+                    .zipWith(countMono)
+                    .map(tuple -> {
+                        var content = tuple.getT1().stream().map(articleService::mapToResponse).toList();
+                        return PageResponse.of(content, page, size, tuple.getT2());
+                    });
+        });
+    }
+
     private Flux<Article> findByStatusSorted(String status, String sort, int limit, int offset) {
         return switch (sort) {
             case "oldest" -> articleRepository.findByStatusOrderByCreatedAtAsc(status, limit, offset);

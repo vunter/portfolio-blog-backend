@@ -530,7 +530,7 @@ class ApiEndpointIntegrationTest {
         @BeforeEach
         void setUp() {
             lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
-            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService, paginationConfig);
+            adminArticleController = new AdminArticleController(articleAdminService, articleTranslationService, paginationConfig);
             client = WebTestClient.bindToController(adminArticleController)
                     .configureClient().build();
         }
@@ -1454,7 +1454,7 @@ class ApiEndpointIntegrationTest {
         @BeforeEach
         void setUp() {
             lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
-            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService, paginationConfig);
+            adminArticleController = new AdminArticleController(articleAdminService, articleTranslationService, paginationConfig);
             tagClient = WebTestClient.bindToController(adminTagController)
                     .configureClient().build();
             commentClient = WebTestClient.bindToController(adminCommentController)

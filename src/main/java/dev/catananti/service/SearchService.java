@@ -40,12 +40,17 @@ public class SearchService {
     private static final String ALIAS_ARTICLE_TAGS = "at";
     private static final String ALIAS_TAGS = "t";
 
-    /** Allowlist of sort-key → SQL ORDER BY fragment. New keys must be added here, not built dynamically. */
-    private static final java.util.Map<String, String> SORT_OPTIONS = java.util.Map.of(
-            "date",  "a.published_at DESC",
-            "views", "a.views_count DESC",
-            "likes", "a.likes_count DESC",
-            "title", "a.title ASC"
+    /**
+     * Allowlist of sort-key → unqualified SQL column. New keys must be added here, never
+     * built from raw input.
+     */
+    private static final java.util.Map<String, String> SORT_COLUMNS = java.util.Map.of(
+            "date",      "published_at",
+            "relevance", "published_at",
+            "views",     "views_count",
+            "viewcount", "views_count",
+            "likes",     "likes_count",
+            "title",     "title"
     );
 
     private final ArticleRepository articleRepository;
@@ -191,9 +196,9 @@ public class SearchService {
             return Flux.empty();
         }
 
-        String orderBy = SORT_OPTIONS.getOrDefault(
+        String orderBy = "a." + SORT_COLUMNS.getOrDefault(
                 sortBy != null ? sortBy.toLowerCase() : "date",
-                SORT_OPTIONS.get("date"));
+                "published_at") + " DESC";
 
         // Build parameterized query with positional parameters for tags
         StringBuilder sql = new StringBuilder("""
