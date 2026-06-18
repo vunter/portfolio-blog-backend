@@ -17,6 +17,7 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
+import dev.catananti.util.DigestUtils;
 import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -113,16 +114,18 @@ public class ArticleAdminService {
      */
     public Mono<PageResponse<ArticleResponse>> searchArticles(String query, int page, int size) {
         int offset = page * size;
+        // F-291: sanitize LIKE wildcards to prevent pattern injection.
+        String sanitizedQuery = DigestUtils.escapeLikePattern(query);
 
         return getCurrentUser().flatMap(user -> {
             Flux<Article> articlesFlux;
             Mono<Long> countMono;
             if (isAdmin(user)) {
-                articlesFlux = articleRepository.adminSearchByQuery(query, size, offset);
-                countMono = articleRepository.countAdminSearchByQuery(query);
+                articlesFlux = articleRepository.adminSearchByQuery(sanitizedQuery, size, offset);
+                countMono = articleRepository.countAdminSearchByQuery(sanitizedQuery);
             } else {
-                articlesFlux = articleRepository.adminSearchByAuthorAndQuery(user.getId(), query, size, offset);
-                countMono = articleRepository.countAdminSearchByAuthorAndQuery(user.getId(), query);
+                articlesFlux = articleRepository.adminSearchByAuthorAndQuery(user.getId(), sanitizedQuery, size, offset);
+                countMono = articleRepository.countAdminSearchByAuthorAndQuery(user.getId(), sanitizedQuery);
             }
             return articlesFlux
                     .collectList()
