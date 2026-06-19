@@ -179,7 +179,12 @@ public class ArticleAdminService {
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
                     article.setStatus(ArticleStatus.PUBLISHED);
-                    article.setPublishedAt(LocalDateTime.now());
+                    // Preserve the original publish timestamp on republish so feed/RSS
+                    // ordering is not shuffled every time an already-published article is
+                    // re-published.
+                    if (article.getPublishedAt() == null) {
+                        article.setPublishedAt(LocalDateTime.now());
+                    }
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
                 })
