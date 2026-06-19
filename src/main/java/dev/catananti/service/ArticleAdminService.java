@@ -352,7 +352,9 @@ public class ArticleAdminService {
                     // Otherwise an error path can leave the entity in a partially-mutated
                     // state that a retry could persist.
                     return slugCheck.then(Mono.defer(() -> {
-                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
+                        // When the request omits the status, keep the article's current
+                        // status instead of silently demoting a PUBLISHED article to DRAFT.
+                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), article.getStatus());
                         ArticleStatus oldStatus = article.getStatus();
 
                         article.setSlug(request.getSlug());
