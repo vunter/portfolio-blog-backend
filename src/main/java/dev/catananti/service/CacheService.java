@@ -88,7 +88,19 @@ public class CacheService {
                     cacheHits.incrementAndGet();
                     log.trace("Cache hit for key: {}", key);
                 })
-                .switchIfEmpty(Mono.<T>empty().doOnSubscribe(s -> cacheMisses.incrementAndGet()));
+                .switchIfEmpty(Mono.<T>empty().doOnSubscribe(s -> cacheMisses.incrementAndGet()))
+                // A cache that cannot be reached is a MISS, not a request failure.
+                // isRedisAvailable() above only null-checks the bean, so a connection
+                // error at call time used to propagate and surface as a 500 on every
+                // read-through endpoint (GitHub repos, articles, tags, search, RSS...).
+                // Returning empty lets callers fall through to their real source, which
+                // is the same behaviour set()/delete()/invalidate*() already have via
+                // withRedis(). Logged at warn, not error: the request still succeeds.
+                .onErrorResume(e -> {
+                    cacheMisses.incrementAndGet();
+                    log.warn("Redis read failed for key '{}', treating as cache miss: {}", key, e.toString());
+                    return Mono.empty();
+                });
     }
 
     /**
