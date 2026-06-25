@@ -57,7 +57,9 @@ public class CacheService {
     private static final String TAGS_CACHE_PREFIX = "tags::";
     private static final String COMMENTS_CACHE_PREFIX = "comments::";
     private static final String SEARCH_CACHE_PREFIX = "search::";
-    private static final String FEED_CACHE_PREFIX = "feed::";
+    // Feed responses are cached under fixed keys (not a prefix namespace).
+    private static final String RSS_FEED_KEY = "rss:feed";
+    private static final String SITEMAP_KEY = "sitemap:xml";
     
     // ==================== GENERIC CACHE OPERATIONS ====================
 
@@ -207,7 +209,10 @@ public class CacheService {
      * Invalidate feed caches (RSS, Sitemap).
      */
     public Mono<Long> invalidateFeedCache() {
-        return withRedis(0L, () -> deleteByPattern(FEED_CACHE_PREFIX + "*")
+        return withRedis(0L, () -> Mono.zip(
+                delete(RSS_FEED_KEY).map(deleted -> deleted ? 1L : 0L),
+                delete(SITEMAP_KEY).map(deleted -> deleted ? 1L : 0L)
+        ).map(tuple -> tuple.getT1() + tuple.getT2())
                 .doOnSuccess(count -> {
                     if (count > 0) log.info("Invalidated {} feed cache entries", count);
                 }));
@@ -236,7 +241,7 @@ public class CacheService {
                 countByPattern(TAGS_CACHE_PREFIX + "*"),
                 countByPattern(COMMENTS_CACHE_PREFIX + "*"),
                 countByPattern(SEARCH_CACHE_PREFIX + "*"),
-                countByPattern(FEED_CACHE_PREFIX + "*")
+                countByPattern(RSS_FEED_KEY).zipWith(countByPattern(SITEMAP_KEY), Long::sum)
         ).map(tuple -> new CacheStats(
                 tuple.getT1(),
                 tuple.getT2(),
