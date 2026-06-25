@@ -18,13 +18,17 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
     @Query("SELECT COUNT(*) FROM analytics_events WHERE article_id = :articleId AND event_type = :eventType")
     Mono<Long> countByArticleIdAndEventType(Long articleId, String eventType);
 
-    @Query("SELECT COUNT(*) FROM analytics_events WHERE event_type = :eventType AND created_at >= :since")
+    // Exclude bot traffic (device_type = 'Bot') from headline totals, consistent with
+    // the unique/daily aggregates in AnalyticsService.
+    @Query("SELECT COUNT(*) FROM analytics_events WHERE event_type = :eventType AND created_at >= :since " +
+           "AND (device_type IS NULL OR device_type <> 'Bot')")
     Mono<Long> countByEventTypeSince(String eventType, LocalDateTime since);
 
     // Author-scoped analytics queries (for DEV dashboard)
     @Query("SELECT COUNT(*) FROM analytics_events ae " +
            "JOIN articles a ON ae.article_id = a.id " +
-           "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :since")
+           "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :since " +
+           "AND (ae.device_type IS NULL OR ae.device_type <> 'Bot')")
     Mono<Long> countByAuthorIdAndEventTypeSince(Long authorId, String eventType, LocalDateTime since);
 
     // BUG-12: Removed Flux<Object[]> methods — R2DBC does not support Object[] projections.

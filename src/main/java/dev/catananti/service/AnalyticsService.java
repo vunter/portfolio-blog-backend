@@ -244,6 +244,7 @@ public class AnalyticsService {
                 "SELECT COUNT(DISTINCT ae.user_ip) AS cnt FROM analytics_events ae"
                         + authorJoin(authorId)
                         + " WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since"
+                        + " AND ae.device_type != 'Bot'"
                         + authorPredicate(authorId))
                 .bind("since", since);
         spec = bindAuthor(spec, authorId);
@@ -260,6 +261,7 @@ public class AnalyticsService {
                         + " FROM analytics_events ae"
                         + authorJoin(authorId)
                         + " WHERE ae.event_type = :eventType AND ae.created_at >= :since"
+                        + " AND ae.device_type != 'Bot'"
                         + authorPredicate(authorId)
                         + " GROUP BY CAST(ae.created_at AS DATE)"
                         + " ORDER BY stat_date"
