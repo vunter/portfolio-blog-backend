@@ -174,11 +174,10 @@ public class AnalyticsService {
     public Mono<AnalyticsSummary> getAnalyticsSummary(int days) {
         LocalDateTime since = LocalDateTime.now().minusDays(days);
 
-        // BUG-RT6: Fall back to article table counts when analytics_events has no data
-        Mono<Long> totalViewsMono = analyticsRepository.countByEventTypeSince("VIEW", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCount());
-        Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumLikesCount());
+        // M11: return the real windowed counts (0 when empty); no all-time fallback,
+        // which contradicted the daily/unique fields.
+        Mono<Long> totalViewsMono = analyticsRepository.countByEventTypeSince("VIEW", since);
+        Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since);
         Mono<Long> totalSharesMono = analyticsRepository.countByEventTypeSince("SHARE", since);
 
         return buildSummary(since, null, totalViewsMono, totalLikesMono, totalSharesMono);
@@ -291,6 +290,7 @@ public class AnalyticsService {
                 .bind("since", since)
                 .bind("limit", limit);
         spec = bindAuthor(spec, authorId);
+        // M11: return the windowed (possibly empty) period result; no all-time top-10 fallback.
         return spec
                 .map((row, meta) -> Map.entry(
                         row.get("article_id", Long.class),
@@ -313,30 +313,7 @@ public class AnalyticsService {
                                                 .build();
                                     })
                                     .toList());
-                })
-                .flatMap(list -> list.isEmpty() ? getTopArticlesFromViewCounts(limit, authorId) : Mono.just(list));
-    }
-
-    // BUG-RT6: Fallback to article view counts when analytics_events table has no data
-    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesFromViewCounts(int limit, Long authorId) {
-        var spec = databaseClient.sql(
-                "SELECT id, title, slug, views_count"
-                        + " FROM articles"
-                        + " WHERE views_count > 0"
-                        + (authorId != null ? " AND author_id = :authorId" : "")
-                        + " ORDER BY views_count DESC"
-                        + " LIMIT :limit")
-                .bind("limit", limit);
-        spec = bindAuthor(spec, authorId);
-        return spec
-                .map((row, meta) -> AnalyticsSummary.TopArticle.builder()
-                        .articleId(row.get("id", Long.class).toString())
-                        .title(row.get("title", String.class))
-                        .slug(row.get("slug", String.class))
-                        .views(row.get("views_count", Long.class))
-                        .build())
-                .all()
-                .collectList();
+                });
     }
 
     private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrers(LocalDateTime since, int limit, Long authorId) {
@@ -452,10 +429,9 @@ public class AnalyticsService {
     public Mono<AnalyticsSummary> getAnalyticsSummaryByAuthor(int days, Long authorId) {
         LocalDateTime since = LocalDateTime.now().minusDays(days);
 
-        Mono<Long> totalViewsMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCountByAuthorId(authorId));
-        Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : Mono.just(0L));
+        // M11: return the real windowed counts (0 when empty); no all-time fallback.
+        Mono<Long> totalViewsMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", since);
+        Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since);
         Mono<Long> totalSharesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", since);
 
         return buildSummary(since, authorId, totalViewsMono, totalLikesMono, totalSharesMono);
