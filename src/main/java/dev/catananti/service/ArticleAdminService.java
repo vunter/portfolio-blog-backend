@@ -193,7 +193,7 @@ public class ArticleAdminService {
                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
                 });
         return transactionalOperator.transactional(publish)
-                .flatMap(article -> invalidateFeedCaches()
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
                         .then(notifySubscribersAboutNewArticle(article))
                         .thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
@@ -211,7 +211,7 @@ public class ArticleAdminService {
                     return articleRepository.save(article);
                 })
                 .doOnSuccess(a -> log.info("Article unpublished: {}", a.getSlug()))
-                .flatMap(article -> invalidateFeedCaches().thenReturn(article))
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug()).thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -227,7 +227,7 @@ public class ArticleAdminService {
                     return articleRepository.save(article);
                 })
                 .doOnSuccess(a -> log.info("Article archived: {}", a.getSlug()))
-                .flatMap(article -> invalidateFeedCaches().thenReturn(article))
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug()).thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -301,6 +301,7 @@ public class ArticleAdminService {
                         notificationEventService.articleCreated(a.getTitle(), a.getSlug());
                     }
                 })
+                .flatMap(a -> invalidateArticleAndFeedCaches(a.getSlug()).thenReturn(a))
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -338,6 +339,9 @@ public class ArticleAdminService {
                             .then(Mono.just(article));
                 })
                 .flatMap(article -> {
+                    // Capture the slug before any mutation so both the old and new
+                    // slug caches can be invalidated after the save.
+                    final String oldSlug = article.getSlug();
                     // BUG-06 fix: Check for slug collision with other articles
                     String newSlug = request.getSlug();
                     Mono<Void> slugCheck = Mono.empty();
@@ -392,6 +396,16 @@ public class ArticleAdminService {
                                                     .then(Mono.just(saved));
                                         });
                             })
+                            .flatMap(saved -> {
+                                String savedSlug = saved.getSlug();
+                                Mono<Void> invalidate = oldSlug.equals(savedSlug)
+                                        ? invalidateArticleAndFeedCaches(savedSlug)
+                                        : Mono.when(
+                                                invalidateFeedCaches(),
+                                                cacheService.invalidateArticle(oldSlug),
+                                                cacheService.invalidateArticle(savedSlug));
+                                return invalidate.thenReturn(saved);
+                            })
                             .doOnSuccess(a -> log.info("Article updated: {}", a.getSlug()))
                             .flatMap(articleService::enrichArticleWithMetadata)
                             .map(articleService::mapToResponse);
@@ -422,7 +436,8 @@ public class ArticleAdminService {
                                     return articleRepository.save(article);
                                 }))
                         .count())
-                .flatMap(count -> invalidateFeedCaches().thenReturn(count))
+                .flatMap(count -> Mono.when(invalidateFeedCaches(), cacheService.invalidateAllArticles())
+                        .thenReturn(count))
                 .doOnSuccess(count -> log.info("Bulk status update: {} articles → {}", count, status));
     }
 
@@ -438,8 +453,8 @@ public class ArticleAdminService {
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> articleRepository.deleteById(id)
                         .doOnSuccess(v -> log.info("Article deleted: {} (slug={})", id, article.getSlug()))
-                )
-                .then(invalidateFeedCaches());
+                        .then(invalidateArticleAndFeedCaches(article.getSlug()))
+                );
     }
 
     // ==================== REVIEW WORKFLOW ====================
@@ -496,7 +511,7 @@ public class ArticleAdminService {
                     log.info("Article review approved: {}", a.getSlug());
                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
                 })
-                .flatMap(article -> invalidateFeedCaches()
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
                         .then(notifySubscribersAboutNewArticle(article))
                         .thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
@@ -546,6 +561,19 @@ public class ArticleAdminService {
                 cacheService.delete(RSS_CACHE_KEY),
                 cacheService.delete(SITEMAP_CACHE_KEY)
         ).doOnSuccess(v -> log.debug("Feed caches invalidated"));
+    }
+
+    /**
+     * Invalidate both the public article read-through cache (slug + published-page
+     * entries, including locale variants) and the RSS/sitemap feed caches. Called
+     * after every mutating article operation so unpublished/deleted/edited content
+     * is not served stale from Redis.
+     */
+    private Mono<Void> invalidateArticleAndFeedCaches(String slug) {
+        return Mono.when(
+                invalidateFeedCaches(),
+                cacheService.invalidateArticle(slug)
+        );
     }
 
     private Mono<Void> notifySubscribersAboutNewArticle(Article article) {

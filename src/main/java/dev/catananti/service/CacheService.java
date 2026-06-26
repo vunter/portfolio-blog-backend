@@ -148,10 +148,14 @@ public class CacheService {
      */
     public Mono<Long> invalidateArticle(String slug) {
         return withRedis(0L, () -> Mono.zip(
+                // Exact slug key plus locale-suffixed variants (articles::slug_<slug>:pt, :es, ...).
+                // A bare SCAN MATCH without a wildcard only matches the exact key, so the
+                // locale variants would otherwise survive invalidation.
                 deleteByPattern(ARTICLES_CACHE_PREFIX + "slug_" + slug),
+                deleteByPattern(ARTICLES_CACHE_PREFIX + "slug_" + slug + ":*"),
                 deleteByPattern(ARTICLES_CACHE_PREFIX + "related_" + slug + "*"),
                 deleteByPattern(ARTICLES_CACHE_PREFIX + "published_page_*")
-        ).map(tuple -> tuple.getT1() + tuple.getT2() + tuple.getT3())
+        ).map(tuple -> tuple.getT1() + tuple.getT2() + tuple.getT3() + tuple.getT4())
          .doOnSuccess(count -> log.info("Invalidated cache for article: {}", slug)));
     }
 
