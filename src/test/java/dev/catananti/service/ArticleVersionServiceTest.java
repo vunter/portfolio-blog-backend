@@ -21,7 +21,7 @@ import reactor.test.StepVerifier;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,6 +36,9 @@ class ArticleVersionServiceTest {
     @Mock
     private IdService idService;
 
+    @Mock
+    private CacheService cacheService;
+
     @InjectMocks
     private ArticleVersionService versionService;
 
@@ -45,6 +48,11 @@ class ArticleVersionServiceTest {
 
     @BeforeEach
     void setUp() {
+        // restoreVersion invalidates caches after saving (A6); lenient because the
+        // non-restore tests don't hit that path.
+        lenient().when(cacheService.invalidateArticle(anyString())).thenReturn(Mono.just(0L));
+        lenient().when(cacheService.invalidateFeedCache()).thenReturn(Mono.just(0L));
+
         articleId = 1234567890123456789L;
         testArticle = Article.builder()
                 .id(articleId)
