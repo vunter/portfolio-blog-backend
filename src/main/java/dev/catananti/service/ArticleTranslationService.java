@@ -87,7 +87,26 @@ public class ArticleTranslationService {
                             .map(translated -> buildI18n(articleId, targetLang, translated, true));
                 })
                 .flatMap(i18n -> articleI18nRepository.upsert(i18n).thenReturn(i18n))
-                .doOnSuccess(i18n -> log.info("Article {} translated to {}", articleId, targetLang));
+                .doOnSuccess(i18n -> {
+                    // Drop any cached (stale) overlay so the fresh translation is served.
+                    invalidateTranslationCache(articleId, targetLang);
+                    log.info("Article {} translated to {}", articleId, targetLang);
+                });
+    }
+
+    /**
+     * Evict the in-memory translation overlay for an article+locale. Called whenever a
+     * translation is (re-)created or deleted, so the public localized article does not keep
+     * serving the previous/removed translation for up to the 1h cache TTL.
+     */
+    private void invalidateTranslationCache(Long articleId, String locale) {
+        if (locale == null) {
+            return;
+        }
+        // getTranslation() caches under the raw locale; applyTranslation() under the
+        // lower-cased locale — evict both spellings.
+        translationCache.invalidate(articleId + ":" + locale);
+        translationCache.invalidate(articleId + ":" + locale.toLowerCase());
     }
 
     /**
@@ -122,7 +141,8 @@ public class ArticleTranslationService {
      * Delete a specific translation.
      */
     public Mono<Void> deleteTranslation(Long articleId, String locale) {
-        return articleI18nRepository.deleteByArticleIdAndLocale(articleId, locale);
+        return articleI18nRepository.deleteByArticleIdAndLocale(articleId, locale)
+                .doOnSuccess(v -> invalidateTranslationCache(articleId, locale));
     }
 
     /**
