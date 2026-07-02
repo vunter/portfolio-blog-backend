@@ -422,7 +422,9 @@ public class EmailService {
         String subject = msg("email.comment.notification.subject", articleTitle);
         String articleUrl = siteUrl + "/blog/" + articleSlug;
 
-        String safeCommentContent = escapeHtml(commentContent);
+        // B4: bodyText is bound via th:utext (unescaped) so its interpolated values must be
+        // pre-escaped; commentContent is bound via th:text (Thymeleaf escapes it) so passing
+        // it raw avoids double-escaping.
         String safeCommenterName = escapeHtml(commenterName);
         String safeArticleTitle = escapeHtml(articleTitle);
 
@@ -432,7 +434,7 @@ public class EmailService {
             Map.of(
                 "greeting", msg("email.greeting", authorName),
                 "bodyText", msg("email.comment.notification.body", safeCommenterName, safeArticleTitle),
-                "commentContent", safeCommentContent,
+                "commentContent", commentContent,
                 "articleUrl", articleUrl,
                 "viewText", msg("email.comment.notification.view")
             )
