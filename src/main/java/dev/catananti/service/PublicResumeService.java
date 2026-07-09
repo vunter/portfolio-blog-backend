@@ -249,10 +249,14 @@ public class PublicResumeService {
     private String buildFullHtml(ResumeTemplate template, String lang) {
         String html = template.getHtmlContent();
         
-        // If the HTML content is already a complete document, sanitize and return
+        // If the HTML content is already a complete document, sanitize and return.
+        // Must use the layout-preserving sanitizer: the Safelist-based sanitize() keeps
+        // only body content and an attribute allowlist, so it silently discarded the
+        // <head> (and every <style> in it) plus all class/style attributes — the template
+        // rendered with correct text and zero formatting.
         if (html != null && html.trim().toLowerCase().startsWith("<!doctype")) {
             log.debug("Template HTML is a complete document, sanitizing before use");
-            return htmlSanitizerService.sanitize(html);
+            return htmlSanitizerService.sanitizeFullDocument(html);
         }
         
         // Otherwise, wrap in a basic HTML structure

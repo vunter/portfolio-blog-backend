@@ -72,6 +72,49 @@ public class HtmlSanitizerService {
     }
 
     /**
+     * Sanitize a COMPLETE, owner-authored HTML document while preserving its layout.
+     *
+     * <p>Why this exists: {@link #sanitize(String)} runs {@code Jsoup.clean} with a
+     * {@code Safelist}, which keeps only <em>body</em> content and an attribute allowlist.
+     * For a full document that means the entire {@code <head>} is dropped (taking every
+     * {@code <style>} block with it), {@code class} attributes are not on the relaxed
+     * allowlist, and {@code style} is explicitly removed. A resume template therefore came
+     * out with its markup intact but every bit of styling gone — a visually broken PDF.
+     *
+     * <p>This method instead keeps the document structure (head, style, class, inline style)
+     * and removes only active content: script-bearing tags, {@code on*} event handlers and
+     * {@code javascript:} URLs. It is intended ONLY for HTML authored by the site owner and
+     * stored in {@code resume_templates} — never for visitor-supplied input, which must keep
+     * using {@link #sanitize(String)} or {@link #sanitizeResumeContent(String)}.
+     *
+     * <p>Defence in depth: the PDF pipeline sanitizes again and blocks every outbound
+     * request before rendering, so external {@code url()} references cannot phone home.
+     *
+     * @param input A full HTML document
+     * @return The document with active content stripped and presentation preserved
+     */
+    public String sanitizeFullDocument(String input) {
+        if (input == null || input.isEmpty()) {
+            return input;
+        }
+        log.debug("Sanitizing full HTML document (layout-preserving), length={}", input.length());
+        org.jsoup.nodes.Document doc = Jsoup.parse(input);
+        doc.select("script, iframe, object, embed, applet, form, input, textarea, select, button").remove();
+        doc.getAllElements().forEach(element -> {
+            element.attributes().asList().stream()
+                    .filter(attr -> attr.getKey().toLowerCase().startsWith("on"))
+                    .forEach(attr -> element.removeAttr(attr.getKey()));
+            for (String urlAttr : new String[]{"href", "src", "action"}) {
+                String val = element.attr(urlAttr);
+                if (val != null && val.trim().toLowerCase().replaceAll("\\s", "").startsWith("javascript:")) {
+                    element.removeAttr(urlAttr);
+                }
+            }
+        });
+        return doc.html();
+    }
+
+    /**
      * Sanitize plain text content by escaping HTML entities.
      * Use this for content that should not contain any HTML.
      *
