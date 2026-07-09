@@ -77,7 +77,10 @@ public class NewsletterTrackingController {
         return trackingService.recordClick(token, url, request)
                 .then(Mono.just(ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(url))
-                        .build()));
+                        .<Void>build()))
+                .onErrorResume(e -> Mono.just(ResponseEntity.status(HttpStatus.FOUND)
+                        .location(URI.create(url))
+                        .<Void>build()));
     }
 
     private boolean isValidRedirectUrl(String url) {
