@@ -65,6 +65,7 @@ class PublicResumeServiceTest {
 
         // HtmlSanitizerService passes through content in tests
         lenient().when(htmlSanitizerService.sanitize(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(htmlSanitizerService.sanitizeFullDocument(anyString())).thenAnswer(inv -> inv.getArgument(0));
     }
 
     // ============================
