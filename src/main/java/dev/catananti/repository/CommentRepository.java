@@ -7,6 +7,8 @@ import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
+
 @Repository
 public interface CommentRepository extends ReactiveCrudRepository<Comment, Long> {
 
@@ -25,9 +27,11 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
     @Query("SELECT * FROM comments WHERE parent_id = :parentId AND status = 'APPROVED' ORDER BY created_at ASC")
     Flux<Comment> findApprovedRepliesByParentId(Long parentId);
 
-    // Q9.1: Batch-load replies for multiple parent IDs to avoid N+1
+    // Q9.1: Batch-load replies for multiple parent IDs to avoid N+1.
+    // Must be a Collection: spring-r2dbc only expands Collection parameters into
+    // IN lists — an array binds as a single bigint[] and fails on PostgreSQL.
     @Query("SELECT * FROM comments WHERE parent_id IN (:parentIds) AND status = 'APPROVED' ORDER BY created_at ASC")
-    Flux<Comment> findApprovedRepliesByParentIds(Long[] parentIds);
+    Flux<Comment> findApprovedRepliesByParentIds(List<Long> parentIds);
 
     @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' ORDER BY created_at ASC LIMIT :limit")
     Flux<Comment> findAllApprovedByArticleId(Long articleId, int limit);
