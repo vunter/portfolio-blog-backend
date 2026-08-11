@@ -121,7 +121,7 @@ public class RefreshTokenService {
      * Re-rotate from the latest active token instead of treating it as theft.
      */
     private Mono<RefreshToken> handleRevokedTokenReuse(RefreshToken revokedToken, String ipAddress, String userAgent) {
-        return refreshTokenRepository.findActiveByUserId(revokedToken.getUserId())
+        return refreshTokenRepository.findActiveByUserId(revokedToken.getUserId(), LocalDateTime.now())
                 .next()
                 .flatMap(latestActive -> {
                     boolean withinGrace = latestActive.getCreatedAt()
@@ -129,10 +129,18 @@ public class RefreshTokenService {
                             .isAfter(LocalDateTime.now());
 
                     if (withinGrace) {
-                        log.info("Grace period: re-rotating for user {} (failed rotation retry)", revokedToken.getUserId());
-                        latestActive.setRevoked(true);
-                        return refreshTokenRepository.save(latestActive)
-                                .then(rotateRefreshToken(latestActive, ipAddress, userAgent));
+                        // CC-03: revoke conditionally — only the retry that actually flips
+                        // revoked=false may re-rotate; a concurrent retry that lost the race
+                        // must not mint a second active token.
+                        return refreshTokenRepository.revokeByTokenIfActive(latestActive.getToken())
+                                .flatMap(rows -> {
+                                    if (rows == 0) {
+                                        log.warn("Grace period re-rotation lost the race for user {}", revokedToken.getUserId());
+                                        return Mono.error(new SecurityException("error.unauthorized"));
+                                    }
+                                    log.info("Grace period: re-rotating for user {} (failed rotation retry)", revokedToken.getUserId());
+                                    return rotateRefreshToken(latestActive, ipAddress, userAgent);
+                                });
                     }
 
                     log.warn("Revoked token reuse outside grace period for user: {}", revokedToken.getUserId());
@@ -196,7 +204,7 @@ public class RefreshTokenService {
     }
 
     public reactor.core.publisher.Flux<RefreshToken> getActiveSessions(Long userId) {
-        return refreshTokenRepository.findActiveByUserId(userId);
+        return refreshTokenRepository.findActiveByUserId(userId, LocalDateTime.now());
     }
 
     @Transactional
