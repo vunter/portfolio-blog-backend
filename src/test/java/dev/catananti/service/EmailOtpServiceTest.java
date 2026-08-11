@@ -45,6 +45,9 @@ class EmailOtpServiceTest {
     @Mock
     private IdService idService;
 
+    @Mock
+    private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
+
     private EmailOtpService emailOtpService;
 
     private User testUser;
@@ -53,7 +56,7 @@ class EmailOtpServiceTest {
     void setUp() {
         emailOtpService = new EmailOtpService(
                 redisTemplate, emailService, mfaConfigRepository,
-                userRepository, idService,
+                userRepository, idService, transactionalOperator,
                 6,   // otpLength
                 10,  // expirationMinutes
                 3,   // maxOtpSendsPerEmail
@@ -73,6 +76,8 @@ class EmailOtpServiceTest {
                 .build();
 
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(transactionalOperator.transactional(any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
 
         // SEG-5: brute-force attempt counter. verifyOtp (and verifySetup, which calls it)
         // increments a per-user counter, sets a TTL on first increment, and on success
@@ -97,6 +102,18 @@ class EmailOtpServiceTest {
                 .verifyComplete();
 
         verify(redisTemplate).delete("mfa:email-otp:100");
+    }
+
+    @Test
+    @DisplayName("verifyOtp should return false when OTP was concurrently consumed (DEL count 0)")
+    void verifyOtp_ShouldReturnFalse_WhenOtpConcurrentlyConsumed() {
+        // Both requests read the same OTP, but Redis DEL is atomic: the loser sees 0 keys deleted
+        when(valueOperations.get("mfa:email-otp:100")).thenReturn(Mono.just("123456"));
+        when(redisTemplate.delete("mfa:email-otp:100")).thenReturn(Mono.just(0L));
+
+        StepVerifier.create(emailOtpService.verifyOtp(100L, "123456"))
+                .assertNext(result -> assertThat(result).isFalse())
+                .verifyComplete();
     }
 
     @Test
@@ -243,8 +260,8 @@ class EmailOtpServiceTest {
                 .build();
         when(mfaConfigRepository.findByUserIdAndMethod(100L, "EMAIL")).thenReturn(Mono.just(config));
         when(mfaConfigRepository.save(any(UserMfaConfig.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-        when(userRepository.findById(100L)).thenReturn(Mono.just(testUser));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.enableMfaWithFallbackPreferred(eq(100L), eq("EMAIL"), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(1L));
 
         StepVerifier.create(emailOtpService.verifySetup(100L, "123456"))
                 .verifyComplete();
@@ -252,9 +269,7 @@ class EmailOtpServiceTest {
         verify(mfaConfigRepository).save(argThat(c ->
                 Boolean.TRUE.equals(c.getVerified()) && !c.isNewRecord()
         ));
-        verify(userRepository).save(argThat(u ->
-                Boolean.TRUE.equals(u.getMfaEnabled()) && "EMAIL".equals(u.getMfaPreferredMethod())
-        ));
+        verify(userRepository).enableMfaWithFallbackPreferred(eq(100L), eq("EMAIL"), any(LocalDateTime.class));
     }
 
     @Test
@@ -276,9 +291,10 @@ class EmailOtpServiceTest {
         when(redisTemplate.delete("mfa:email-otp:100")).thenReturn(Mono.just(1L));
 
         when(mfaConfigRepository.findByUserIdAndMethod(100L, "EMAIL")).thenReturn(Mono.empty());
-        // findById is eagerly evaluated in .then() chain, so must be stubbed even though
-        // the switchIfEmpty error will prevent it from being subscribed to
-        when(userRepository.findById(100L)).thenReturn(Mono.empty());
+        // The partial update is eagerly evaluated in the .then() chain, so it must be stubbed
+        // even though the switchIfEmpty error prevents it from being subscribed to
+        lenient().when(userRepository.enableMfaWithFallbackPreferred(eq(100L), eq("EMAIL"), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(1L));
 
         StepVerifier.create(emailOtpService.verifySetup(100L, "123456"))
                 .expectError(IllegalStateException.class)
@@ -286,7 +302,7 @@ class EmailOtpServiceTest {
     }
 
     @Test
-    @DisplayName("verifySetup should not overwrite existing preferred method if already set")
+    @DisplayName("verifySetup should enable MFA passing EMAIL only as fallback preferred method")
     void verifySetup_ShouldNotOverwritePreferredMethod_WhenAlreadySet() {
         when(valueOperations.get("mfa:email-otp:100")).thenReturn(Mono.just("123456"));
         when(redisTemplate.delete("mfa:email-otp:100")).thenReturn(Mono.just(1L));
@@ -297,20 +313,16 @@ class EmailOtpServiceTest {
                 .build();
         when(mfaConfigRepository.findByUserIdAndMethod(100L, "EMAIL")).thenReturn(Mono.just(config));
         when(mfaConfigRepository.save(any(UserMfaConfig.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-
-        User userWithExistingMfa = User.builder()
-                .id(100L).email("user@example.com").name("Test User")
-                .mfaEnabled(true).mfaPreferredMethod("TOTP")
-                .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now())
-                .build();
-        when(userRepository.findById(100L)).thenReturn(Mono.just(userWithExistingMfa));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.enableMfaWithFallbackPreferred(eq(100L), eq("EMAIL"), any(LocalDateTime.class)))
+                .thenReturn(Mono.just(1L));
 
         StepVerifier.create(emailOtpService.verifySetup(100L, "123456"))
                 .verifyComplete();
 
-        // Preferred method should remain TOTP since it was already set
-        verify(userRepository).save(argThat(u -> "TOTP".equals(u.getMfaPreferredMethod())));
+        // An existing preferred method (e.g. TOTP) is preserved by the COALESCE in the
+        // partial UPDATE — the service only supplies EMAIL as the fallback.
+        verify(userRepository).enableMfaWithFallbackPreferred(eq(100L), eq("EMAIL"), any(LocalDateTime.class));
+        verify(userRepository, never()).save(any(User.class));
     }
 
     @Test

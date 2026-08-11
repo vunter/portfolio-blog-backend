@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.ReactiveValueOperations;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -65,6 +66,9 @@ class MfaServiceTest {
     @Mock
     private ReactiveValueOperations<String, String> valueOperations;
 
+    @Mock
+    private TransactionalOperator transactionalOperator;
+
     private MfaService mfaService;
 
     private static final Long USER_ID = 1234567890123456789L;
@@ -86,6 +90,7 @@ class MfaServiceTest {
                 emailOtpService,
                 auditService,
                 redisTemplate,
+                transactionalOperator,
                 "Catananti Portfolio",  // issuer
                 6,                       // digits
                 30,                      // periodSeconds
@@ -106,6 +111,8 @@ class MfaServiceTest {
                 .build();
 
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(transactionalOperator.transactional(any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
     }
 
     // ==================== setupTotp ====================
@@ -259,7 +266,7 @@ class MfaServiceTest {
 
             when(mfaConfigRepository.save(any(UserMfaConfig.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
             when(userRepository.findById(USER_ID)).thenReturn(Mono.just(testUser));
-            when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.enableMfa(eq(USER_ID), eq("TOTP"), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(auditService.logMfaEnabled(eq(USER_ID), eq(USER_EMAIL), eq("TOTP"))).thenReturn(Mono.empty());
             when(backupCodeRepository.deleteByUserId(USER_ID)).thenReturn(Mono.empty());
             when(idService.nextId()).thenReturn(200L);
@@ -272,8 +279,7 @@ class MfaServiceTest {
 
             verify(mfaConfigRepository).save(argThat(config ->
                     config.getVerified() && !config.isNewRecord()));
-            verify(userRepository).save(argThat(user ->
-                    Boolean.TRUE.equals(user.getMfaEnabled()) && "TOTP".equals(user.getMfaPreferredMethod())));
+            verify(userRepository).enableMfa(eq(USER_ID), eq("TOTP"), any(LocalDateTime.class));
             verify(auditService).logMfaEnabled(USER_ID, USER_EMAIL, "TOTP");
         }
     }
@@ -505,7 +511,7 @@ class MfaServiceTest {
             when(mfaConfigRepository.deleteByUserId(USER_ID)).thenReturn(Mono.empty());
             when(backupCodeRepository.deleteByUserId(USER_ID)).thenReturn(Mono.empty());
             when(userRepository.findById(USER_ID)).thenReturn(Mono.just(testUser));
-            when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.disableMfa(eq(USER_ID), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(auditService.logMfaDisabled(USER_ID, USER_EMAIL)).thenReturn(Mono.empty());
 
             StepVerifier.create(mfaService.disableMfa(USER_ID))
@@ -513,8 +519,7 @@ class MfaServiceTest {
 
             verify(mfaConfigRepository).deleteByUserId(USER_ID);
             verify(backupCodeRepository).deleteByUserId(USER_ID);
-            verify(userRepository).save(argThat(user ->
-                    Boolean.FALSE.equals(user.getMfaEnabled()) && user.getMfaPreferredMethod() == null));
+            verify(userRepository).disableMfa(eq(USER_ID), any(LocalDateTime.class));
             verify(auditService).logMfaDisabled(USER_ID, USER_EMAIL);
         }
     }
@@ -532,15 +537,14 @@ class MfaServiceTest {
             when(mfaConfigRepository.findByUserId(USER_ID)).thenReturn(Flux.empty());
             when(backupCodeRepository.deleteByUserId(USER_ID)).thenReturn(Mono.empty());
             when(userRepository.findById(USER_ID)).thenReturn(Mono.just(testUser));
-            when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.disableMfa(eq(USER_ID), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(auditService.logMfaMethodDisabled(USER_ID, USER_EMAIL, "TOTP")).thenReturn(Mono.empty());
 
             StepVerifier.create(mfaService.disableMethod(USER_ID, "TOTP"))
                     .verifyComplete();
 
             verify(backupCodeRepository).deleteByUserId(USER_ID);
-            verify(userRepository).save(argThat(user ->
-                    Boolean.FALSE.equals(user.getMfaEnabled()) && user.getMfaPreferredMethod() == null));
+            verify(userRepository).disableMfa(eq(USER_ID), any(LocalDateTime.class));
             verify(auditService).logMfaMethodDisabled(USER_ID, USER_EMAIL, "TOTP");
         }
 
@@ -560,15 +564,15 @@ class MfaServiceTest {
             when(mfaConfigRepository.deleteByUserIdAndMethod(USER_ID, "TOTP")).thenReturn(Mono.empty());
             when(mfaConfigRepository.findByUserId(USER_ID)).thenReturn(Flux.just(emailConfig));
             when(userRepository.findById(USER_ID)).thenReturn(Mono.just(testUser));
-            when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.updateMfaPreferredMethod(eq(USER_ID), eq("EMAIL"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
             when(auditService.logMfaMethodDisabled(USER_ID, USER_EMAIL, "TOTP")).thenReturn(Mono.empty());
 
             StepVerifier.create(mfaService.disableMethod(USER_ID, "TOTP"))
                     .verifyComplete();
 
             verify(backupCodeRepository, never()).deleteByUserId(any());
-            verify(userRepository).save(argThat(user ->
-                    "EMAIL".equals(user.getMfaPreferredMethod())));
+            verify(userRepository).updateMfaPreferredMethod(eq(USER_ID), eq("EMAIL"), any(LocalDateTime.class));
         }
 
         @Test
@@ -936,14 +940,38 @@ class MfaServiceTest {
             when(backupCodeRepository.findByUserIdAndUsedFalse(USER_ID))
                     .thenReturn(Flux.just(backupCode));
             when(passwordEncoder.matches("abcd1234", "bcrypt-hash")).thenReturn(true);
-            when(backupCodeRepository.save(any(MfaBackupCode.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(backupCodeRepository.markUsedIfUnused(eq(400L), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
 
             StepVerifier.create(mfaService.verifyBackupCode(USER_ID, "abcd-1234"))
                     .assertNext(result -> assertThat(result).isTrue())
                     .verifyComplete();
 
-            verify(backupCodeRepository).save(argThat(bc ->
-                    bc.getUsed() && bc.getUsedAt() != null && !bc.isNewRecord()));
+            verify(backupCodeRepository).markUsedIfUnused(eq(400L), any(LocalDateTime.class));
+        }
+
+        @Test
+        @DisplayName("Should return false when the matching code was concurrently consumed")
+        void verifyBackupCode_ShouldReturnFalse_WhenCodeConcurrentlyUsed() {
+            MfaBackupCode backupCode = MfaBackupCode.builder()
+                    .id(400L)
+                    .userId(USER_ID)
+                    .codeHash("bcrypt-hash")
+                    .used(false)
+                    .build();
+
+            when(backupCodeRepository.findByUserIdAndUsedFalse(USER_ID))
+                    .thenReturn(Flux.just(backupCode));
+            when(passwordEncoder.matches("abcd1234", "bcrypt-hash")).thenReturn(true);
+            // Another request consumed the code between the read and the conditional update
+            when(backupCodeRepository.markUsedIfUnused(eq(400L), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(0L));
+
+            StepVerifier.create(mfaService.verifyBackupCode(USER_ID, "abcd-1234"))
+                    .assertNext(result -> assertThat(result).isFalse())
+                    .verifyComplete();
+
+            verify(backupCodeRepository, never()).save(any(MfaBackupCode.class));
         }
 
         @Test
@@ -989,7 +1017,8 @@ class MfaServiceTest {
             when(backupCodeRepository.findByUserIdAndUsedFalse(USER_ID))
                     .thenReturn(Flux.just(backupCode));
             when(passwordEncoder.matches("abcd1234", "bcrypt-hash")).thenReturn(true);
-            when(backupCodeRepository.save(any(MfaBackupCode.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(backupCodeRepository.markUsedIfUnused(eq(400L), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
 
             // Code with uppercase, spaces, and dashes should be normalized
             StepVerifier.create(mfaService.verifyBackupCode(USER_ID, "  ABCD - 1234  "))
@@ -1011,14 +1040,15 @@ class MfaServiceTest {
                     .thenReturn(Flux.just(code1, code2, code3));
             when(passwordEncoder.matches("testcode", "hash-1")).thenReturn(false);
             when(passwordEncoder.matches("testcode", "hash-2")).thenReturn(true);
-            when(backupCodeRepository.save(any(MfaBackupCode.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(backupCodeRepository.markUsedIfUnused(eq(402L), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
 
             StepVerifier.create(mfaService.verifyBackupCode(USER_ID, "test-code"))
                     .assertNext(result -> assertThat(result).isTrue())
                     .verifyComplete();
 
-            // Verify the correct code (code2) was marked as used
-            verify(backupCodeRepository).save(argThat(bc -> bc.getId().equals(402L) && bc.getUsed()));
+            // Verify the correct code (code2) was consumed atomically
+            verify(backupCodeRepository).markUsedIfUnused(eq(402L), any(LocalDateTime.class));
         }
     }
 
