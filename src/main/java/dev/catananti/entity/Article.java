@@ -41,6 +41,15 @@ public class Article implements Persistable<Long>, NewRecordAware {
         return newRecord;
     }
 
+    /**
+     * CC-05: optimistic lock. Every save() becomes UPDATE ... WHERE version = :loaded,
+     * so two concurrent editors can no longer silently overwrite each other — the
+     * stale writer gets an OptimisticLockingFailureException (mapped to HTTP 409).
+     */
+    @org.springframework.data.annotation.Version
+    @Column("version")
+    private Long version;
+
     @jakarta.validation.constraints.NotBlank(message = "Article slug must not be blank")
     private String slug;
     private String title;

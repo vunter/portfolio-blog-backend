@@ -466,6 +466,9 @@ CREATE INDEX IF NOT EXISTS idx_contacts_unread ON contacts(is_read, created_at D
 -- Article i18n translations table (Translation Table Wide approach)
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_locale VARCHAR(10) DEFAULT 'en';
 
+-- CC-05: optimistic locking (kept in sync with V18 migration)
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+
 -- Supported languages (centralised source of truth)
 CREATE TABLE IF NOT EXISTS languages (
     code VARCHAR(10) PRIMARY KEY,

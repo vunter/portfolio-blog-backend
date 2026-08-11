@@ -461,6 +461,7 @@ public class ArticleService {
                 .seoKeywords(article.getSeoKeywords())
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
+                .version(article.getVersion())
                 .build();
     }
 

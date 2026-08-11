@@ -374,6 +374,12 @@ public class ArticleAdminService {
                         article.setSeoKeywords(htmlSanitizerService.stripHtml(request.getSeoKeywords()));
                         article.setUpdatedAt(LocalDateTime.now());
 
+                        // CC-05: when the editor sent the version it loaded, save against it —
+                        // a stale version makes the UPDATE match 0 rows and surface as 409.
+                        if (request.getVersion() != null) {
+                            article.setVersion(request.getVersion());
+                        }
+
                         if (oldStatus != ArticleStatus.PUBLISHED && newStatus == ArticleStatus.PUBLISHED) {
                             article.setPublishedAt(LocalDateTime.now());
                         }

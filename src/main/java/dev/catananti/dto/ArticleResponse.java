@@ -42,6 +42,9 @@ public class ArticleResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    /** CC-05: optimistic-lock version — echo back via ArticleRequest.version on update. */
+    private Long version;
+
     @Data
     @Builder
     @NoArgsConstructor

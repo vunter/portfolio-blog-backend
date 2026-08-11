@@ -148,6 +148,22 @@ public class GlobalExceptionHandler {
                 msg(locale, "error.conflict"), msg(locale, ex.getMessage()), exchange));
     }
 
+    /**
+     * CC-05: optimistic-lock conflict — the client edited a stale copy of the
+     * resource (e.g. two admins editing the same article). 409 tells the caller
+     * to reload and reapply.
+     */
+    @ExceptionHandler(org.springframework.dao.OptimisticLockingFailureException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Mono<ErrorResponse> handleOptimisticLockingFailure(
+            org.springframework.dao.OptimisticLockingFailureException ex, ServerWebExchange exchange) {
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=409 path={} Optimistic lock conflict: {}", path, ex.getMessage());
+        Locale locale = resolveLocale(exchange);
+        return Mono.just(buildErrorResponse(HttpStatus.CONFLICT,
+                msg(locale, "error.conflict"), msg(locale, "error.conflict"), exchange));
+    }
+
     @ExceptionHandler(SecurityException.class)
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
     public Mono<ErrorResponse> handleSecurityException(SecurityException ex, ServerWebExchange exchange) {
