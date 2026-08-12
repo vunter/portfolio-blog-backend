@@ -2,6 +2,7 @@ package dev.catananti.service;
 
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
+import dev.catananti.entity.Article;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ReadingHistoryRepository;
 import dev.catananti.repository.UserRepository;
@@ -64,19 +65,41 @@ public class ReadingHistoryService {
         return userRepository.findByEmail(email)
                 .flatMap(user -> {
                     int offset = page * size;
+                    // NP-3: batch-load the page's articles (findAllById + constant-query
+                    // enrichment) instead of 4 queries per entry; the map re-applies the
+                    // history order that the previous concurrent flatMap also lost.
                     return readingHistoryRepository.findByUserIdOrderByLastReadAtDesc(user.getId(), size, offset)
-                            .flatMap(rh -> articleRepository.findById(rh.getArticleId())
-                                    .flatMap(articleService::enrichArticleWithMetadata)
-                                    .map(article -> new ReadingHistoryResponse(
-                                            articleService.mapToResponse(article),
-                                            rh.getLastReadAt(),
-                                            rh.getReadCount()
-                                    )), 4)
                             .collectList()
+                            .flatMap(this::loadResponsesInHistoryOrder)
                             .zipWith(readingHistoryRepository.countByUserId(user.getId()))
                             .map(tuple -> PageResponse.of(tuple.getT1(), page, size, tuple.getT2()));
                 })
                 .defaultIfEmpty(PageResponse.of(java.util.List.of(), page, size, 0));
+    }
+
+    private Mono<java.util.List<ReadingHistoryResponse>> loadResponsesInHistoryOrder(
+            java.util.List<dev.catananti.entity.ReadingHistory> entries) {
+        if (entries.isEmpty()) {
+            return Mono.just(java.util.List.of());
+        }
+        var articleIds = entries.stream().map(dev.catananti.entity.ReadingHistory::getArticleId).toList();
+        return articleRepository.findAllById(articleIds)
+                .collectList()
+                .flatMap(articleService::enrichArticlesWithMetadata)
+                .map(articles -> {
+                    var byId = articles.stream()
+                            .collect(java.util.stream.Collectors.toMap(Article::getId, a -> a));
+                    return entries.stream()
+                            .map(rh -> {
+                                Article article = byId.get(rh.getArticleId());
+                                return article == null ? null : new ReadingHistoryResponse(
+                                        articleService.mapToResponse(article),
+                                        rh.getLastReadAt(),
+                                        rh.getReadCount());
+                            })
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+                });
     }
 
     /**

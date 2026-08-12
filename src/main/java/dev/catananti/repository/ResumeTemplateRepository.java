@@ -104,11 +104,33 @@ public interface ResumeTemplateRepository extends R2dbcRepository<ResumeTemplate
     Mono<Void> resetDefaultForOwner(Long ownerId);
 
     /**
-     * Find all active templates with aliases (for public profile listing).
-     * Returns templates that have an alias set and are ACTIVE status.
+     * NP-1: single-query projection for the public profile selector. The previous
+     * implementation loaded the FULL profile (11 child tables + template html/css)
+     * per active template just to render alias/name/title/avatar — ~14 queries per
+     * profile per request. The correlated subquery picks the best-matching profile
+     * locale (exact → language prefix → en → any).
      */
-    @Query("SELECT * FROM resume_templates WHERE url_alias IS NOT NULL AND url_alias != '' AND status = 'ACTIVE' ORDER BY url_alias")
-    Flux<ResumeTemplate> findActiveWithAlias();
+    @Query("""
+            SELECT t.url_alias AS alias,
+                   COALESCE(p.full_name, u.name) AS name,
+                   p.title AS title,
+                   u.avatar_url AS avatar_url
+            FROM resume_templates t
+            JOIN users u ON u.id = t.owner_id
+            LEFT JOIN resume_profiles p ON p.owner_id = t.owner_id
+              AND p.id = (
+                  SELECT rp.id FROM resume_profiles rp
+                  WHERE rp.owner_id = t.owner_id
+                  ORDER BY CASE WHEN rp.locale = :lang THEN 0
+                                WHEN rp.locale LIKE :langPrefix THEN 1
+                                WHEN rp.locale = 'en' THEN 2
+                                ELSE 3 END, rp.id
+                  LIMIT 1
+              )
+            WHERE t.url_alias IS NOT NULL AND t.url_alias != '' AND t.status = 'ACTIVE'
+            ORDER BY t.url_alias
+            """)
+    Flux<dev.catananti.dto.PublicProfileSummary> findPublicProfileSummaries(String lang, String langPrefix);
 
     /**
      * Search templates by name (searches across all locale values in JSONB).

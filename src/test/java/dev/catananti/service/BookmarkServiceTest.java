@@ -128,10 +128,10 @@ class BookmarkServiceTest {
                     .thenReturn(Flux.just(testBookmark));
             when(bookmarkRepository.countByVisitorHash(hashedId))
                     .thenReturn(Mono.just(1L));
-            when(articleRepository.findById(articleId))
-                    .thenReturn(Mono.just(testArticle));
-            when(articleService.enrichArticleWithMetadata(testArticle))
-                    .thenReturn(Mono.just(testArticle));
+            when(articleRepository.findAllById(java.util.List.of(articleId)))
+                    .thenReturn(Flux.just(testArticle));
+            when(articleService.enrichArticlesWithMetadata(anyList()))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
             when(articleService.mapToResponse(testArticle))
                     .thenReturn(testArticleResponse);
 
@@ -144,6 +144,55 @@ class BookmarkServiceTest {
                         assertThat(page.getPage()).isZero();
                     })
                     .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("Should load the page of articles in batch, preserving bookmark order")
+        void shouldBatchLoadArticlesPreservingOrder() {
+            // Given two bookmarks whose articles come back from the DB in a different order
+            String hashedId = bookmarkService.hashVisitorId(visitorId);
+            Long secondArticleId = 2222222222222222L;
+            Article secondArticle = Article.builder()
+                    .id(secondArticleId)
+                    .slug("second-article")
+                    .title("Second Article")
+                    .content("More content")
+                    .status(ArticleStatus.PUBLISHED)
+                    .build();
+            Bookmark secondBookmark = Bookmark.builder()
+                    .id(9876543211L)
+                    .articleId(secondArticleId)
+                    .visitorHash("hashed-visitor")
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            ArticleResponse secondResponse = ArticleResponse.builder()
+                    .id(secondArticleId.toString())
+                    .slug("second-article")
+                    .title("Second Article")
+                    .status("PUBLISHED")
+                    .build();
+
+            when(bookmarkRepository.findByVisitorHash(eq(hashedId), eq(10), eq(0)))
+                    .thenReturn(Flux.just(secondBookmark, testBookmark));
+            when(bookmarkRepository.countByVisitorHash(hashedId))
+                    .thenReturn(Mono.just(2L));
+            when(articleRepository.findAllById(java.util.List.of(secondArticleId, articleId)))
+                    .thenReturn(Flux.just(testArticle, secondArticle));
+            when(articleService.enrichArticlesWithMetadata(anyList()))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(articleService.mapToResponse(testArticle)).thenReturn(testArticleResponse);
+            when(articleService.mapToResponse(secondArticle)).thenReturn(secondResponse);
+
+            // When & Then: the response follows bookmark order, not DB return order
+            StepVerifier.create(bookmarkService.getBookmarks(visitorId, 0, 10))
+                    .assertNext(page -> {
+                        assertThat(page.getContent()).extracting(ArticleResponse::getSlug)
+                                .containsExactly("second-article", articleSlug);
+                        assertThat(page.getTotalElements()).isEqualTo(2);
+                    })
+                    .verifyComplete();
+
+            verify(articleRepository, never()).findById(anyLong());
         }
 
         @Test

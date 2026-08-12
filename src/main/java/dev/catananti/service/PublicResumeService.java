@@ -157,32 +157,11 @@ public class PublicResumeService {
      * Used by the public profile selector component.
      */
     public Flux<dev.catananti.dto.PublicProfileSummary> getPublishedProfiles(String lang) {
+        // NP-1: one constant projection query instead of loading each owner's full
+        // profile (11 child tables) and full template row per active alias.
         String validLang = validateLocale(lang);
-        return resumeTemplateRepository.findActiveWithAlias()
-                .flatMap(template -> {
-                    Long ownerId = template.getOwnerId();
-                    if (ownerId == null) {
-                        return Mono.empty();
-                    }
-                    // Fetch user info (name, avatar) and profile title in parallel
-                    Mono<User> userMono = userRepository.findById(ownerId).defaultIfEmpty(User.builder().name("Unknown").build());
-                    Mono<ResumeProfileResponse> profileMono = resumeProfileService
-                            .getProfileByOwnerIdWithFallback(ownerId, validLang)
-                            .onErrorResume(e -> Mono.empty())
-                            .defaultIfEmpty(ResumeProfileResponse.builder().build());
-
-                    return Mono.zip(userMono, profileMono)
-                            .map(tuple -> {
-                                User user = tuple.getT1();
-                                ResumeProfileResponse profile = tuple.getT2();
-                                return dev.catananti.dto.PublicProfileSummary.builder()
-                                        .alias(template.getAlias())
-                                        .name(profile.getFullName() != null ? profile.getFullName() : user.getName())
-                                        .title(profile.getTitle())
-                                        .avatarUrl(user.getAvatarUrl())
-                                        .build();
-                            });
-                });
+        String langPrefix = validLang.length() >= 2 ? validLang.substring(0, 2) + "%" : validLang + "%";
+        return resumeTemplateRepository.findPublicProfileSummaries(validLang, langPrefix);
     }
 
     /**

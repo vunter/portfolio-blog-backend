@@ -171,6 +171,47 @@ public class ArticleTranslationService {
                 .defaultIfEmpty(article);
     }
 
+    /**
+     * NP-4: batch overlay for localized listings. Applies cached translations first
+     * and fetches the remaining ones in a single IN query, so a page of N articles
+     * costs at most 1 translation query instead of N.
+     */
+    public Mono<java.util.List<Article>> applyTranslations(java.util.List<Article> articles, String locale) {
+        if (locale == null || locale.isBlank() || locale.equalsIgnoreCase("en") || articles.isEmpty()) {
+            return Mono.just(articles);
+        }
+        String normalizedLocale = locale.toLowerCase();
+
+        java.util.List<Article> misses = new java.util.ArrayList<>();
+        for (Article article : articles) {
+            ArticleI18n cached = translationCache.getIfPresent(article.getId() + ":" + normalizedLocale);
+            if (cached != null) {
+                applyI18nToArticle(article, cached);
+            } else {
+                misses.add(article);
+            }
+        }
+        if (misses.isEmpty()) {
+            return Mono.just(articles);
+        }
+
+        var missIds = misses.stream().map(Article::getId).toList();
+        return articleI18nRepository.findByArticleIdsAndLocale(missIds, normalizedLocale)
+                .collectList()
+                .map(i18ns -> {
+                    var byArticleId = i18ns.stream()
+                            .collect(java.util.stream.Collectors.toMap(ArticleI18n::getArticleId, i -> i));
+                    for (Article article : misses) {
+                        ArticleI18n i18n = byArticleId.get(article.getId());
+                        if (i18n != null) {
+                            translationCache.put(article.getId() + ":" + normalizedLocale, i18n);
+                            applyI18nToArticle(article, i18n);
+                        }
+                    }
+                    return articles;
+                });
+    }
+
     private void applyI18nToArticle(Article article, ArticleI18n i18n) {
         article.setTitle(i18n.getTitle());
         if (i18n.getSubtitle() != null && !i18n.getSubtitle().isBlank()) {

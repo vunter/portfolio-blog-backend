@@ -265,8 +265,8 @@ class ArticleServiceTest {
                 .thenReturn(Flux.just(testArticle));
         when(articleRepository.countByStatus("PUBLISHED"))
                 .thenReturn(Mono.just(1L));
-        when(articleTranslationService.applyTranslation(any(Article.class), eq("pt")))
-                .thenReturn(Mono.just(testArticle));
+        when(articleTranslationService.applyTranslations(anyList(), eq("pt")))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
         StepVerifier.create(articleService.getPublishedArticles(0, 10, "pt"))
                 .assertNext(page -> assertThat(page.getContent()).hasSize(1))
@@ -342,8 +342,8 @@ class ArticleServiceTest {
                 .thenReturn(Flux.just(testArticle));
         when(articleRepository.countSearchByStatusAndQuery("PUBLISHED", "test"))
                 .thenReturn(Mono.just(1L));
-        when(articleTranslationService.applyTranslation(any(Article.class), eq("fr")))
-                .thenReturn(Mono.just(testArticle));
+        when(articleTranslationService.applyTranslations(anyList(), eq("fr")))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
         StepVerifier.create(articleService.searchArticles("test", 0, 10, "fr"))
                 .assertNext(page -> assertThat(page.getContent()).hasSize(1))
@@ -372,8 +372,8 @@ class ArticleServiceTest {
                 .thenReturn(Flux.just(testArticle));
         when(articleRepository.countByTagSlugAndStatus("java", "PUBLISHED"))
                 .thenReturn(Mono.just(1L));
-        when(articleTranslationService.applyTranslation(any(Article.class), eq("es")))
-                .thenReturn(Mono.just(testArticle));
+        when(articleTranslationService.applyTranslations(anyList(), eq("es")))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
         StepVerifier.create(articleService.getArticlesByTag("java", 0, 10, "es"))
                 .assertNext(page -> assertThat(page.getContent()).hasSize(1))
