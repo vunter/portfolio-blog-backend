@@ -482,17 +482,15 @@ class OAuth2ServiceTest {
                     .build();
 
             when(userRepository.findById(100L)).thenReturn(Mono.just(userWithoutPassword));
-            when(socialAccountRepository.countByUserId(100L)).thenReturn(Mono.just(2L));
-            when(socialAccountRepository.deleteByUserIdAndProvider(100L, "google"))
-                    .thenReturn(Mono.empty());
+            when(socialAccountRepository.deleteByUserIdAndProviderIfNotLast(100L, "google"))
+                    .thenReturn(Mono.just(1L));
             when(auditService.logOAuth2AccountUnlinked(100L, "test@example.com", "google"))
                     .thenReturn(Mono.empty());
 
             StepVerifier.create(oAuth2Service.unlinkAccount(100L, "google"))
                     .verifyComplete();
 
-            verify(socialAccountRepository).countByUserId(100L);
-            verify(socialAccountRepository).deleteByUserIdAndProvider(100L, "google");
+            verify(socialAccountRepository).deleteByUserIdAndProviderIfNotLast(100L, "google");
         }
 
         @Test
@@ -505,7 +503,9 @@ class OAuth2ServiceTest {
                     .build();
 
             when(userRepository.findById(100L)).thenReturn(Mono.just(userWithoutPassword));
-            when(socialAccountRepository.countByUserId(100L)).thenReturn(Mono.just(1L));
+            // Conditional delete refuses: this is the last social account
+            when(socialAccountRepository.deleteByUserIdAndProviderIfNotLast(100L, "github"))
+                    .thenReturn(Mono.just(0L));
             when(auditService.logOAuth2AccountUnlinked(100L, "test@example.com", "github"))
                     .thenReturn(Mono.empty());
 
@@ -531,17 +531,15 @@ class OAuth2ServiceTest {
                     .build();
 
             when(userRepository.findById(100L)).thenReturn(Mono.just(userWithBlankPassword));
-            when(socialAccountRepository.countByUserId(100L)).thenReturn(Mono.just(3L));
-            when(socialAccountRepository.deleteByUserIdAndProvider(100L, "linkedin"))
-                    .thenReturn(Mono.empty());
+            when(socialAccountRepository.deleteByUserIdAndProviderIfNotLast(100L, "linkedin"))
+                    .thenReturn(Mono.just(1L));
             when(auditService.logOAuth2AccountUnlinked(100L, "test@example.com", "linkedin"))
                     .thenReturn(Mono.empty());
 
             StepVerifier.create(oAuth2Service.unlinkAccount(100L, "linkedin"))
                     .verifyComplete();
 
-            verify(socialAccountRepository).countByUserId(100L);
-            verify(socialAccountRepository).deleteByUserIdAndProvider(100L, "linkedin");
+            verify(socialAccountRepository).deleteByUserIdAndProviderIfNotLast(100L, "linkedin");
         }
 
         @Test
@@ -554,7 +552,8 @@ class OAuth2ServiceTest {
                     .build();
 
             when(userRepository.findById(100L)).thenReturn(Mono.just(userWithBlankPassword));
-            when(socialAccountRepository.countByUserId(100L)).thenReturn(Mono.just(1L));
+            when(socialAccountRepository.deleteByUserIdAndProviderIfNotLast(100L, "google"))
+                    .thenReturn(Mono.just(0L));
             when(auditService.logOAuth2AccountUnlinked(100L, "test@example.com", "google"))
                     .thenReturn(Mono.empty());
 

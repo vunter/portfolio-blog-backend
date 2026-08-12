@@ -234,7 +234,10 @@ class ApiEndpointIntegrationTest {
             when(deduplicationService.recordViewIfNew(eq("my-post"), any()))
                     .thenReturn(Mono.just(true));
             when(articleService.incrementViews("my-post")).thenReturn(Mono.empty());
-            when(analyticsService.trackArticleView(anyString(), any(ServerHttpRequest.class)))
+            // The view endpoint only tracks analytics when the request carries an
+            // analytics consent token, which this request doesn't — keep the stub
+            // lenient for the paths that do.
+            lenient().when(analyticsService.trackArticleView(anyString(), any(ServerHttpRequest.class)))
                     .thenReturn(Mono.empty());
 
             // When & Then

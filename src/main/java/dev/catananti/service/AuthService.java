@@ -53,6 +53,7 @@ public class AuthService {
     private final Optional<MfaService> mfaService;
     private final Optional<EmailOtpService> emailOtpService;
     private final ReactiveStringRedisTemplate redisTemplate;
+    private final org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
 
     private static final String MFA_TOKEN_PREFIX = "mfa:token:";
     private static final String MFA_ATTEMPTS_PREFIX = "mfa:attempts:";
@@ -77,6 +78,7 @@ public class AuthService {
                        TokenBlacklistService tokenBlacklistService,
                        EmailService emailService,
                        ReactiveStringRedisTemplate redisTemplate,
+                       org.springframework.transaction.reactive.TransactionalOperator transactionalOperator,
                        @Autowired(required = false) LoginAttemptService loginAttemptService,
                        @Autowired(required = false) MfaService mfaService,
                        @Autowired(required = false) EmailOtpService emailOtpService) {
@@ -90,6 +92,7 @@ public class AuthService {
         this.tokenBlacklistService = tokenBlacklistService;
         this.emailService = emailService;
         this.redisTemplate = redisTemplate;
+        this.transactionalOperator = transactionalOperator;
         this.loginAttemptService = Optional.ofNullable(loginAttemptService);
         this.mfaService = Optional.ofNullable(mfaService);
         this.emailOtpService = Optional.ofNullable(emailOtpService);
@@ -386,7 +389,9 @@ public class AuthService {
                     // (welcome email, logging) happen AFTER commit and are part of the
                     // reactive chain — never .subscribe() inside an operator (creates
                     // untracked subscriptions and silently swallows errors).
-                    return persistNewUser(email, encodedPassword, request.name())
+                    // TX-01: self-invocation bypasses the @Transactional proxy, so the
+                    // atomicity persistNewUser documents must come from the operator here.
+                    return transactionalOperator.transactional(persistNewUser(email, encodedPassword, request.name()))
                             .flatMap(saved -> {
                                 User savedUser = saved.getT1();
                                 RefreshToken refreshToken = saved.getT2();
@@ -412,11 +417,12 @@ public class AuthService {
     }
 
     /**
-     * Persists the new user row AND its first refresh token atomically. If the refresh-token
-     * insert fails, the user insert rolls back, preventing orphaned accounts.
+     * Persists the new user row AND its first refresh token. Atomicity comes from the
+     * TransactionalOperator wrap at the call site in register() — a @Transactional
+     * annotation here would be silently ignored (self-invocation never crosses the
+     * Spring proxy), which is exactly the bug this replaced (TX-01).
      */
-    @Transactional
-    public Mono<reactor.util.function.Tuple2<User, RefreshToken>> persistNewUser(String email, String encodedPassword, String rawName) {
+    private Mono<reactor.util.function.Tuple2<User, RefreshToken>> persistNewUser(String email, String encodedPassword, String rawName) {
         User user = User.builder()
                 .id(idService.nextId())
                 .name(htmlSanitizerService.stripHtml(rawName))

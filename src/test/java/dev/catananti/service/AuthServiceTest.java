@@ -70,13 +70,17 @@ class AuthServiceTest {
 
     private User testUser;
 
+    @org.mockito.Mock
+    private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
+
     @BeforeEach
     void setUp() {
         authService = new AuthService(
                 userRepository, passwordEncoder, tokenProvider,
                 refreshTokenService, messageSource, idService,
                 htmlSanitizerService, tokenBlacklistService, emailService,
-                redisTemplate, loginAttemptService, null, null);
+                redisTemplate, transactionalOperator,
+                loginAttemptService, null, null);
         // Set jwtExpirationMs via reflection
         try {
             var field = AuthService.class.getDeclaredField("jwtExpirationMs");
@@ -86,6 +90,8 @@ class AuthServiceTest {
             throw new RuntimeException(e);
         }
 
+        lenient().when(transactionalOperator.transactional(any(reactor.core.publisher.Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
         lenient().when(messageSource.getMessage(anyString(), any(), any(Locale.class)))
                 .thenReturn("Invalid credentials");
         lenient().when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));

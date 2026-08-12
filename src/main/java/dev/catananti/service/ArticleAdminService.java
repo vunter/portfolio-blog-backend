@@ -325,6 +325,11 @@ public class ArticleAdminService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
+                    // TX-09: do NOT swallow createVersion errors here. This runs inside the
+                    // update transaction — after a failed SQL statement PostgreSQL marks the
+                    // whole transaction aborted (25P02), so continuing the chain would turn a
+                    // versioning error into a confusing "current transaction is aborted"
+                    // failure on the article save. Let it propagate and roll back cleanly.
                     return getCurrentUser()
                             .flatMap(user -> articleVersionService.createVersion(
                                     article,
@@ -332,10 +337,6 @@ public class ArticleAdminService {
                                     user.getId(),
                                     user.getName()
                             ))
-                            .onErrorResume(e -> {
-                                log.warn("Failed to create article version: {}", e.getMessage());
-                                return Mono.empty();
-                            })
                             .then(Mono.just(article));
                 })
                 .flatMap(article -> {
@@ -486,9 +487,11 @@ public class ArticleAdminService {
                 .map(articleService::mapToResponse);
     }
 
-    @Transactional
     public Mono<ArticleResponse> approveReview(Long id) {
-        return articleRepository.findById(id)
+        // TX-07: same shape as publishArticle — only the DB writes run inside the
+        // transaction; cache invalidation and the subscriber email fan-out happen
+        // after commit so no pool connection is held during SMTP sends.
+        Mono<Article> approve = articleRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> getCurrentUser().flatMap(user -> {
                     if (!isAdmin(user)) {
@@ -516,7 +519,8 @@ public class ArticleAdminService {
                 .doOnSuccess(a -> {
                     log.info("Article review approved: {}", a.getSlug());
                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
-                })
+                });
+        return transactionalOperator.transactional(approve)
                 .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
                         .then(notifySubscribersAboutNewArticle(article))
                         .thenReturn(article))

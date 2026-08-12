@@ -25,6 +25,7 @@ public class SiteSettingsService {
 
     private final SiteSettingRepository repository;
     private final IdService idService;
+    private final org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
 
     private static final String ALL_SETTINGS_KEY = "all";
     private final Cache<String, Map<String, Object>> settingsCache = Caffeine.newBuilder()
@@ -32,9 +33,11 @@ public class SiteSettingsService {
             .maximumSize(1)
             .build();
 
-    public SiteSettingsService(SiteSettingRepository repository, IdService idService) {
+    public SiteSettingsService(SiteSettingRepository repository, IdService idService,
+                               org.springframework.transaction.reactive.TransactionalOperator transactionalOperator) {
         this.repository = repository;
         this.idService = idService;
+        this.transactionalOperator = transactionalOperator;
     }
 
     @Value("${app.site-url:https://catananti.dev}")
@@ -116,7 +119,12 @@ public class SiteSettingsService {
                             })))
                     .toList();
 
-            return Mono.when(saves).then(Mono.fromRunnable(() -> settingsCache.invalidateAll())).then(getAllSettings());
+            // TX-11: all keys commit atomically (no partial settings update) and, being one
+            // transaction on a single connection, the saves must run sequentially (TX-10);
+            // the cache is only invalidated after a successful commit.
+            return transactionalOperator.transactional(reactor.core.publisher.Flux.concat(saves).then())
+                    .then(Mono.fromRunnable(() -> settingsCache.invalidateAll()))
+                    .then(getAllSettings());
         });
     }
 

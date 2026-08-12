@@ -431,13 +431,16 @@ public class OAuth2Service {
                     boolean hasPassword = user.getPasswordHash() != null && !user.getPasswordHash().isBlank();
                     Mono<Void> deleteMono;
                     if (!hasPassword) {
-                        deleteMono = socialAccountRepository.countByUserId(userId)
-                                .flatMap(count -> {
-                                    if (count <= 1) {
+                        // TX-06: the "is this the last login method?" check must be part of the
+                        // DELETE itself — a separate count is a check-then-act race where two
+                        // concurrent unlinks could each pass the check and strand the account.
+                        deleteMono = socialAccountRepository.deleteByUserIdAndProviderIfNotLast(userId, provider)
+                                .flatMap(rows -> {
+                                    if (rows == 0) {
                                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                                 "Cannot unlink last login method. Set a password first."));
                                     }
-                                    return socialAccountRepository.deleteByUserIdAndProvider(userId, provider);
+                                    return Mono.<Void>empty();
                                 });
                     } else {
                         deleteMono = socialAccountRepository.deleteByUserIdAndProvider(userId, provider);

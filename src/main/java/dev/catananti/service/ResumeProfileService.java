@@ -222,7 +222,10 @@ public class ResumeProfileService {
         ops.add(mergeProjects(profileId, request.getProjects()));
         ops.add(mergeLearningTopics(profileId, request.getLearningTopics()));
 
-        return Mono.when(ops);
+        // TX-10: this runs inside saveProfile's transaction — one R2DBC connection.
+        // Concurrent subscription (Mono.when) would interleave statements on that single
+        // connection; Flux.concat keeps them sequential (rule documented in CommentService).
+        return Flux.concat(ops).then();
     }
 
     // ==================== F-214: Inline Merge Methods ====================
@@ -579,7 +582,8 @@ public class ResumeProfileService {
             ops.add(learningTopicRepository.saveAll(entities).then());
         }
 
-        return ops.isEmpty() ? Mono.empty() : Mono.when(ops);
+        // TX-10: sequential — see mergeChildEntities
+        return ops.isEmpty() ? Mono.empty() : Flux.concat(ops).then();
     }
 
     /**

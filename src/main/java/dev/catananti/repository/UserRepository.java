@@ -63,4 +63,8 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Modifying
     @Query("UPDATE users SET mfa_enabled = true, mfa_preferred_method = COALESCE(mfa_preferred_method, :fallbackMethod), updated_at = :updatedAt WHERE id = :id")
     Mono<Long> enableMfaWithFallbackPreferred(Long id, String fallbackMethod, LocalDateTime updatedAt);
+
+    @Modifying
+    @Query("UPDATE users SET password_hash = :passwordHash, updated_at = :updatedAt WHERE id = :id")
+    Mono<Long> updatePasswordHash(Long id, String passwordHash, LocalDateTime updatedAt);
 }

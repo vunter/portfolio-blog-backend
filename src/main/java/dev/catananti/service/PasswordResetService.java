@@ -38,6 +38,7 @@ public class PasswordResetService {
     private final RefreshTokenService refreshTokenService;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final dev.catananti.scheduler.SchedulerLock schedulerLock;
+    private final org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
 
     private static final int TOKEN_LENGTH = 32;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -60,7 +61,8 @@ public class PasswordResetService {
                                  IdService idService,
                                  RefreshTokenService refreshTokenService,
                                  @Qualifier("reactiveRedisTemplate") @Nullable ReactiveRedisTemplate<String, String> redisTemplate,
-                                 dev.catananti.scheduler.SchedulerLock schedulerLock) {
+                                 dev.catananti.scheduler.SchedulerLock schedulerLock,
+                                 org.springframework.transaction.reactive.TransactionalOperator transactionalOperator) {
         this.tokenRepository = tokenRepository;
         this.userRepository = userRepository;
         this.emailService = emailService;
@@ -70,12 +72,14 @@ public class PasswordResetService {
         this.refreshTokenService = refreshTokenService;
         this.redisTemplate = redisTemplate;
         this.schedulerLock = schedulerLock;
+        this.transactionalOperator = transactionalOperator;
     }
 
     /**
      * Request a password reset. Always returns success to prevent email enumeration.
+     * TX-08: not transactional — the only DB write is a single token INSERT, and the
+     * SMTP send that follows must not hold a pool connection.
      */
-    @Transactional
     public Mono<Void> requestPasswordReset(String email) {
         String normalizedEmail = email.toLowerCase().trim();
         // F-200: Per-email rate limiting via Redis
@@ -167,7 +171,6 @@ public class PasswordResetService {
             "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{12,}$"
     );
 
-    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Mono<Void> resetPassword(String token, String newPassword) {
         // VAL-04: Validate password strength (aligned with RegisterRequest policy)
         if (newPassword == null || newPassword.length() < 12) {
@@ -185,38 +188,38 @@ public class PasswordResetService {
                 .filter(PasswordResetToken::isValid)
                 .delayElement(Duration.ofMillis(50 + SECURE_RANDOM.nextInt(100)))
                 .switchIfEmpty(Mono.error(new SecurityException("error.invalid_reset_token")))
-                // SEC: Atomically mark token as used FIRST to prevent concurrent use
-                .flatMap(resetToken -> tokenRepository.markAsUsedConditionally(resetToken.getId(), LocalDateTime.now())
-                        .flatMap(rowsAffected -> {
-                            if (rowsAffected == 0) {
-                                return Mono.<Void>error(new SecurityException("error.invalid_reset_token"));
-                            }
-                            return userRepository.findById(resetToken.getUserId())
-                                    .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
-                                    .flatMap(user -> {
-                                        // F-ASYNC-04: Offload BCrypt hashing (~200ms) from reactive thread
-                                        return Mono.fromCallable(() -> passwordEncoder.encode(newPassword))
-                                                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                                                .flatMap(encodedPassword -> {
-                                                    user.setPasswordHash(encodedPassword);
-                                                    user.setUpdatedAt(LocalDateTime.now());
-
-                                                    return userRepository.save(user)
-                                                            .then(refreshTokenService.revokeAllUserTokens(user.getId()))
-                                                            .then(auditService.logPasswordReset(user.getId(), user.getEmail()))
-                                                            .doOnSuccess(v -> log.debug("Password reset completed for: {}", PiiMasker.maskEmail(user.getEmail())))
-                                                            // Email notification sent outside core transaction — failure doesn't roll back password change
-                                                            .then(Mono.defer(() -> emailService.sendPasswordChangedNotification(user.getEmail(), user.getName())
-                                                                    .onErrorResume(e -> {
-                                                                        log.warn("Failed to send password changed notification to {}: {}", PiiMasker.maskEmail(user.getEmail()), e.getMessage(), e);
-                                                                        return Mono.empty();
-                                                                    })));
-                                                })
-                                                // SEC: If password change fails, un-mark the token so it can be reused
-                                                .onErrorResume(e -> tokenRepository.unmarkAsUsed(resetToken.getId())
-                                                        .then(Mono.error(e)));
-                                    });
-                        }));
+                .flatMap(resetToken -> userRepository.findById(resetToken.getUserId())
+                        .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
+                        .flatMap(user ->
+                                // F-ASYNC-04: BCrypt (~200ms) runs on boundedElastic and, together with
+                                // the timing-mitigation delay above, stays OUTSIDE the transaction so no
+                                // pool connection is held during slow non-DB work (TX-08).
+                                Mono.fromCallable(() -> passwordEncoder.encode(newPassword))
+                                        .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                                        .flatMap(encodedPassword -> transactionalOperator.transactional(
+                                                        // SEC: conditional mark-as-used prevents concurrent reuse; a
+                                                        // failure later in the tx rolls the mark back automatically,
+                                                        // replacing the old unmarkAsUsed compensation.
+                                                        tokenRepository.markAsUsedConditionally(resetToken.getId(), LocalDateTime.now())
+                                                                .flatMap(rowsAffected -> {
+                                                                    if (rowsAffected == 0) {
+                                                                        return Mono.<Void>error(new SecurityException("error.invalid_reset_token"));
+                                                                    }
+                                                                    // CC-07: partial UPDATE — cannot clobber concurrent
+                                                                    // writes to other columns of the user row.
+                                                                    return userRepository.updatePasswordHash(
+                                                                                    user.getId(), encodedPassword, LocalDateTime.now())
+                                                                            .then(refreshTokenService.revokeAllUserTokens(user.getId()))
+                                                                            .then(auditService.logPasswordReset(user.getId(), user.getEmail()))
+                                                                            .then();
+                                                                }))
+                                                .doOnSuccess(v -> log.debug("Password reset completed for: {}", PiiMasker.maskEmail(user.getEmail())))
+                                                // Email notification after commit — failure doesn't roll back the password change
+                                                .then(Mono.defer(() -> emailService.sendPasswordChangedNotification(user.getEmail(), user.getName())
+                                                        .onErrorResume(e -> {
+                                                            log.warn("Failed to send password changed notification to {}: {}", PiiMasker.maskEmail(user.getEmail()), e.getMessage(), e);
+                                                            return Mono.empty();
+                                                        }))))));
     }
 
     /**
