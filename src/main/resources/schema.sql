@@ -793,6 +793,22 @@ CREATE INDEX IF NOT EXISTS idx_email_change_tokens_revert ON email_change_tokens
 CREATE INDEX IF NOT EXISTS idx_email_change_tokens_user ON email_change_tokens(user_id);
 
 -- ============================================
+-- Email verification tokens (registration) — mirrors V19
+-- ============================================
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT FALSE,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_created ON email_verification_tokens(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_cleanup ON email_verification_tokens(expires_at, used_at);
+
+-- ============================================
 -- M12: MFA backup codes
 -- ============================================
 CREATE TABLE IF NOT EXISTS mfa_backup_codes (
