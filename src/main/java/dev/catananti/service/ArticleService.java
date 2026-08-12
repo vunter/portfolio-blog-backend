@@ -169,7 +169,7 @@ public class ArticleService {
                 .flatMap(this::enrichArticlesWithMetadata)
                 .zipWith(countMono)
                 .map(tuple -> {
-                    var content = tuple.getT1().stream().map(this::mapToResponse).toList();
+                    var content = tuple.getT1().stream().map(this::mapToListResponse).toList();
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
@@ -274,7 +274,7 @@ public class ArticleService {
                 .flatMap(this::enrichArticlesWithMetadata)
                 .zipWith(runSearchCount(ArticleStatus.PUBLISHED.name(), sanitizedQuery))
                 .map(tuple -> {
-                    var content = tuple.getT1().stream().map(this::mapToResponse).toList();
+                    var content = tuple.getT1().stream().map(this::mapToListResponse).toList();
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
@@ -295,7 +295,7 @@ public class ArticleService {
                 .flatMap(this::enrichArticlesWithMetadata)
                 .zipWith(articleRepository.countByTagSlugAndStatus(tagSlug, ArticleStatus.PUBLISHED.name()))
                 .map(tuple -> {
-                    var content = tuple.getT1().stream().map(this::mapToResponse).toList();
+                    var content = tuple.getT1().stream().map(this::mapToListResponse).toList();
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
@@ -465,6 +465,17 @@ public class ArticleService {
                 .build();
     }
 
+    /**
+     * NP-6: list payloads never carry the article body — cards render the excerpt.
+     * The list queries already project content out; this also strips the translated
+     * content the i18n overlay sets for non-en locales.
+     */
+    private ArticleResponse mapToListResponse(Article article) {
+        ArticleResponse response = mapToResponse(article);
+        response.setContent(null);
+        return response;
+    }
+
     private TagResponse mapTagToResponse(Tag tag) {
         return TagResponse.builder()
                 .id(String.valueOf(tag.getId()))
@@ -496,7 +507,7 @@ public class ArticleService {
                             .collectList()
                             .flatMap(this::enrichArticlesWithMetadata)
                             .flatMapMany(Flux::fromIterable)
-                            .map(this::mapToResponse)
+                            .map(this::mapToListResponse)
                 );
     }
 
@@ -519,5 +530,14 @@ public class ArticleService {
      */
     public Flux<Article> findAllPublishedForFeed() {
         return articleRepository.findAllPublishedOrderByPublishedAtDesc(paginationConfig.getFeedMaxItems());
+    }
+
+    /**
+     * NP-5: feed access with an explicit item budget so consumers that render
+     * fewer items (RSS renders 20) don't transfer feedMaxItems full rows.
+     */
+    public Flux<Article> findAllPublishedForFeed(int limit) {
+        return articleRepository.findAllPublishedOrderByPublishedAtDesc(
+                Math.min(limit, paginationConfig.getFeedMaxItems()));
     }
 }

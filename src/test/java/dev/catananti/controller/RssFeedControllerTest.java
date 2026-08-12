@@ -59,7 +59,7 @@ class RssFeedControllerTest {
             when(cacheService.get("rss:feed", String.class)).thenReturn(Mono.just(cachedFeed));
             // articleService.findAllPublishedForFeed() is evaluated eagerly as a Java expression
             // even though switchIfEmpty is lazy at subscription time
-            when(articleService.findAllPublishedForFeed()).thenReturn(Flux.empty());
+            when(articleService.findAllPublishedForFeed(20)).thenReturn(Flux.empty());
 
             StepVerifier.create(controller.getRssFeed())
                     .assertNext(result -> assertThat(result.getBody()).isEqualTo("<rss>cached</rss>"))
@@ -72,7 +72,7 @@ class RssFeedControllerTest {
             Article article = buildArticle("test-article", "Test Article");
 
             when(cacheService.get("rss:feed", String.class)).thenReturn(Mono.empty());
-            when(articleService.findAllPublishedForFeed()).thenReturn(Flux.just(article));
+            when(articleService.findAllPublishedForFeed(20)).thenReturn(Flux.just(article));
             when(cacheService.set(eq("rss:feed"), anyString(), any())).thenReturn(Mono.just(true));
 
             StepVerifier.create(controller.getRssFeed())
@@ -92,7 +92,7 @@ class RssFeedControllerTest {
         @DisplayName("Should handle empty article list")
         void shouldHandleEmptyArticleList() {
             when(cacheService.get("rss:feed", String.class)).thenReturn(Mono.empty());
-            when(articleService.findAllPublishedForFeed()).thenReturn(Flux.empty());
+            when(articleService.findAllPublishedForFeed(20)).thenReturn(Flux.empty());
             when(cacheService.set(eq("rss:feed"), anyString(), any())).thenReturn(Mono.just(true));
 
             StepVerifier.create(controller.getRssFeed())
@@ -109,7 +109,7 @@ class RssFeedControllerTest {
         @DisplayName("Should include site URL and description in feed")
         void shouldIncludeSiteUrlAndDescription() {
             when(cacheService.get("rss:feed", String.class)).thenReturn(Mono.empty());
-            when(articleService.findAllPublishedForFeed()).thenReturn(Flux.empty());
+            when(articleService.findAllPublishedForFeed(20)).thenReturn(Flux.empty());
             when(cacheService.set(eq("rss:feed"), anyString(), any())).thenReturn(Mono.just(true));
 
             StepVerifier.create(controller.getRssFeed())
@@ -128,7 +128,7 @@ class RssFeedControllerTest {
             Article article = buildArticle("article", "Article");
 
             when(cacheService.get("rss:feed", String.class)).thenReturn(Mono.empty());
-            when(articleService.findAllPublishedForFeed()).thenReturn(Flux.just(article));
+            when(articleService.findAllPublishedForFeed(20)).thenReturn(Flux.just(article));
             when(cacheService.set(eq("rss:feed"), anyString(), any())).thenReturn(Mono.just(true));
 
             StepVerifier.create(controller.getRssFeed())
