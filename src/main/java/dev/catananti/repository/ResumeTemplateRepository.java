@@ -1,6 +1,7 @@
 package dev.catananti.repository;
 
 import dev.catananti.entity.ResumeTemplate;
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.stereotype.Repository;
@@ -24,12 +25,6 @@ public interface ResumeTemplateRepository extends R2dbcRepository<ResumeTemplate
      */
     @Query("SELECT * FROM resume_templates WHERE url_alias = :alias")
     Mono<ResumeTemplate> findByAlias(String alias);
-
-    /**
-     * Check if alias exists.
-     */
-    @Query("SELECT COUNT(*) > 0 FROM resume_templates WHERE url_alias = :alias")
-    Mono<Boolean> existsByAlias(String alias);
 
     /**
      * Check if slug exists.
@@ -74,12 +69,6 @@ public interface ResumeTemplateRepository extends R2dbcRepository<ResumeTemplate
     Mono<Long> countByOwnerId(Long ownerId);
 
     /**
-     * Count templates by owner and status.
-     */
-    @Query("SELECT COUNT(*) FROM resume_templates WHERE owner_id = :ownerId AND status = :status")
-    Mono<Long> countByOwnerIdAndStatus(Long ownerId, String status);
-
-    /**
      * Find most downloaded templates.
      */
     @Query("SELECT * FROM resume_templates WHERE status = 'ACTIVE' ORDER BY download_count DESC LIMIT :limit")
@@ -94,12 +83,14 @@ public interface ResumeTemplateRepository extends R2dbcRepository<ResumeTemplate
     /**
      * Increment download count.
      */
+    @Modifying
     @Query("UPDATE resume_templates SET download_count = download_count + 1 WHERE id = :id")
     Mono<Void> incrementDownloadCount(Long id);
 
     /**
      * Reset default flag for all templates of an owner.
      */
+    @Modifying
     @Query("UPDATE resume_templates SET is_default = false WHERE owner_id = :ownerId AND is_default = true")
     Mono<Void> resetDefaultForOwner(Long ownerId);
 

@@ -12,8 +12,4 @@ public interface SiteSettingRepository extends ReactiveCrudRepository<SiteSettin
 
     Flux<SiteSetting> findAllByOrderBySettingKeyAsc();
 
-    Mono<Void> deleteBySettingKey(String settingKey);
-
-    @Query("SELECT * FROM site_settings WHERE setting_key IN (:keys)")
-    Flux<SiteSetting> findBySettingKeyIn(Iterable<String> keys);
 }

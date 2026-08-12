@@ -1,6 +1,7 @@
 package dev.catananti.repository;
 
 import dev.catananti.entity.AnalyticsEvent;
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.stereotype.Repository;
@@ -36,6 +37,12 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
 
     Mono<Void> deleteByArticleId(Long articleId);
 
+    /**
+     * RQ-02: @Modifying makes this execute as DML and emit the affected-row count —
+     * without it the DELETE ran but the Mono completed empty, so the caller could
+     * never tell whether retention was working, nor loop until the backlog drained.
+     */
+    @Modifying
     @Query("DELETE FROM analytics_events WHERE id IN (SELECT id FROM analytics_events WHERE created_at < :cutoff LIMIT 10000)")
     Mono<Long> deleteByCreatedAtBefore(LocalDateTime cutoff);
 }

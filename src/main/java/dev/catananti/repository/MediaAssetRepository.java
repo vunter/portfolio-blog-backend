@@ -10,12 +10,6 @@ import reactor.core.publisher.Mono;
 @Repository
 public interface MediaAssetRepository extends R2dbcRepository<MediaAsset, Long> {
 
-    @Query("SELECT * FROM media_assets WHERE uploader_id = :uploaderId ORDER BY created_at DESC LIMIT :limit")
-    Flux<MediaAsset> findByUploaderIdOrderByCreatedAtDesc(Long uploaderId, int limit);
-
-    @Query("SELECT * FROM media_assets WHERE purpose = :purpose ORDER BY created_at DESC LIMIT :limit")
-    Flux<MediaAsset> findByPurposeOrderByCreatedAtDesc(String purpose, int limit);
-
     @Query("SELECT * FROM media_assets WHERE uploader_id = :uploaderId ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<MediaAsset> findByUploaderIdPaginated(Long uploaderId, int limit, long offset);
 
@@ -28,13 +22,8 @@ public interface MediaAssetRepository extends R2dbcRepository<MediaAsset, Long> 
     @Query("SELECT COUNT(*) FROM media_assets")
     Mono<Long> countAll();
 
-    @Query("SELECT COUNT(*) FROM media_assets WHERE uploader_id = :uploaderId")
-    Mono<Long> countByUploaderId(Long uploaderId);
-
     @Query("SELECT COUNT(*) FROM media_assets WHERE purpose = :purpose")
     Mono<Long> countByPurpose(String purpose);
-
-    Mono<MediaAsset> findByStorageKey(String storageKey);
 
     Mono<MediaAsset> findByUrl(String url);
 }

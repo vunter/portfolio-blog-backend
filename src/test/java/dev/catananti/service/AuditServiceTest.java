@@ -265,11 +265,11 @@ class AuditServiceTest {
         @DisplayName("getLogsByEntity should return logs for specific entity")
         void getLogsByEntity() {
             // Given
-            when(auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc("ARTICLE", "42"))
+            when(auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc(eq("ARTICLE"), eq("42"), anyInt()))
                     .thenReturn(Flux.just(testAuditLog));
 
             // When & Then
-            StepVerifier.create(auditService.getLogsByEntity("ARTICLE", "42"))
+            StepVerifier.create(auditService.getLogsByEntity("ARTICLE", "42", 500))
                     .assertNext(log -> {
                         assertThat(log.getEntityType()).isEqualTo("ARTICLE");
                         assertThat(log.getEntityId()).isEqualTo("42");
@@ -281,11 +281,11 @@ class AuditServiceTest {
         @DisplayName("getLogsByEntity should return empty for unknown entity")
         void getLogsByEntityShouldReturnEmptyForUnknown() {
             // Given
-            when(auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc("ARTICLE", "999"))
+            when(auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc(eq("ARTICLE"), eq("999"), anyInt()))
                     .thenReturn(Flux.empty());
 
             // When & Then
-            StepVerifier.create(auditService.getLogsByEntity("ARTICLE", "999"))
+            StepVerifier.create(auditService.getLogsByEntity("ARTICLE", "999", 500))
                     .verifyComplete();
         }
 
@@ -326,10 +326,10 @@ class AuditServiceTest {
             AuditLog update = AuditLog.builder().id(2L).action("UPDATE").entityType("ARTICLE").entityId("42").createdAt(LocalDateTime.now().minusMinutes(30)).build();
             AuditLog delete = AuditLog.builder().id(3L).action("DELETE").entityType("ARTICLE").entityId("42").createdAt(LocalDateTime.now().minusHours(1)).build();
 
-            when(auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc("ARTICLE", "42"))
+            when(auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc(eq("ARTICLE"), eq("42"), anyInt()))
                     .thenReturn(Flux.just(create, update, delete));
 
-            StepVerifier.create(auditService.getLogsByEntity("ARTICLE", "42").collectList())
+            StepVerifier.create(auditService.getLogsByEntity("ARTICLE", "42", 500).collectList())
                     .assertNext(logs -> {
                         assertThat(logs).hasSize(3);
                         assertThat(logs).extracting(AuditLog::getAction)

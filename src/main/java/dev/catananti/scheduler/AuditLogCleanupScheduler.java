@@ -25,7 +25,7 @@ public class AuditLogCleanupScheduler {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
         return schedulerLock.executeWithLock("audit-cleanup", Duration.ofMinutes(10),
                 auditLogRepository.deleteByCreatedAtBefore(cutoff)
-                        .doOnSuccess(result -> log.info("Audit log retention cleanup completed"))
+                        .doOnSuccess(count -> log.info("Audit log retention cleanup completed: {} rows deleted", count))
                         .doOnError(e -> log.error("Failed to cleanup old audit logs: {}", e.getMessage(), e))
                         .onErrorComplete()
                         .then()

@@ -11,8 +11,6 @@ public interface UserSocialAccountRepository extends R2dbcRepository<UserSocialA
 
     Flux<UserSocialAccount> findByUserId(Long userId);
 
-    Mono<UserSocialAccount> findByUserIdAndProvider(Long userId, String provider);
-
     Mono<Void> deleteByUserIdAndProvider(Long userId, String provider);
 
     /**

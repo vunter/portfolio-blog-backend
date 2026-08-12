@@ -14,9 +14,6 @@ public interface TagRepository extends ReactiveCrudRepository<Tag, Long> {
 
     Mono<Tag> findBySlug(String slug);
 
-    @Query("SELECT * FROM tags WHERE slug IN (:slugs)")
-    Flux<Tag> findBySlugIn(Set<String> slugs);
-
     Mono<Boolean> existsBySlug(String slug);
 
     @Query("SELECT t.* FROM tags t " +

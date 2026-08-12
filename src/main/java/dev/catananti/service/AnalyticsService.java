@@ -38,6 +38,7 @@ public class AnalyticsService {
     );
 
     private final AnalyticsRepository analyticsRepository;
+    private final dev.catananti.repository.SearchQueryRepository searchQueryRepository;
     private final ArticleRepository articleRepository;
     private final ObjectMapper objectMapper;
     private final IdService idService;
@@ -554,14 +555,47 @@ public class AnalyticsService {
 
     public reactor.core.publisher.Mono<Void> cleanupOldEvents() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
+        // RQ-02: each call deletes at most one 10k batch; repeat until a batch comes back
+        // short, so a backlog larger than 10k rows no longer takes days to drain.
         return schedulerLock.executeWithLock("analytics-cleanup", Duration.ofMinutes(10),
                 analyticsRepository.deleteByCreatedAtBefore(cutoff)
                         .timeout(Duration.ofSeconds(30))
-                        .doOnSuccess(count -> log.info("Analytics cleanup: deleted {} events older than {} days", count, retentionDays))
+                        .expand(deleted -> deleted == 10_000
+                                ? analyticsRepository.deleteByCreatedAtBefore(cutoff).timeout(Duration.ofSeconds(30))
+                                : reactor.core.publisher.Mono.empty())
+                        .reduce(0L, Long::sum)
+                        .doOnSuccess(total -> log.info("Analytics cleanup: deleted {} events older than {} days", total, retentionDays))
+                        // RQ-03/SI-5: search_queries and newsletter_events previously grew
+                        // forever; they now share the analytics retention window.
+                        .then(searchQueryRepository.deleteByCreatedAtBefore(cutoff)
+                                .timeout(Duration.ofSeconds(30))
+                                .expand(deleted -> deleted == 10_000
+                                        ? searchQueryRepository.deleteByCreatedAtBefore(cutoff).timeout(Duration.ofSeconds(30))
+                                        : reactor.core.publisher.Mono.empty())
+                                .reduce(0L, Long::sum)
+                                .doOnSuccess(total -> log.info("Search-query cleanup: deleted {} rows", total)))
+                        .then(deleteOldNewsletterEvents(cutoff)
+                                .doOnSuccess(total -> log.info("Newsletter-event cleanup: deleted {} rows", total)))
                         .doOnError(e -> log.error("Failed to cleanup old analytics events: {}", e.getMessage(), e))
                         .onErrorComplete()
                         .then()
         );
+    }
+
+    private reactor.core.publisher.Mono<Long> deleteOldNewsletterEvents(LocalDateTime cutoff) {
+        return databaseClient.sql("DELETE FROM newsletter_events WHERE id IN (SELECT id FROM newsletter_events WHERE created_at < :cutoff LIMIT 10000)")
+                .bind("cutoff", cutoff)
+                .fetch()
+                .rowsUpdated()
+                .timeout(Duration.ofSeconds(30))
+                .expand(deleted -> deleted == 10_000
+                        ? databaseClient.sql("DELETE FROM newsletter_events WHERE id IN (SELECT id FROM newsletter_events WHERE created_at < :cutoff LIMIT 10000)")
+                                .bind("cutoff", cutoff)
+                                .fetch()
+                                .rowsUpdated()
+                                .timeout(Duration.ofSeconds(30))
+                        : reactor.core.publisher.Mono.empty())
+                .reduce(0L, Long::sum);
     }
 
     /**

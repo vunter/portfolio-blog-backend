@@ -188,18 +188,17 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY views_count DESC NULLS LAST LIMIT :limit")
     Flux<Article> findTopByViewsCount(int limit);
 
-    // Find top articles by likes count
-    @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY likes_count DESC NULLS LAST LIMIT :limit")
-    Flux<Article> findTopByLikesCount(int limit);
-
     // Atomic increment views count to avoid race conditions
+    @Modifying
     @Query("UPDATE articles SET views_count = COALESCE(views_count, 0) + 1 WHERE slug = :slug")
     Mono<Void> incrementViewsBySlug(String slug);
 
     // Atomic increment likes count to avoid race conditions
+    @Modifying
     @Query("UPDATE articles SET likes_count = COALESCE(likes_count, 0) + 1 WHERE slug = :slug")
     Mono<Void> incrementLikesBySlug(String slug);
 
+    @Modifying
     @Query("UPDATE articles SET likes_count = GREATEST(COALESCE(likes_count, 0) - 1, 0) WHERE slug = :slug")
     Mono<Void> decrementLikesBySlug(String slug);
 
@@ -209,9 +208,6 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
 
     @Query("SELECT COALESCE(SUM(likes_count), 0) FROM articles")
     Mono<Long> sumLikesCount();
-
-    @Query("SELECT COUNT(*) FROM articles WHERE created_at >= :since")
-    Mono<Long> countRecentArticles(LocalDateTime since);
 
     // Recent articles ordered by latest update, for admin dashboard activity feed
     @Query("SELECT * FROM articles ORDER BY COALESCE(updated_at, created_at) DESC LIMIT :limit")
@@ -231,6 +227,9 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("SELECT * FROM articles ORDER BY created_at ASC LIMIT :limit OFFSET :offset")
     Flux<Article> findAllOrderByCreatedAtAsc(int limit, int offset);
 
+    // RQ-06: near-twin of findByStatusOrderByViewsCountDesc kept intentionally —
+    // that one is the PUBLIC listing (projects content out, NP-6); this one feeds the
+    // ADMIN list which needs the full row.
     @Query("SELECT * FROM articles WHERE status = :status ORDER BY views_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
     Flux<Article> findByStatusOrderByViewsDesc(String status, int limit, int offset);
 

@@ -57,16 +57,6 @@ public interface SubscriberRepository extends ReactiveCrudRepository<Subscriber,
     @Query("SELECT COUNT(*) > 0 FROM subscribers WHERE email = LOWER(TRIM(:email))")
     Mono<Boolean> existsByEmail(String email);
 
-    @Modifying
-    @Query("UPDATE subscribers SET status = 'UNSUBSCRIBED', unsubscribed_at = CURRENT_TIMESTAMP WHERE email = :email")
-    Mono<Integer> unsubscribeByEmail(String email);
-
-    /**
-     * Find pending subscriptions older than the given date (for cleanup).
-     */
-    @Query("SELECT * FROM subscribers WHERE status = 'PENDING' AND created_at < :expirationDate")
-    Flux<Subscriber> findExpiredPendingSubscriptions(LocalDateTime expirationDate);
-
     /**
      * Delete expired pending subscriptions.
      */

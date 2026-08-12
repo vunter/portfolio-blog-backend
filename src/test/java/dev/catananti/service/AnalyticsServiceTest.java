@@ -33,6 +33,7 @@ import static org.mockito.Mockito.*;
 class AnalyticsServiceTest {
 
     @Mock private AnalyticsRepository analyticsRepository;
+    @Mock private dev.catananti.repository.SearchQueryRepository searchQueryRepository;
     @Mock private ArticleRepository articleRepository;
     @Mock private IdService idService;
     @Mock private DatabaseClient databaseClient;
@@ -47,7 +48,7 @@ class AnalyticsServiceTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        analyticsService = new AnalyticsService(analyticsRepository, articleRepository, objectMapper, idService, databaseClient, geoIPService, new dev.catananti.scheduler.SchedulerLock(null));
+        analyticsService = new AnalyticsService(analyticsRepository, searchQueryRepository, articleRepository, objectMapper, idService, databaseClient, geoIPService, new dev.catananti.scheduler.SchedulerLock(null));
 
         // Lenient stubs for DatabaseClient chain used by trackEvent and analytics queries
         lenient().when(databaseClient.sql(anyString())).thenReturn(executeSpec);
