@@ -34,12 +34,15 @@ public class RoleUpgradeRequestService {
     private final HtmlSanitizerService htmlSanitizerService;
     private final EmailService emailService;
     private final PaginationConfig paginationConfig;
+    private final org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
 
     /**
      * Submit a role upgrade request.
      * Only one pending request per user is allowed.
+     * TX-08: not transactional — the only DB write is one INSERT (guarded by
+     * uq_role_upgrade_requests_pending), and the admin-notification emails that
+     * follow must not hold a pool connection.
      */
-    @Transactional
     public Mono<RoleUpgradeRequestResponse> submitRequest(String userEmail, RoleUpgradeRequestDto dto) {
         return userRepository.findByEmail(userEmail)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")))
@@ -68,6 +71,12 @@ public class RoleUpgradeRequestService {
                                         .build();
 
                                 return roleUpgradeRequestRepository.save(request)
+                                        // CC-08: uq_role_upgrade_requests_pending backs the
+                                        // check-then-act above; the losing concurrent submit
+                                        // gets the same 409 as the pre-check.
+                                        .onErrorResume(org.springframework.dao.DuplicateKeyException.class, e ->
+                                                Mono.error(new ResponseStatusException(
+                                                        HttpStatus.CONFLICT, "You already have a pending role upgrade request")))
                                         .map(saved -> RoleUpgradeRequestResponse.fromEntityWithUser(
                                                 saved, user.getName(), user.getEmail(), user.getRole()))
                                         .doOnSuccess(resp ->
@@ -113,8 +122,9 @@ public class RoleUpgradeRequestService {
     /**
      * Approve a role upgrade request (admin only).
      * This updates the user's role and marks the request as APPROVED.
+     * TX-08: only the status transition + promotion run in a transaction (via the
+     * operator below); the user-notification email happens after commit.
      */
-    @Transactional
     public Mono<RoleUpgradeRequestResponse> approveRequest(Long requestId, String adminEmail) {
         return userRepository.findByEmail(adminEmail)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")))
@@ -126,20 +136,32 @@ public class RoleUpgradeRequestService {
                                         HttpStatus.BAD_REQUEST, "Request is already " + request.getStatus().name().toLowerCase()));
                             }
 
-                            // Update request status
-                            request.setStatus(RoleUpgradeRequestStatus.APPROVED);
-                            request.setReviewedBy(admin.getId());
-                            request.setReviewedAt(LocalDateTime.now());
-                            request.setNewRecord(false);
+                            LocalDateTime reviewedAt = LocalDateTime.now();
 
                             // Update user role via the safe method
                             RoleUpdateRequest roleUpdate = new RoleUpdateRequest();
                             roleUpdate.setRole(request.getRequestedRole());
 
-                            return roleUpgradeRequestRepository.save(request)
-                                    .then(userService.updateUserRoleSafe(
-                                            request.getUserId(), roleUpdate, adminEmail))
-                                    .then(userRepository.findById(request.getUserId()))
+                            // CC-08: claim the request atomically — a concurrent review that
+                            // already processed it makes the conditional UPDATE affect 0 rows.
+                            return transactionalOperator.transactional(
+                                            roleUpgradeRequestRepository.transitionFromPending(
+                                                            requestId, RoleUpgradeRequestStatus.APPROVED.name(),
+                                                            admin.getId(), reviewedAt)
+                                                    .flatMap(rows -> {
+                                                        if (rows == 0) {
+                                                            return Mono.error(new ResponseStatusException(
+                                                                    HttpStatus.BAD_REQUEST, "Request was already processed"));
+                                                        }
+                                                        request.setStatus(RoleUpgradeRequestStatus.APPROVED);
+                                                        request.setReviewedBy(admin.getId());
+                                                        request.setReviewedAt(reviewedAt);
+                                                        request.setNewRecord(false);
+                                                        return Mono.just(rows);
+                                                    })
+                                                    .then(Mono.defer(() -> userService.updateUserRoleSafe(
+                                                            request.getUserId(), roleUpdate, adminEmail))))
+                                    .then(Mono.defer(() -> userRepository.findById(request.getUserId())))
                                     .map(user -> RoleUpgradeRequestResponse.fromEntityWithUser(
                                             request, user.getName(), user.getEmail(), user.getRole()))
                                     .doOnSuccess(resp ->
@@ -160,8 +182,9 @@ public class RoleUpgradeRequestService {
 
     /**
      * Reject a role upgrade request (admin only).
+     * TX-08: not transactional — the only write is the atomic conditional UPDATE,
+     * and the rejection email must not hold a pool connection.
      */
-    @Transactional
     public Mono<RoleUpgradeRequestResponse> rejectRequest(Long requestId, String adminEmail) {
         return userRepository.findByEmail(adminEmail)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")))
@@ -173,12 +196,23 @@ public class RoleUpgradeRequestService {
                                         HttpStatus.BAD_REQUEST, "Request is already " + request.getStatus().name().toLowerCase()));
                             }
 
-                            request.setStatus(RoleUpgradeRequestStatus.REJECTED);
-                            request.setReviewedBy(admin.getId());
-                            request.setReviewedAt(LocalDateTime.now());
-                            request.setNewRecord(false);
+                            LocalDateTime reviewedAt = LocalDateTime.now();
 
-                            return roleUpgradeRequestRepository.save(request)
+                            // CC-08: claim the request atomically (see approveRequest)
+                            return roleUpgradeRequestRepository.transitionFromPending(
+                                            requestId, RoleUpgradeRequestStatus.REJECTED.name(),
+                                            admin.getId(), reviewedAt)
+                                    .flatMap(rows -> {
+                                        if (rows == 0) {
+                                            return Mono.error(new ResponseStatusException(
+                                                    HttpStatus.BAD_REQUEST, "Request was already processed"));
+                                        }
+                                        request.setStatus(RoleUpgradeRequestStatus.REJECTED);
+                                        request.setReviewedBy(admin.getId());
+                                        request.setReviewedAt(reviewedAt);
+                                        request.setNewRecord(false);
+                                        return Mono.just(request);
+                                    })
                                     .flatMap(saved -> userRepository.findById(saved.getUserId())
                                             .map(user -> RoleUpgradeRequestResponse.fromEntityWithUser(
                                                     saved, user.getName(), user.getEmail(), user.getRole()))

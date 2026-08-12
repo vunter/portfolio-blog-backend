@@ -1,10 +1,13 @@
 package dev.catananti.repository;
 
 import dev.catananti.entity.RoleUpgradeRequest;
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.time.LocalDateTime;
 
 public interface RoleUpgradeRequestRepository extends ReactiveCrudRepository<RoleUpgradeRequest, Long> {
 
@@ -25,4 +28,13 @@ public interface RoleUpgradeRequestRepository extends ReactiveCrudRepository<Rol
 
     @Query("SELECT COUNT(*) FROM role_upgrade_requests WHERE status = 'PENDING'")
     Mono<Long> countPending();
+
+    /**
+     * CC-08: atomic PENDING → APPROVED/REJECTED transition. Returns 1 only for the
+     * admin whose review actually claimed the request; a concurrent review of the
+     * same request sees 0 rows and must not proceed.
+     */
+    @Modifying
+    @Query("UPDATE role_upgrade_requests SET status = :newStatus, reviewed_by = :reviewedBy, reviewed_at = :reviewedAt WHERE id = :id AND status = 'PENDING'")
+    Mono<Long> transitionFromPending(Long id, String newStatus, Long reviewedBy, LocalDateTime reviewedAt);
 }
