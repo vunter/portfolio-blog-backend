@@ -62,7 +62,7 @@ public class EmailVerificationService {
     }
 
     /**
-     * Consumes the token. Returns the user id.
+     * Consumes the token and marks the email as verified. Returns the user id.
      *
      * <p>Consumption is a conditional UPDATE returning a row count: whoever gets
      * 0 lost the race to another request and must not verify. An
@@ -82,7 +82,8 @@ public class EmailVerificationService {
                                 return Mono.error(new ResponseStatusException(
                                         HttpStatus.BAD_REQUEST, "error.invalid_or_expired_token"));
                             }
-                            return Mono.just(token.getUserId());
+                            return userRepository.markEmailVerified(token.getUserId(), LocalDateTime.now())
+                                    .thenReturn(token.getUserId());
                         }))
                 .doOnSuccess(userId -> log.info("Email verified for userId: {}", userId));
     }

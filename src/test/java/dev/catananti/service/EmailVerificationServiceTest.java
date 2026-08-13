@@ -113,8 +113,8 @@ class EmailVerificationServiceTest {
     }
 
     @Test
-    @DisplayName("should consume the token and return the userId")
-    void verifyConsumesTokenAndReturnsUserId() {
+    @DisplayName("should mark the user verified and return the userId")
+    void verifyMarksUserAndReturnsUserId() {
         String plain = "tok-abc";
         EmailVerificationToken token = EmailVerificationToken.builder()
                 .id(5L).userId(10L).email("user@test.dev")
@@ -124,9 +124,10 @@ class EmailVerificationServiceTest {
 
         when(tokenRepository.findByTokenAndUsedFalse(DigestUtils.sha256Hex(plain))).thenReturn(Mono.just(token));
         when(tokenRepository.consumeIfUnused(eq(5L), any())).thenReturn(Mono.just(1L));
+        when(userRepository.markEmailVerified(eq(10L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
 
         StepVerifier.create(service.verify(plain)).expectNext(10L).verifyComplete();
-        verify(tokenRepository).consumeIfUnused(eq(5L), any());
+        verify(userRepository).markEmailVerified(eq(10L), any(LocalDateTime.class));
     }
 
     @Test
@@ -148,6 +149,8 @@ class EmailVerificationServiceTest {
                 .expectErrorSatisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST))
                 .verify();
+
+        verify(userRepository, never()).markEmailVerified(any(), any());
     }
 
     @Test

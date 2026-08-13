@@ -67,4 +67,14 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Modifying
     @Query("UPDATE users SET password_hash = :passwordHash, updated_at = :updatedAt WHERE id = :id")
     Mono<Long> updatePasswordHash(Long id, String passwordHash, LocalDateTime updatedAt);
+
+    /**
+     * Marca o e-mail como verificado. A cláusula {@code email_verified = false}
+     * torna a operação idempotente e devolve 0 quando já estava verificado, o que
+     * o chamador usa para distinguir "acabei de verificar" de "já estava".
+     */
+    @Modifying
+    @Query("UPDATE users SET email_verified = true, updated_at = :updatedAt "
+         + "WHERE id = :id AND email_verified = false")
+    Mono<Long> markEmailVerified(Long id, LocalDateTime updatedAt);
 }
