@@ -50,6 +50,7 @@ public class AuthService {
     private final HtmlSanitizerService htmlSanitizerService;
     private final TokenBlacklistService tokenBlacklistService;
     private final EmailService emailService;
+    private final EmailVerificationService emailVerificationService;
     private final Optional<MfaService> mfaService;
     private final Optional<EmailOtpService> emailOtpService;
     private final ReactiveStringRedisTemplate redisTemplate;
@@ -77,6 +78,7 @@ public class AuthService {
                        HtmlSanitizerService htmlSanitizerService,
                        TokenBlacklistService tokenBlacklistService,
                        EmailService emailService,
+                       EmailVerificationService emailVerificationService,
                        ReactiveStringRedisTemplate redisTemplate,
                        org.springframework.transaction.reactive.TransactionalOperator transactionalOperator,
                        @Autowired(required = false) LoginAttemptService loginAttemptService,
@@ -91,6 +93,7 @@ public class AuthService {
         this.htmlSanitizerService = htmlSanitizerService;
         this.tokenBlacklistService = tokenBlacklistService;
         this.emailService = emailService;
+        this.emailVerificationService = emailVerificationService;
         this.redisTemplate = redisTemplate;
         this.transactionalOperator = transactionalOperator;
         this.loginAttemptService = Optional.ofNullable(loginAttemptService);
@@ -412,7 +415,16 @@ public class AuthService {
                                             return Mono.empty();
                                         })
                                         .thenReturn(response);
-                            });
+                            })
+                            // Address-ownership verification — AFTER the transactional
+                            // boundary (SMTP inside a transaction would hold a pool
+                            // connection through the whole handshake) and best-effort.
+                            .flatMap(response -> emailVerificationService.sendVerification(email)
+                                    .onErrorResume(e -> {
+                                        log.warn("Verification email failed at registration: {}", e.getMessage());
+                                        return Mono.empty();
+                                    })
+                                    .thenReturn(response));
                 });
     }
 

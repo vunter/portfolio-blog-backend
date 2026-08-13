@@ -11,6 +11,7 @@ import dev.catananti.service.RefreshTokenService;
 import dev.catananti.util.IpAddressExtractor;
 import dev.catananti.util.PiiMasker;
 import dev.catananti.service.EmailChangeService;
+import dev.catananti.service.EmailVerificationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -46,6 +47,7 @@ public class AuthController {
     private final AuthService authService;
     private final RecaptchaService recaptchaService;
     private final EmailChangeService emailChangeService;
+    private final EmailVerificationService emailVerificationService;
     private final RefreshTokenService refreshTokenService;
     private final ServerCsrfTokenRepository csrfTokenRepository;
     private final BlogMetrics blogMetrics;
@@ -316,6 +318,20 @@ public class AuthController {
                     return Mono.just(ResponseEntity.badRequest().body(Map.of(
                             "message", "Invalid or expired verification link")));
                 });
+    }
+
+    @GetMapping("/verify-email")
+    public Mono<ResponseEntity<Map<String, String>>> verifyEmail(
+            @RequestParam @NotBlank @Size(min = 1, max = 128) String token) {
+        return emailVerificationService.verify(token)
+                .map(userId -> ResponseEntity.ok(Map.of("message", "email.verified")));
+    }
+
+    @PostMapping("/resend-verification")
+    public Mono<ResponseEntity<Map<String, String>>> resendVerification(
+            @AuthenticationPrincipal String email) {
+        return emailVerificationService.sendVerification(email)
+                .thenReturn(ResponseEntity.accepted().body(Map.of("message", "email.verification_sent")));
     }
 
     @GetMapping("/revert-email-change")

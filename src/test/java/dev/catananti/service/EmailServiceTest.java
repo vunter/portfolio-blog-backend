@@ -8,6 +8,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.MessageSource;
@@ -23,7 +24,9 @@ import java.util.function.Function;
 
 import java.time.Duration;
 import java.util.Locale;
+import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -472,6 +475,44 @@ class EmailServiceTest {
             StepVerifier.create(emailService.sendAccountLockoutNotification(
                     "user@test.com", "User", 3, 10, null))
                     .verifyComplete();
+        }
+    }
+
+    @Nested
+    @DisplayName("Email Verification")
+    class EmailVerification {
+
+        @Test
+        @DisplayName("should build verification link pointing to the /auth/verify-email route")
+        void sendEmailVerificationBuildsLinkToVerifyEmailRoute() {
+            setupRateLimitAllow();
+            when(mailSender.createMimeMessage()).thenReturn(mimeMessage);
+            when(resilience.getExternalTimeout()).thenReturn(Duration.ofSeconds(30));
+            stubAllMessages();
+            setField(emailService, "siteUrl", "https://catananti.dev");
+
+            StepVerifier.create(emailService.sendEmailVerification("user@test.dev", "Ana", "tok123"))
+                    .verifyComplete();
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> vars = ArgumentCaptor.forClass(Map.class);
+            verify(templateService).render(eq("email-verify"), vars.capture());
+            assertThat(vars.getValue().get("verifyUrl"))
+                    .isEqualTo("https://catananti.dev/auth/verify-email?token=tok123");
+        }
+
+        @Test
+        @DisplayName("should use default user name when name is null")
+        void shouldUseDefaultUserWhenNameNull() {
+            setupRateLimitAllow();
+            when(mailSender.createMimeMessage()).thenReturn(mimeMessage);
+            when(resilience.getExternalTimeout()).thenReturn(Duration.ofSeconds(30));
+            stubAllMessages();
+
+            StepVerifier.create(emailService.sendEmailVerification("user@test.dev", null, "tok123"))
+                    .verifyComplete();
+
+            verify(messageSource).getMessage(eq("email.default.user"), any(), any(Locale.class));
         }
     }
 

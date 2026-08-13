@@ -832,6 +832,34 @@ public class EmailService {
     }
 
     /**
+     * Send the address-ownership verification link used at registration.
+     * The plain token only travels in this email; the database stores its hash.
+     */
+    public Mono<Void> sendEmailVerification(String email, String name, String token) {
+        String subject = msg("email.verify.subject");
+        String verifyUrl = siteUrl + "/auth/verify-email?token=" + token;
+        String displayName = name != null ? name : msg("email.default.user");
+
+        String html = templateService.render("email-verify", baseVars(
+            "#0ea5e9 0%, #0369a1 100%",
+            msg("email.verify.header"),
+            Map.of(
+                "greeting", msg("email.greeting", displayName),
+                "bodyText", msg("email.verify.body"),
+                "verifyUrl", verifyUrl,
+                "buttonText", msg("email.verify.button"),
+                "importantTitle", msg("email.verify.important"),
+                "expiresText", msg("email.verify.expires"),
+                "onceText", msg("email.verify.once"),
+                "ignoreText", msg("email.verify.ignore"),
+                "fallbackText", msg("email.verify.fallback")
+            )
+        ));
+
+        return sendHtmlEmail(email, subject, html);
+    }
+
+    /**
      * Send notification to the OLD email address that the email was changed,
      * including a revert link to undo the change.
      */

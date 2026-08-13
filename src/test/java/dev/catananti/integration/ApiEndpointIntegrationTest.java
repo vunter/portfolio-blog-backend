@@ -358,6 +358,7 @@ class ApiEndpointIntegrationTest {
         @Mock private AuthService authService;
         @Mock private RecaptchaService recaptchaService;
         @Mock private EmailChangeService emailChangeService;
+        @Mock private dev.catananti.service.EmailVerificationService emailVerificationService;
         @Mock private RefreshTokenService refreshTokenService;
         @Mock private UserRepository userRepository;
         @Mock private org.springframework.security.web.server.csrf.ServerCsrfTokenRepository csrfTokenRepository;
@@ -369,7 +370,7 @@ class ApiEndpointIntegrationTest {
         @BeforeEach
         void setUp() throws Exception {
             authController = new AuthController(authService, recaptchaService, emailChangeService,
-                    refreshTokenService, csrfTokenRepository, blogMetrics);
+                    emailVerificationService, refreshTokenService, csrfTokenRepository, blogMetrics);
             // Set @Value fields via reflection (not injected in standalone mode)
             java.lang.reflect.Field expField = AuthController.class.getDeclaredField("jwtExpirationMs");
             expField.setAccessible(true);

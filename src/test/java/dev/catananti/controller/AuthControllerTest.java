@@ -52,6 +52,9 @@ class AuthControllerTest {
     private dev.catananti.service.EmailChangeService emailChangeService;
 
     @Mock
+    private dev.catananti.service.EmailVerificationService emailVerificationService;
+
+    @Mock
     private RefreshTokenService refreshTokenService;
 
     @Mock
@@ -321,6 +324,36 @@ class AuthControllerTest {
                         assertThat(response.getStatusCode().value()).isEqualTo(400);
                         assertThat(response.getBody()).containsKey("message");
                     })
+                    .verifyComplete();
+        }
+    }
+
+    @Nested
+    @DisplayName("GET /api/v1/admin/auth/verify-email")
+    class VerifyEmail {
+
+        @Test
+        @DisplayName("Should return 200 on valid token")
+        void verifyEmailReturnsOkOnValidToken() {
+            when(emailVerificationService.verify("tok")).thenReturn(Mono.just(10L));
+
+            StepVerifier.create(authController.verifyEmail("tok"))
+                    .assertNext(resp -> assertThat(resp.getStatusCode().value()).isEqualTo(200))
+                    .verifyComplete();
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /api/v1/admin/auth/resend-verification")
+    class ResendVerification {
+
+        @Test
+        @DisplayName("Should return 202 for the authenticated user")
+        void resendVerificationReturnsAccepted() {
+            when(emailVerificationService.sendVerification("user@test.dev")).thenReturn(Mono.empty());
+
+            StepVerifier.create(authController.resendVerification("user@test.dev"))
+                    .assertNext(resp -> assertThat(resp.getStatusCode().value()).isEqualTo(202))
                     .verifyComplete();
         }
     }
