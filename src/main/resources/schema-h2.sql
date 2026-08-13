@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS users (
     terms_accepted BOOLEAN DEFAULT FALSE NOT NULL,
     terms_accepted_at TIMESTAMP,
     terms_version VARCHAR(20) DEFAULT '1.0',
+    analytics_consent BOOLEAN,
+    analytics_consent_at TIMESTAMP,
     preferred_locale VARCHAR(10) DEFAULT 'en',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -146,9 +148,16 @@ CREATE TABLE IF NOT EXISTS subscribers (
     confirmed_at TIMESTAMP,
     unsubscribed_at TIMESTAMP,
     analytics_consent BOOLEAN DEFAULT FALSE,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    linked_at TIMESTAMP,
+    link_origin VARCHAR(32),
+    unlinked_at TIMESTAMP,
+    unlinked_by VARCHAR(16),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- H2 allows multiple NULLs in a unique index, so no partial predicate is needed
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_user_id ON subscribers(user_id);
 CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email);
 CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);
 CREATE INDEX IF NOT EXISTS idx_subscribers_confirmation_token ON subscribers(confirmation_token);

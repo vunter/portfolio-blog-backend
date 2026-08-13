@@ -35,6 +35,10 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- Site-navigation analytics consent (V20). NULL = never decided, FALSE = refused.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS analytics_consent BOOLEAN;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS analytics_consent_at TIMESTAMP;
+
 -- Articles table
 CREATE TABLE IF NOT EXISTS articles (
     id BIGINT PRIMARY KEY,
@@ -155,6 +159,16 @@ CREATE TABLE IF NOT EXISTS subscribers (
     unsubscribed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Link to the user account (V20): only set when both sides proved the address.
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS link_origin VARCHAR(32);
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS unlinked_at TIMESTAMP;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS unlinked_by VARCHAR(16);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_user_id
+    ON subscribers (user_id) WHERE user_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email);
 CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);

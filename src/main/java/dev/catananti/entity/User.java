@@ -103,6 +103,14 @@ public class User implements Persistable<Long>, NewRecordAware {
     @Builder.Default
     private String termsVersion = "1.0";
 
+    // Site-navigation analytics consent. NULL = never decided, FALSE = refused —
+    // the distinction matters because a refusal must not be re-asked.
+    @Column("analytics_consent")
+    private Boolean analyticsConsent;
+
+    @Column("analytics_consent_at")
+    private LocalDateTime analyticsConsentAt;
+
     @Column("created_at")
     private LocalDateTime createdAt;
     

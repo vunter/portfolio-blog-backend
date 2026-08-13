@@ -354,9 +354,11 @@ class NewsletterServiceTest {
         @Test
         @DisplayName("Should return paginated subscribers without status filter")
         void shouldReturnPaginatedWithoutFilter() {
+            LocalDateTime linkedAt = LocalDateTime.of(2026, 8, 1, 12, 0);
             Subscriber sub1 = Subscriber.builder()
                     .id(4001L).email("sub1@example.com").name("Sub One")
-                    .status(SubscriberStatus.CONFIRMED).createdAt(LocalDateTime.now()).build();
+                    .status(SubscriberStatus.CONFIRMED).createdAt(LocalDateTime.now())
+                    .userId(77L).linkedAt(linkedAt).linkOrigin("AUTO_BACKFILL").build();
             Subscriber sub2 = Subscriber.builder()
                     .id(4002L).email("sub2@example.com").name("Sub Two")
                     .status(SubscriberStatus.PENDING).createdAt(LocalDateTime.now()).build();
@@ -372,6 +374,11 @@ class NewsletterServiceTest {
                         assertThat(page.getTotalElements()).isEqualTo(2L);
                         assertThat(page.isFirst()).isTrue();
                         assertThat(page.isLast()).isTrue();
+                        // admin panel sees the account link (userId as String — JS number range)
+                        assertThat(page.getContent().getFirst().getUserId()).isEqualTo("77");
+                        assertThat(page.getContent().getFirst().getLinkedAt()).isEqualTo(linkedAt);
+                        assertThat(page.getContent().getFirst().getLinkOrigin()).isEqualTo("AUTO_BACKFILL");
+                        assertThat(page.getContent().get(1).getUserId()).isNull();
                     })
                     .verifyComplete();
         }

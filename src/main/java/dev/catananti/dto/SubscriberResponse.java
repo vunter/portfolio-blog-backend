@@ -23,7 +23,12 @@ public class SubscriberResponse {
     private LocalDateTime subscribedAt;
     private LocalDateTime confirmedAt;
     private LocalDateTime unsubscribedAt;
-    
+    // Account link visibility for the admin panel (null when not linked).
+    // String like id: Snowflake longs overflow the JS number range.
+    private String userId;
+    private LocalDateTime linkedAt;
+    private String linkOrigin;
+
     public static SubscriberResponse fromEntity(Subscriber subscriber) {
         return SubscriberResponse.builder()
                 .id(String.valueOf(subscriber.getId()))
@@ -33,6 +38,9 @@ public class SubscriberResponse {
                 .subscribedAt(subscriber.getCreatedAt())
                 .confirmedAt(subscriber.getConfirmedAt())
                 .unsubscribedAt(subscriber.getUnsubscribedAt())
+                .userId(subscriber.getUserId() != null ? String.valueOf(subscriber.getUserId()) : null)
+                .linkedAt(subscriber.getLinkedAt())
+                .linkOrigin(subscriber.getLinkOrigin())
                 .build();
     }
 }
