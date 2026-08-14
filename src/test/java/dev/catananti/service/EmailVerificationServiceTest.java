@@ -34,12 +34,14 @@ class EmailVerificationServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private EmailService emailService;
     @Mock private IdService idService;
+    @Mock private NewsletterLinkService newsletterLinkService;
 
     private EmailVerificationService service;
 
     @BeforeEach
     void setUp() {
-        service = new EmailVerificationService(tokenRepository, userRepository, emailService, idService);
+        service = new EmailVerificationService(tokenRepository, userRepository, emailService, idService,
+                newsletterLinkService);
         ReflectionTestUtils.setField(service, "tokenValidityHours", 24);
         ReflectionTestUtils.setField(service, "maxTokensPerHour", 3);
     }
@@ -125,9 +127,54 @@ class EmailVerificationServiceTest {
         when(tokenRepository.findByTokenAndUsedFalse(DigestUtils.sha256Hex(plain))).thenReturn(Mono.just(token));
         when(tokenRepository.consumeIfUnused(eq(5L), any())).thenReturn(Mono.just(1L));
         when(userRepository.markEmailVerified(eq(10L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
+        when(newsletterLinkService.autoLink(10L, "user@test.dev", "AUTO_REGISTER")).thenReturn(Mono.just(true));
 
         StepVerifier.create(service.verify(plain)).expectNext(10L).verifyComplete();
         verify(userRepository).markEmailVerified(eq(10L), any(LocalDateTime.class));
+        // a fresh verification (1 row) is the moment both sides may finally link
+        verify(newsletterLinkService).autoLink(10L, "user@test.dev", "AUTO_REGISTER");
+    }
+
+    @Test
+    @DisplayName("should not attempt the newsletter link when the email was already verified")
+    void verifyDoesNotLinkWhenAlreadyVerified() {
+        // markEmailVerified returning 0 means another request verified first;
+        // that request already triggered the link.
+        String plain = "tok-abc";
+        EmailVerificationToken token = EmailVerificationToken.builder()
+                .id(5L).userId(10L).email("user@test.dev")
+                .token(DigestUtils.sha256Hex(plain))
+                .expiresAt(LocalDateTime.now().plusHours(1))
+                .used(false).build();
+
+        when(tokenRepository.findByTokenAndUsedFalse(any())).thenReturn(Mono.just(token));
+        when(tokenRepository.consumeIfUnused(eq(5L), any())).thenReturn(Mono.just(1L));
+        when(userRepository.markEmailVerified(eq(10L), any(LocalDateTime.class))).thenReturn(Mono.just(0L));
+
+        StepVerifier.create(service.verify(plain)).expectNext(10L).verifyComplete();
+
+        verify(newsletterLinkService, never()).autoLink(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("should verify the email even when the newsletter link fails")
+    void verifySucceedsWhenNewsletterLinkFails() {
+        // The link is best-effort: not verifying the person's email because the
+        // newsletter failed would be backwards.
+        String plain = "tok-abc";
+        EmailVerificationToken token = EmailVerificationToken.builder()
+                .id(5L).userId(10L).email("user@test.dev")
+                .token(DigestUtils.sha256Hex(plain))
+                .expiresAt(LocalDateTime.now().plusHours(1))
+                .used(false).build();
+
+        when(tokenRepository.findByTokenAndUsedFalse(any())).thenReturn(Mono.just(token));
+        when(tokenRepository.consumeIfUnused(eq(5L), any())).thenReturn(Mono.just(1L));
+        when(userRepository.markEmailVerified(eq(10L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
+        when(newsletterLinkService.autoLink(10L, "user@test.dev", "AUTO_REGISTER"))
+                .thenReturn(Mono.error(new RuntimeException("db hiccup")));
+
+        StepVerifier.create(service.verify(plain)).expectNext(10L).verifyComplete();
     }
 
     @Test

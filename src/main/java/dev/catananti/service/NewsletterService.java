@@ -34,6 +34,8 @@ import java.util.UUID;
 public class NewsletterService {
 
     private final SubscriberRepository subscriberRepository;
+    private final dev.catananti.repository.UserRepository userRepository;
+    private final NewsletterLinkService newsletterLinkService;
     private final EmailService emailService;
     private final IdService idService;
     private final HtmlSanitizerService htmlSanitizerService;
@@ -154,12 +156,15 @@ public class NewsletterService {
 
                     return subscriberRepository.save(subscriber)
                             .flatMap(s -> {
-                                // Send welcome email after confirmation
-                                return emailService.sendNewsletterWelcome(s.getEmail(), s.getName(), s.getUnsubscribeToken())
-                                        .onErrorResume(e -> {
-                                            log.warn("Failed to send welcome email to {}: {}", PiiMasker.maskEmail(s.getEmail()), e.getMessage());
-                                            return Mono.empty();
-                                        })
+                                // Confirmation is the moment the address is proven, so it is
+                                // also the moment a verified account may link to it.
+                                return autoLinkVerifiedAccount(s)
+                                        // Send welcome email after confirmation
+                                        .then(Mono.defer(() -> emailService.sendNewsletterWelcome(s.getEmail(), s.getName(), s.getUnsubscribeToken())
+                                                .onErrorResume(e -> {
+                                                    log.warn("Failed to send welcome email to {}: {}", PiiMasker.maskEmail(s.getEmail()), e.getMessage());
+                                                    return Mono.empty();
+                                                })))
                                         .thenReturn(Map.of("message", "success.newsletter_confirmed"));
                             })
                             .doOnSuccess(m -> {
@@ -168,6 +173,24 @@ public class NewsletterService {
                                 blogMetrics.incrementSubscription();
                             });
                 });
+    }
+
+    /**
+     * Best-effort account link after the address is proven by confirmation.
+     * Failures are logged and swallowed: the confirmation already happened and
+     * must never be taken down by the link.
+     */
+    private Mono<Void> autoLinkVerifiedAccount(Subscriber subscriber) {
+        return userRepository.findByEmail(subscriber.getEmail())
+                .filter(user -> Boolean.TRUE.equals(user.getEmailVerified()))
+                .flatMap(user -> newsletterLinkService.autoLink(
+                        user.getId(), subscriber.getEmail(), NewsletterLinkService.ORIGIN_AUTO_SUBSCRIBE))
+                .onErrorResume(e -> {
+                    log.warn("Newsletter auto-link failed after confirmation for {}: {}",
+                            PiiMasker.maskEmail(subscriber.getEmail()), e.getMessage());
+                    return Mono.empty();
+                })
+                .then();
     }
 
     public Mono<Map<String, String>> unsubscribe(String email) {

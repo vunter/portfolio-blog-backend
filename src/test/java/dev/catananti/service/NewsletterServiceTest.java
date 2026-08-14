@@ -32,10 +32,12 @@ import static org.mockito.Mockito.*;
 class NewsletterServiceTest {
 
     @Mock private SubscriberRepository subscriberRepository;
+    @Mock private dev.catananti.repository.UserRepository userRepository;
     @Mock private EmailService emailService;
     @Mock private IdService idService;
     @Mock private HtmlSanitizerService htmlSanitizerService;
     @Mock private NotificationEventService notificationEventService;
+    @Mock private NewsletterLinkService newsletterLinkService;
     @Mock private dev.catananti.metrics.BlogMetrics blogMetrics;
     @Mock private dev.catananti.config.PaginationConfig paginationConfig;
 
@@ -46,6 +48,8 @@ class NewsletterServiceTest {
     void setUp() {
         lenient().when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
+        // most confirmation tests have no account behind the subscriber email
+        lenient().when(userRepository.findByEmail(anyString())).thenReturn(Mono.empty());
 
         ReflectionTestUtils.setField(newsletterService, "siteUrl", "https://catananti.dev");
         ReflectionTestUtils.setField(newsletterService, "confirmationExpirationHours", 48);
@@ -163,6 +167,96 @@ class NewsletterServiceTest {
                     .assertNext(response -> {
                         assertThat(response.get("message")).isEqualTo("success.newsletter_confirmed");
                     })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("Should auto-link a verified account after confirming the subscription")
+        void shouldAutoLinkVerifiedAccountAfterConfirmation() {
+            Subscriber pending = Subscriber.builder()
+                    .id(4001L)
+                    .email("owner@example.com")
+                    .status(SubscriberStatus.PENDING)
+                    .confirmationToken("valid-token-123")
+                    .createdAt(LocalDateTime.now().minusHours(1))
+                    .build();
+            dev.catananti.entity.User verifiedUser = dev.catananti.entity.User.builder()
+                    .id(77L).email("owner@example.com").name("Owner").emailVerified(true).build();
+
+            when(subscriberRepository.findByConfirmationToken("valid-token-123"))
+                    .thenReturn(Mono.just(pending));
+            when(subscriberRepository.save(any(Subscriber.class)))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.findByEmail("owner@example.com")).thenReturn(Mono.just(verifiedUser));
+            when(newsletterLinkService.autoLink(77L, "owner@example.com", "AUTO_SUBSCRIBE"))
+                    .thenReturn(Mono.just(true));
+            when(emailService.sendNewsletterWelcome(anyString(), any(), anyString()))
+                    .thenReturn(Mono.empty());
+
+            StepVerifier.create(newsletterService.confirmSubscription("valid-token-123"))
+                    .assertNext(response ->
+                            assertThat(response.get("message")).isEqualTo("success.newsletter_confirmed"))
+                    .verifyComplete();
+
+            verify(newsletterLinkService).autoLink(77L, "owner@example.com", "AUTO_SUBSCRIBE");
+        }
+
+        @Test
+        @DisplayName("Should not link when the account email is not verified")
+        void shouldNotLinkUnverifiedAccount() {
+            Subscriber pending = Subscriber.builder()
+                    .id(4001L)
+                    .email("owner@example.com")
+                    .status(SubscriberStatus.PENDING)
+                    .confirmationToken("valid-token-123")
+                    .createdAt(LocalDateTime.now().minusHours(1))
+                    .build();
+            dev.catananti.entity.User unverifiedUser = dev.catananti.entity.User.builder()
+                    .id(77L).email("owner@example.com").name("Owner").emailVerified(false).build();
+
+            when(subscriberRepository.findByConfirmationToken("valid-token-123"))
+                    .thenReturn(Mono.just(pending));
+            when(subscriberRepository.save(any(Subscriber.class)))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.findByEmail("owner@example.com")).thenReturn(Mono.just(unverifiedUser));
+            when(emailService.sendNewsletterWelcome(anyString(), any(), anyString()))
+                    .thenReturn(Mono.empty());
+
+            StepVerifier.create(newsletterService.confirmSubscription("valid-token-123"))
+                    .assertNext(response ->
+                            assertThat(response.get("message")).isEqualTo("success.newsletter_confirmed"))
+                    .verifyComplete();
+
+            verify(newsletterLinkService, never()).autoLink(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Should confirm the subscription even when the account link fails")
+        void shouldConfirmEvenWhenLinkFails() {
+            // The link is best-effort; a failure there must never undo the confirmation.
+            Subscriber pending = Subscriber.builder()
+                    .id(4001L)
+                    .email("owner@example.com")
+                    .status(SubscriberStatus.PENDING)
+                    .confirmationToken("valid-token-123")
+                    .createdAt(LocalDateTime.now().minusHours(1))
+                    .build();
+            dev.catananti.entity.User verifiedUser = dev.catananti.entity.User.builder()
+                    .id(77L).email("owner@example.com").name("Owner").emailVerified(true).build();
+
+            when(subscriberRepository.findByConfirmationToken("valid-token-123"))
+                    .thenReturn(Mono.just(pending));
+            when(subscriberRepository.save(any(Subscriber.class)))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.findByEmail("owner@example.com")).thenReturn(Mono.just(verifiedUser));
+            when(newsletterLinkService.autoLink(77L, "owner@example.com", "AUTO_SUBSCRIBE"))
+                    .thenReturn(Mono.error(new RuntimeException("db hiccup")));
+            when(emailService.sendNewsletterWelcome(anyString(), any(), anyString()))
+                    .thenReturn(Mono.empty());
+
+            StepVerifier.create(newsletterService.confirmSubscription("valid-token-123"))
+                    .assertNext(response ->
+                            assertThat(response.get("message")).isEqualTo("success.newsletter_confirmed"))
                     .verifyComplete();
         }
 

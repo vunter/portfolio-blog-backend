@@ -34,6 +34,7 @@ public class EmailVerificationService {
     private final UserRepository userRepository;
     private final EmailService emailService;
     private final IdService idService;
+    private final NewsletterLinkService newsletterLinkService;
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
@@ -83,7 +84,20 @@ public class EmailVerificationService {
                                         HttpStatus.BAD_REQUEST, "error.invalid_or_expired_token"));
                             }
                             return userRepository.markEmailVerified(token.getUserId(), LocalDateTime.now())
-                                    .thenReturn(token.getUserId());
+                                    .flatMap(updated -> updated == 0
+                                            // someone verified first and already triggered the link
+                                            ? Mono.just(token.getUserId())
+                                            : newsletterLinkService.autoLink(token.getUserId(), token.getEmail(),
+                                                            NewsletterLinkService.ORIGIN_AUTO_REGISTER)
+                                                    // Best-effort: the verification must succeed even if the
+                                                    // newsletter link fails — the contrary would refuse to
+                                                    // verify someone's email over a newsletter problem.
+                                                    .onErrorResume(e -> {
+                                                        log.warn("Newsletter auto-link failed after verification for {}: {}",
+                                                                PiiMasker.maskEmail(token.getEmail()), e.getMessage());
+                                                        return Mono.just(false);
+                                                    })
+                                                    .thenReturn(token.getUserId()));
                         }))
                 .doOnSuccess(userId -> log.info("Email verified for userId: {}", userId));
     }
