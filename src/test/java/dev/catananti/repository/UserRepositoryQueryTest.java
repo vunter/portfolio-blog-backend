@@ -50,4 +50,23 @@ class UserRepositoryQueryTest {
         assertThat(m.getGenericReturnType().getTypeName())
                 .isEqualTo("reactor.core.publisher.Mono<java.lang.Long>");
     }
+
+    @Test
+    @DisplayName("updateAnalyticsConsent toca apenas o consentimento e seus timestamps")
+    void updateAnalyticsConsentUpdatesOnlyConsentColumns() throws NoSuchMethodException {
+        Method m = method("updateAnalyticsConsent", Long.class, Boolean.class, LocalDateTime.class);
+
+        assertThat(m.isAnnotationPresent(Modifying.class)).isTrue();
+        assertThat(m.getGenericReturnType().getTypeName())
+                .isEqualTo("reactor.core.publisher.Mono<java.lang.Long>");
+
+        String sql = m.getAnnotation(Query.class).value();
+        assertThat(sql).contains("analytics_consent = :consent");
+        assertThat(sql).contains("analytics_consent_at = :at");
+        assertThat(sql).contains("WHERE id = :id");
+        assertThat(sql)
+                .doesNotContain("password_hash")
+                .doesNotContain("email_verified")
+                .doesNotContain("role");
+    }
 }

@@ -44,9 +44,10 @@ public enum AuditEventType {
     EMAIL_CHANGE,
     EMAIL_REVERT,
 
-    // Newsletter link (LGPD)
+    // Newsletter link and consent (LGPD)
     NEWSLETTER_LINKED,
-    NEWSLETTER_UNLINKED;
+    NEWSLETTER_UNLINKED,
+    CONSENT_UPDATED;
 
     /**
      * Returns the action string used in audit log storage.

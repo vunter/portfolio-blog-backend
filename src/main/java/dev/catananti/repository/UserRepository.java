@@ -77,4 +77,10 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Query("UPDATE users SET email_verified = true, updated_at = :updatedAt "
          + "WHERE id = :id AND email_verified = false")
     Mono<Long> markEmailVerified(Long id, LocalDateTime updatedAt);
+
+    /** Site-navigation analytics consent; analytics_consent_at is the proof of when. */
+    @Modifying
+    @Query("UPDATE users SET analytics_consent = :consent, analytics_consent_at = :at, updated_at = :at "
+         + "WHERE id = :id")
+    Mono<Long> updateAnalyticsConsent(Long id, Boolean consent, LocalDateTime at);
 }
