@@ -39,6 +39,11 @@ END $$;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS analytics_consent BOOLEAN;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS analytics_consent_at TIMESTAMP;
 
+-- Account deletion (V21): status distinguishes DEACTIVATED from ERASED — a
+-- difference `active` cannot express; `active` stays as what the login checks.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+
 -- Articles table
 CREATE TABLE IF NOT EXISTS articles (
     id BIGINT PRIMARY KEY,
@@ -94,6 +99,12 @@ CREATE TABLE IF NOT EXISTS comments (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Structural authorship without PII (V21): erasure nulls author_email while
+-- user_id keeps pointing at the (anonymized) account row.
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id) WHERE user_id IS NOT NULL;
+ALTER TABLE comments ALTER COLUMN author_email DROP NOT NULL;
 
 -- Analytics Events table
 CREATE TABLE IF NOT EXISTS analytics_events (

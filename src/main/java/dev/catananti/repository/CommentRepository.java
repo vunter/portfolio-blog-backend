@@ -1,6 +1,7 @@
 package dev.catananti.repository;
 
 import dev.catananti.entity.Comment;
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.stereotype.Repository;
@@ -24,17 +25,11 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
     @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' AND parent_id IS NULL ORDER BY created_at ASC LIMIT :limit OFFSET :offset")
     Flux<Comment> findApprovedByArticleIdSortedByOldest(Long articleId, int limit, int offset);
 
-    @Query("SELECT * FROM comments WHERE parent_id = :parentId AND status = 'APPROVED' ORDER BY created_at ASC")
-    Flux<Comment> findApprovedRepliesByParentId(Long parentId);
-
     // Q9.1: Batch-load replies for multiple parent IDs to avoid N+1.
     // Must be a Collection: spring-r2dbc only expands Collection parameters into
     // IN lists — an array binds as a single bigint[] and fails on PostgreSQL.
     @Query("SELECT * FROM comments WHERE parent_id IN (:parentIds) AND status = 'APPROVED' ORDER BY created_at ASC")
     Flux<Comment> findApprovedRepliesByParentIds(List<Long> parentIds);
-
-    @Query("SELECT * FROM comments WHERE article_id = :articleId AND status = 'APPROVED' ORDER BY created_at ASC LIMIT :limit")
-    Flux<Comment> findAllApprovedByArticleId(Long articleId, int limit);
 
     @Query("SELECT * FROM comments WHERE article_id = :articleId ORDER BY created_at DESC LIMIT :limit")
     Flux<Comment> findAllByArticleId(Long articleId, int limit);
@@ -56,10 +51,12 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
     Mono<Void> deleteByParentId(Long parentId);
 
     // Atomic increment likes count
+    @Modifying
     @Query("UPDATE comments SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = :id")
     Mono<Void> incrementLikes(Long id);
 
     // Atomic decrement likes count (floor at 0)
+    @Modifying
     @Query("UPDATE comments SET likes_count = GREATEST(COALESCE(likes_count, 0) - 1, 0) WHERE id = :id")
     Mono<Void> decrementLikes(Long id);
 
@@ -82,4 +79,26 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
 
     @Query("SELECT COUNT(c.*) FROM comments c JOIN articles a ON c.article_id = a.id WHERE a.author_id = :authorId")
     Mono<Long> countByArticleAuthorId(Long authorId);
+
+    // ==================== ACCOUNT DELETION (V21) ====================
+
+    @Query("SELECT COUNT(*) FROM comments WHERE user_id = :userId")
+    Mono<Long> countByUserId(Long userId);
+
+    /**
+     * Erasure of the author's PII on public comments. user_id is deliberately
+     * KEPT: it points at the anonymized users row, preserving referential
+     * integrity and statistics without personal data (LGPD art. 16, IV) — the
+     * email string was the only re-identifying elo and it is nulled here.
+     */
+    /**
+     * Erasure of comment PII. Matches by user_id (structural link) and by email
+     * as a safety net for rows the V21 backfill missed or that predate user_id
+     * propagation — after erasure, no comment may still carry the address.
+     * user_id itself is kept on purpose (integrity without re-identification).
+     */
+    @Modifying
+    @Query("UPDATE comments SET author_name = :anonName, author_email = NULL "
+         + "WHERE user_id = :userId OR LOWER(author_email) = LOWER(:email)")
+    Mono<Long> anonymizeByOwner(Long userId, String email, String anonName);
 }
