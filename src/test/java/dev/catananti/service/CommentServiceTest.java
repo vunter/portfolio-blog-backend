@@ -183,6 +183,42 @@ class CommentServiceTest {
     }
 
     @Test
+    @DisplayName("Should persist the authenticated author's user id on the comment")
+    void createComment_ShouldCarryAuthenticatedUserId() {
+        // Given — the controller resolves the logged user and stamps the request;
+        // without propagating it, erasure-by-user_id misses comments created
+        // after the V21 backfill ran.
+        CommentRequest request = CommentRequest.builder()
+                .authorName("Jane Doe")
+                .authorEmail("jane@example.com")
+                .content("Nice post!")
+                .userId(42L)
+                .build();
+
+        when(articleRepository.findBySlug("test-article"))
+                .thenReturn(Mono.just(testArticle));
+        when(commentRepository.save(any(Comment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(htmlSanitizerService.stripHtml(anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(contentModerationService.analyzeContent(anyString(), anyString()))
+                .thenReturn(ContentModerationService.ModerationResult.builder()
+                        .severity(ContentModerationService.Severity.NONE).safe(true).reasons(java.util.List.of()).build());
+        when(commentRepository.countApprovedByAuthorEmail(anyString()))
+                .thenReturn(Mono.just(0L));
+
+        // When
+        StepVerifier.create(commentService.createComment("test-article", request))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        // Then
+        org.mockito.ArgumentCaptor<Comment> saved = org.mockito.ArgumentCaptor.forClass(Comment.class);
+        verify(commentRepository).save(saved.capture());
+        assertThat(saved.getValue().getUserId()).isEqualTo(42L);
+    }
+
+    @Test
     @DisplayName("Should approve comment")
     void approveComment_ShouldUpdateStatusToApproved() {
         // Given

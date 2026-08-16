@@ -165,6 +165,7 @@ public class CommentService {
                                             .status(status)
                                             .moderationNote(moderationNote)
                                             .parentId(request.getParentId())
+                                            .userId(request.getUserId())
                                             .createdAt(LocalDateTime.now())
                                             .build();
 
