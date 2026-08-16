@@ -52,6 +52,57 @@ class UserRepositoryQueryTest {
     }
 
     @Test
+    @DisplayName("deactivateAccount é condicional: rows=0 quando a conta já saiu de ACTIVE")
+    void deactivateAccountIsConditionalOnActiveStatus() throws NoSuchMethodException {
+        Method m = method("deactivateAccount", Long.class, LocalDateTime.class);
+
+        assertThat(m.isAnnotationPresent(Modifying.class)).isTrue();
+        assertThat(m.getGenericReturnType().getTypeName())
+                .as("o chamador transforma rows=0 em 409 (já desativada)")
+                .isEqualTo("reactor.core.publisher.Mono<java.lang.Long>");
+
+        String sql = m.getAnnotation(Query.class).value();
+        assertThat(sql).contains("active = false");
+        assertThat(sql).contains("status = 'DEACTIVATED'");
+        assertThat(sql).contains("deleted_at = :at");
+        assertThat(sql).contains("updated_at = :at");
+        assertThat(sql).contains("WHERE id = :id AND status = 'ACTIVE'");
+        assertThat(sql)
+                .as("desativação preserva a PII — só a eliminação anonimiza")
+                .doesNotContain("email =")
+                .doesNotContain("name =")
+                .doesNotContain("password_hash");
+    }
+
+    @Test
+    @DisplayName("eraseAccount anonimiza toda a PII da linha e é irrepetível")
+    void eraseAccountAnonymizesEveryPiiColumn() throws NoSuchMethodException {
+        Method m = method("eraseAccount",
+                Long.class, String.class, String.class, String.class, LocalDateTime.class);
+
+        assertThat(m.isAnnotationPresent(Modifying.class)).isTrue();
+        assertThat(m.getGenericReturnType().getTypeName())
+                .isEqualTo("reactor.core.publisher.Mono<java.lang.Long>");
+
+        String sql = m.getAnnotation(Query.class).value();
+        assertThat(sql).contains("active = false");
+        assertThat(sql).contains("status = 'ERASED'");
+        assertThat(sql).contains("deleted_at = :at");
+        assertThat(sql).contains("email = :anonEmail");
+        assertThat(sql).contains("name = :anonName");
+        assertThat(sql).contains("username = NULL");
+        assertThat(sql).contains("avatar_url = NULL");
+        assertThat(sql).contains("bio = NULL");
+        assertThat(sql).contains("password_hash = :scrambledHash");
+        assertThat(sql).contains("mfa_enabled = false");
+        assertThat(sql).contains("mfa_preferred_method = NULL");
+        assertThat(sql).contains("email_verified = false");
+        assertThat(sql)
+                .as("uma conta DEACTIVATED ainda pode ser eliminada; só ERASED é terminal")
+                .contains("WHERE id = :id AND status <> 'ERASED'");
+    }
+
+    @Test
     @DisplayName("updateAnalyticsConsent toca apenas o consentimento e seus timestamps")
     void updateAnalyticsConsentUpdatesOnlyConsentColumns() throws NoSuchMethodException {
         Method m = method("updateAnalyticsConsent", Long.class, Boolean.class, LocalDateTime.class);

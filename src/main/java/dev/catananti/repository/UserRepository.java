@@ -83,4 +83,28 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Query("UPDATE users SET analytics_consent = :consent, analytics_consent_at = :at, updated_at = :at "
          + "WHERE id = :id")
     Mono<Long> updateAnalyticsConsent(Long id, Boolean consent, LocalDateTime at);
+
+    /**
+     * Level 1 deletion (deactivation): the account goes off the air, PII stays.
+     * Conditional on status = 'ACTIVE' so a repeated request returns 0 rows —
+     * the caller turns that into a 409 instead of silently rewriting deleted_at.
+     */
+    @Modifying
+    @Query("UPDATE users SET active = false, status = 'DEACTIVATED', deleted_at = :at, updated_at = :at "
+         + "WHERE id = :id AND status = 'ACTIVE'")
+    Mono<Long> deactivateAccount(Long id, LocalDateTime at);
+
+    /**
+     * Level 2 deletion (erasure, LGPD art. 18, VI): every PII column of the row
+     * is anonymized in one statement. The row itself stays so user_id references
+     * in content tables keep pointing at something that re-identifies no one.
+     * A DEACTIVATED account can still be erased; only ERASED is terminal.
+     */
+    @Modifying
+    @Query("UPDATE users SET active = false, status = 'ERASED', deleted_at = :at, "
+         + "email = :anonEmail, name = :anonName, username = NULL, avatar_url = NULL, bio = NULL, "
+         + "password_hash = :scrambledHash, mfa_enabled = false, mfa_preferred_method = NULL, "
+         + "email_verified = false, updated_at = :at "
+         + "WHERE id = :id AND status <> 'ERASED'")
+    Mono<Long> eraseAccount(Long id, String anonEmail, String anonName, String scrambledHash, LocalDateTime at);
 }

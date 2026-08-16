@@ -44,5 +44,9 @@ public interface RefreshTokenRepository extends ReactiveCrudRepository<RefreshTo
     @Query("DELETE FROM refresh_tokens WHERE expires_at < :now")
     Mono<Void> deleteExpired(LocalDateTime now);
 
-    Mono<Void> deleteByUserId(Long userId);
+    // Erasure deletes the rows themselves (deactivation only revokes): the token
+    // strings are credentials tied to an account that must leave no artifacts.
+    @Modifying
+    @Query("DELETE FROM refresh_tokens WHERE user_id = :userId")
+    Mono<Long> deleteByUserId(Long userId);
 }

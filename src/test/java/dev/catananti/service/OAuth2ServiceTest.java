@@ -587,6 +587,84 @@ class OAuth2ServiceTest {
     // The callback methods are best tested via integration or @WebFluxTest with WireMock.
     // Below we focus on the remaining testable behavior.
 
+    // ==================== Deactivated account gate ====================
+
+    @Nested
+    @DisplayName("findOrCreateUser — deactivated account")
+    class DeactivatedAccountGate {
+
+        // findOrCreateUser is private and only reachable through the WebClient
+        // callbacks, so the gate is exercised via reflection (see note above).
+        @SuppressWarnings("unchecked")
+        private Mono<TokenResponse> findOrCreateUser(String provider, String providerId, String email) {
+            try {
+                var m = OAuth2Service.class.getDeclaredMethod("findOrCreateUser",
+                        String.class, String.class, String.class, String.class, String.class,
+                        String.class, boolean.class);
+                m.setAccessible(true);
+                return (Mono<TokenResponse>) m.invoke(oAuth2Service,
+                        provider, providerId, email, "Name", null, "127.0.0.1", true);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        private User deactivatedUser() {
+            return User.builder()
+                    .id(1234567890123456789L)
+                    .email("test@example.com")
+                    .name("Test User")
+                    .role("VIEWER")
+                    .active(false)
+                    .build();
+        }
+
+        @Test
+        @DisplayName("Should reject login via existing social account when the user is deactivated")
+        void shouldRejectDeactivatedUser_WhenSocialAccountExists() {
+            UserSocialAccount existing = UserSocialAccount.builder()
+                    .id(1L)
+                    .userId(1234567890123456789L)
+                    .provider("google")
+                    .providerId("google-id")
+                    .build();
+            when(socialAccountRepository.findByProviderAndProviderId("google", "google-id"))
+                    .thenReturn(Mono.just(existing));
+            when(userRepository.findById(1234567890123456789L)).thenReturn(Mono.just(deactivatedUser()));
+
+            StepVerifier.create(findOrCreateUser("google", "google-id", "test@example.com"))
+                    .expectErrorSatisfies(error -> {
+                        assertThat(error).isInstanceOf(ResponseStatusException.class);
+                        ResponseStatusException rse = (ResponseStatusException) error;
+                        assertThat(rse.getStatusCode().value()).isEqualTo(401);
+                        assertThat(rse.getReason()).isEqualTo("error.account_disabled");
+                    })
+                    .verify();
+
+            // deactivation must not be reversible through a social login: no tokens minted
+            verify(refreshTokenService, never()).createRefreshToken(anyLong(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("Should reject login matched by email before linking a new provider")
+        void shouldRejectDeactivatedUser_WhenMatchedByEmail() {
+            when(socialAccountRepository.findByProviderAndProviderId("github", "gh-id"))
+                    .thenReturn(Mono.empty());
+            when(userRepository.findByEmail("test@example.com")).thenReturn(Mono.just(deactivatedUser()));
+
+            StepVerifier.create(findOrCreateUser("github", "gh-id", "test@example.com"))
+                    .expectErrorSatisfies(error -> {
+                        assertThat(error).isInstanceOf(ResponseStatusException.class);
+                        assertThat(((ResponseStatusException) error).getStatusCode().value()).isEqualTo(401);
+                    })
+                    .verify();
+
+            // rejected before any side effect: no provider link is created
+            verify(socialAccountRepository, never()).save(any(UserSocialAccount.class));
+            verify(refreshTokenService, never()).createRefreshToken(anyLong(), anyString(), anyString());
+        }
+    }
+
     // ==================== Auth URL edge cases ====================
 
     @Nested

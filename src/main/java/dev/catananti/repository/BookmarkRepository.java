@@ -25,4 +25,9 @@ public interface BookmarkRepository extends ReactiveCrudRepository<Bookmark, Lon
 
     @Query("SELECT COUNT(*) FROM bookmarks WHERE user_id = :userId")
     Mono<Long> countByUserId(Long userId);
+
+    // Account deletion: bookmarks are private data with no public value.
+    @Query("DELETE FROM bookmarks WHERE user_id = :userId")
+    @org.springframework.data.r2dbc.repository.Modifying
+    Mono<Long> deleteByUserId(Long userId);
 }

@@ -455,7 +455,7 @@ public class OAuth2Service {
                                                    String clientIp, boolean emailVerified) {
         return socialAccountRepository.findByProviderAndProviderId(provider, providerId)
                 .flatMap(existing -> userRepository.findById(existing.getUserId())
-                        .flatMap(user -> issueTokens(user, clientIp)))
+                        .flatMap(user -> requireActive(user).flatMap(u -> issueTokens(u, clientIp))))
                 .switchIfEmpty(Mono.defer(() -> {
                     if (email == null || email.isBlank()) {
                         return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -466,10 +466,11 @@ public class OAuth2Service {
                                 "Email not verified by " + provider + ". Please verify your email and try again."));
                     }
                     return userRepository.findByEmail(email.toLowerCase())
-                            .flatMap(existingUser -> {
-                                return linkAccount(existingUser.getId(), provider, providerId, email, name, avatar)
-                                        .then(issueTokens(existingUser, clientIp));
-                            })
+                            // gate before linkAccount: a deactivated account must not
+                            // even gain a new provider link as a side effect
+                            .flatMap(existingUser -> requireActive(existingUser)
+                                    .flatMap(u -> linkAccount(u.getId(), provider, providerId, email, name, avatar)
+                                            .then(issueTokens(u, clientIp))))
                             .switchIfEmpty(Mono.defer(() -> createSocialUser(provider, providerId, email, name, avatar, clientIp)));
                 }))
                 .retryWhen(Retry.max(1)
@@ -499,6 +500,21 @@ public class OAuth2Service {
         return userRepository.save(user)
                 .flatMap(savedUser -> linkAccount(savedUser.getId(), provider, providerId, email, name, avatar)
                         .then(issueTokens(savedUser, clientIp)));
+    }
+
+    /**
+     * SEC: mirror of the {@code active} check the password login does in
+     * AuthService.verifyCredentials — without it, deactivating an account would
+     * be reversible by the holder alone through any social provider login.
+     */
+    private Mono<User> requireActive(User user) {
+        if (!Boolean.TRUE.equals(user.getActive())) {
+            log.warn("OAuth2 login denied — account is deactivated: {}",
+                    dev.catananti.util.PiiMasker.maskEmail(user.getEmail()));
+            return Mono.error(new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED, "error.account_disabled"));
+        }
+        return Mono.just(user);
     }
 
     private Mono<TokenResponse> issueTokens(User user, String clientIp) {

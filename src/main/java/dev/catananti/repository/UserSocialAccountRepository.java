@@ -27,4 +27,10 @@ public interface UserSocialAccountRepository extends R2dbcRepository<UserSocialA
     Mono<Long> deleteByUserIdAndProviderIfNotLast(Long userId, String provider);
 
     Mono<Long> countByUserId(Long userId);
+
+    // Account deletion: disconnects every provider, including the last one —
+    // unlike the guarded single-provider unlink, the account is going away.
+    @org.springframework.data.r2dbc.repository.Modifying
+    @org.springframework.data.r2dbc.repository.Query("DELETE FROM user_social_accounts WHERE user_id = :userId")
+    Mono<Long> deleteByUserId(Long userId);
 }

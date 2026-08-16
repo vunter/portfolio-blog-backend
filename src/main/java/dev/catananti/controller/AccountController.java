@@ -1,13 +1,16 @@
 package dev.catananti.controller;
 
+import dev.catananti.dto.AccountDeletionRequest;
 import dev.catananti.dto.AccountNewsletterResponse;
 import dev.catananti.dto.ConsentResponse;
 import dev.catananti.dto.ConsentUpdateRequest;
+import dev.catananti.dto.DeletionPreviewResponse;
 import dev.catananti.entity.Subscriber;
 import dev.catananti.entity.SubscriberStatus;
 import dev.catananti.entity.User;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.service.AccountService;
 import dev.catananti.service.AuditEventType;
 import dev.catananti.service.AuditService;
 import dev.catananti.service.IdService;
@@ -52,6 +55,7 @@ public class AccountController {
     private final NewsletterLinkService newsletterLinkService;
     private final AuditService auditService;
     private final IdService idService;
+    private final AccountService accountService;
 
     @GetMapping("/newsletter")
     @Operation(summary = "Newsletter subscription as seen from the account")
@@ -130,6 +134,32 @@ public class AccountController {
                         .flatMap(maybeSub -> updateSiteConsent(user, request.siteAnalyticsConsent())
                                 .then(updateEmailConsent(user, maybeSub.orElse(null), request.emailAnalyticsConsent()))
                                 .thenReturn(mergedConsent(user, maybeSub.orElse(null), request))));
+    }
+
+    @GetMapping("/deletion-preview")
+    @Operation(summary = "What account deletion will touch, before the holder decides")
+    public Mono<DeletionPreviewResponse> deletionPreview(@AuthenticationPrincipal String email) {
+        return accountService.deletionPreview(email);
+    }
+
+    @DeleteMapping
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "Deactivate (reversible) or erase (LGPD art. 18, VI) the account")
+    public Mono<Void> deleteAccount(@AuthenticationPrincipal String email,
+                                    @RequestBody AccountDeletionRequest request) {
+        return parseMode(request.mode())
+                .flatMap(mode -> accountService.deleteAccount(
+                        email, request.password(), mode, request.cancelNewsletter()));
+    }
+
+    private Mono<AccountService.Mode> parseMode(String raw) {
+        try {
+            return Mono.just(AccountService.Mode.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT)));
+        } catch (RuntimeException e) {
+            // null or anything outside {DEACTIVATE, ERASE}
+            return Mono.error(new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "error.invalid_request"));
+        }
     }
 
     // ---------------------------------------------------------------- helpers

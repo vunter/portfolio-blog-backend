@@ -1,6 +1,9 @@
 package dev.catananti.controller;
 
+import dev.catananti.dto.AccountDeletionRequest;
 import dev.catananti.dto.ConsentUpdateRequest;
+import dev.catananti.dto.DeletionPreviewResponse;
+import dev.catananti.service.AccountService;
 import dev.catananti.entity.Subscriber;
 import dev.catananti.entity.SubscriberStatus;
 import dev.catananti.entity.User;
@@ -44,6 +47,7 @@ class AccountControllerTest {
     @Mock private NewsletterLinkService newsletterLinkService;
     @Mock private AuditService auditService;
     @Mock private IdService idService;
+    @Mock private AccountService accountService;
 
     @InjectMocks
     private AccountController controller;
@@ -439,4 +443,81 @@ class AccountControllerTest {
         }
     }
 
+    @Nested
+    @DisplayName("GET /api/v1/account/deletion-preview")
+    class DeletionPreview {
+
+        @Test
+        @DisplayName("delegates to the service with the principal email")
+        void returnsThePreview() {
+            DeletionPreviewResponse preview = new DeletionPreviewResponse(true, "CONFIRMED", 5L, 2L);
+            when(accountService.deletionPreview(EMAIL)).thenReturn(Mono.just(preview));
+
+            StepVerifier.create(controller.deletionPreview(EMAIL))
+                    .expectNext(preview)
+                    .verifyComplete();
+        }
+    }
+
+    @Nested
+    @DisplayName("DELETE /api/v1/account")
+    class DeleteAccount {
+
+        @Test
+        @DisplayName("DEACTIVATE delegates with the parsed mode and the newsletter choice")
+        void deactivateDelegates() {
+            when(accountService.deleteAccount(EMAIL, "pw", AccountService.Mode.DEACTIVATE, false))
+                    .thenReturn(Mono.empty());
+
+            StepVerifier.create(controller.deleteAccount(EMAIL,
+                            new AccountDeletionRequest("pw", "DEACTIVATE", false)))
+                    .verifyComplete();
+
+            verify(accountService).deleteAccount(EMAIL, "pw", AccountService.Mode.DEACTIVATE, false);
+        }
+
+        @Test
+        @DisplayName("ERASE delegates with cancelNewsletter=true")
+        void eraseDelegates() {
+            when(accountService.deleteAccount(EMAIL, "pw", AccountService.Mode.ERASE, true))
+                    .thenReturn(Mono.empty());
+
+            StepVerifier.create(controller.deleteAccount(EMAIL,
+                            new AccountDeletionRequest("pw", "ERASE", true)))
+                    .verifyComplete();
+
+            verify(accountService).deleteAccount(EMAIL, "pw", AccountService.Mode.ERASE, true);
+        }
+
+        @Test
+        @DisplayName("unknown mode is 400 before anything else happens")
+        void unknownModeIsBadRequest() {
+            StepVerifier.create(controller.deleteAccount(EMAIL,
+                            new AccountDeletionRequest("pw", "BANANA", false)))
+                    .expectErrorSatisfies(error -> {
+                        assertThat(error).isInstanceOf(ResponseStatusException.class);
+                        ResponseStatusException rse = (ResponseStatusException) error;
+                        assertThat(rse.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                        assertThat(rse.getReason()).isEqualTo("error.invalid_request");
+                    })
+                    .verify();
+
+            verify(accountService, never()).deleteAccount(anyString(), anyString(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("missing mode is 400 as well")
+        void nullModeIsBadRequest() {
+            StepVerifier.create(controller.deleteAccount(EMAIL,
+                            new AccountDeletionRequest("pw", null, false)))
+                    .expectErrorSatisfies(error -> {
+                        assertThat(error).isInstanceOf(ResponseStatusException.class);
+                        assertThat(((ResponseStatusException) error).getStatusCode())
+                                .isEqualTo(HttpStatus.BAD_REQUEST);
+                    })
+                    .verify();
+
+            verify(accountService, never()).deleteAccount(anyString(), anyString(), any(), anyBoolean());
+        }
+    }
 }

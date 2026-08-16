@@ -37,4 +37,9 @@ public interface PasswordResetTokenRepository extends ReactiveCrudRepository<Pas
 
     @Query("SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = :userId AND created_at > :since")
     Mono<Long> countRecentTokensByUserId(Long userId, LocalDateTime since);
+
+    // Account deletion: no credential-recovery artifact may survive the account.
+    @Modifying
+    @Query("DELETE FROM password_reset_tokens WHERE user_id = :userId")
+    Mono<Long> deleteByUserId(Long userId);
 }
