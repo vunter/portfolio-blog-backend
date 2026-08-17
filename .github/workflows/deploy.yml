@@ -26,6 +26,7 @@ env:
   REGISTRY: ghcr.io
   API_IMAGE: ghcr.io/vunter/portfolio-blog-api
   FE_IMAGE: ghcr.io/vunter/portfolio-blog-frontend
+  PW_IMAGE: ghcr.io/vunter/portfolio-blog-playwright
   CONFIG_OCI: ghcr.io/vunter/portfolio-blog-config
   NEXUS_URL: https://vunter.tplinkdns.com/nexus
   CONFIG_REPO: builds
@@ -177,6 +178,52 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           cosign sign --yes "${{ env.API_IMAGE }}@${DIGEST}"
+
+  # ──────────────────────────────────────────────
+  # Build Playwright sidecar image → push to GHCR
+  # (Q5.15: PLAYWRIGHT_REMOTE=true strips Chromium from the API image;
+  #  this sidecar provides it over WebSocket. See env/prod/playwright/.)
+  # ──────────────────────────────────────────────
+  build-playwright:
+    needs: [prepare, verify-ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # cosign keyless OIDC signing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
+      - name: Build & push Playwright image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: env/prod/playwright
+          push: true
+          tags: |
+            ${{ env.PW_IMAGE }}:latest
+            ${{ env.PW_IMAGE }}:${{ needs.prepare.outputs.sha }}
+          cache-from: type=gha,scope=playwright
+          cache-to: type=gha,mode=max,scope=playwright
+
+      - name: Sign Playwright image (keyless via OIDC)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${{ env.PW_IMAGE }}@${DIGEST}"
 
   # ──────────────────────────────────────────────
   # Build Frontend image → push to GHCR
@@ -559,7 +606,7 @@ jobs:
   # Deploy to production (no source code on server)
   # ──────────────────────────────────────────────
   deploy:
-    needs: [prepare, build-api, build-frontend, bundle-config]
+    needs: [prepare, build-api, build-frontend, build-playwright, bundle-config]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -687,6 +734,7 @@ jobs:
             echo "$GHCR_TOKEN" | docker login ghcr.io -u github-actions --password-stdin
             docker pull ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA}
             docker pull ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA}
+            docker pull ghcr.io/vunter/portfolio-blog-playwright:${DEPLOY_SHA}
 
             echo "=== Verifying image signatures (cosign keyless) ==="
             # Images must be signed by the deploy.yml workflow on the repo's main
@@ -701,7 +749,8 @@ jobs:
             COSIGN_ISSUER="https://token.actions.githubusercontent.com"
             for IMG in \
               "ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA}" \
-              "ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA}"; do
+              "ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA}" \
+              "ghcr.io/vunter/portfolio-blog-playwright:${DEPLOY_SHA}"; do
               echo "Verifying $IMG"
               if ! cosign verify \
                   --certificate-identity-regexp "$COSIGN_IDENTITY_REGEX" \
@@ -715,6 +764,7 @@ jobs:
 
             docker tag ghcr.io/vunter/portfolio-blog-api:${DEPLOY_SHA} portfolio-blog-api:latest
             docker tag ghcr.io/vunter/portfolio-blog-frontend:${DEPLOY_SHA} portfolio-blog-frontend:latest
+            docker tag ghcr.io/vunter/portfolio-blog-playwright:${DEPLOY_SHA} portfolio-blog-playwright:latest
 
             cd env/prod
 

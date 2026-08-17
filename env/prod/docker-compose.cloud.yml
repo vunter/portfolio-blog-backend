@@ -99,6 +99,10 @@ services:
       - S3_PUBLIC_URL=${S3_PUBLIC_URL}
       # GeoIP MaxMind
       - GEOIP_DATABASE_PATH=/data/geolite2/GeoLite2-Country.mmdb
+      # PDF generation (Q5.15): the API image is built with PLAYWRIGHT_REMOTE=true
+      # (no bundled Chromium) and renders through the playwright sidecar below.
+      # Topology, not a secret — hardcoded on purpose (not Doppler-managed).
+      - APP_PDF_BROWSER_WS_ENDPOINT=ws://playwright:3000/playwright
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/readiness"]
       interval: 30s
@@ -133,6 +137,39 @@ services:
           memory: 512M
     labels:
       com.datadoghq.ad.logs: '[{"source":"java","service":"portfolio-blog-api"}]'
+
+  # Playwright Chromium sidecar (Q5.15) — renders PDFs for the API over WebSocket.
+  # Image: env/prod/playwright/ in portfolio-blog-backend, built+signed by deploy.yml
+  # and retagged locally like app/frontend. Healthcheck (TCP :3000) comes from its
+  # Dockerfile. The deploy script only recreates it when the image changes, so
+  # in-flight PDF renders survive unrelated backend deploys.
+  playwright:
+    image: portfolio-blog-playwright
+    container_name: portfolio-blog-playwright
+    environment:
+      - PLAYWRIGHT_PORT=3000
+      - PLAYWRIGHT_WS_PATH=playwright
+    networks:
+      - blog-network
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          # Chromium can spike; cap it so it never starves the API/nginx/postgres
+          # on the shared droplet. --disable-dev-shm-usage is set by server.js, so
+          # no /dev/shm sizing is needed.
+          cpus: "1.0"
+          memory: 768M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"nodejs","service":"portfolio-blog-playwright"}]'
 
   # Frontend (Angular SPA)
   frontend:
