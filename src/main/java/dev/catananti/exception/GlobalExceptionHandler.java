@@ -232,6 +232,18 @@ public class GlobalExceptionHandler {
                 buildErrorResponse(status, msg(locale, errorKey), translatedMessage, exchange)));
     }
 
+    @ExceptionHandler(PdfUnavailableException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public Mono<ErrorResponse> handlePdfUnavailable(PdfUnavailableException ex, ServerWebExchange exchange) {
+        String path = exchange.getRequest().getPath().value();
+        // warn, not error: the outage is in the browser sidecar, already logged at
+        // its source; every download attempt repeating a stack trace is just noise.
+        log.warn("status=503 path={} PDF service unavailable: {}", path, ex.getMessage());
+        Locale locale = resolveLocale(exchange);
+        return Mono.just(buildErrorResponse(HttpStatus.SERVICE_UNAVAILABLE,
+                msg(locale, "error.service_unavailable"), msg(locale, "error.pdf_unavailable"), exchange));
+    }
+
     @ExceptionHandler(PdfGenerationException.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public Mono<ErrorResponse> handlePdfGenerationException(PdfGenerationException ex, ServerWebExchange exchange) {

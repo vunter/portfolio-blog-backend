@@ -3,6 +3,7 @@ package dev.catananti.service;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.Margin;
 import dev.catananti.exception.PdfGenerationException;
+import dev.catananti.exception.PdfUnavailableException;
 import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.util.HtmlUtils;
 import jakarta.annotation.PostConstruct;
@@ -91,7 +92,8 @@ public class PdfGenerationService {
     private final AtomicReference<Mono<Browser>> browserMonoRef = new AtomicReference<>();
 
     private Mono<Browser> createBrowserMono() {
-        return Mono.defer(() ->
+        AtomicReference<Mono<Browser>> self = new AtomicReference<>();
+        Mono<Browser> mono = Mono.defer(() ->
                 Mono.fromCallable(() -> {
                     log.info("Initializing Playwright for PDF generation...");
                     playwright = Playwright.create();
@@ -118,7 +120,15 @@ public class PdfGenerationService {
                 }).subscribeOn(Schedulers.boundedElastic())
                 .doOnError(e -> log.error("Playwright init failed: {}", e.getMessage()))
                 .retry(2)
-        ).cache();
+        )
+        .onErrorMap(e -> new PdfUnavailableException("PDF browser is unavailable: " + e.getMessage(), e))
+        // cache() would also cache the terminal ERROR, leaving PDF generation dead
+        // until an app restart even after the browser/sidecar recovers. Forget this
+        // attempt on failure so the next request re-initializes from scratch.
+        .doOnError(e -> browserMonoRef.compareAndSet(self.get(), null))
+        .cache();
+        self.set(mono);
+        return mono;
     }
 
     @PostConstruct

@@ -70,6 +70,29 @@ class GlobalExceptionHandlerTest {
     }
 
     // ──────────────────────────────────────────────
+    // handlePdfUnavailable
+    // ──────────────────────────────────────────────
+    @Nested
+    @DisplayName("handlePdfUnavailable()")
+    class HandlePdfUnavailable {
+
+        @Test
+        @DisplayName("should return 503 with a service-unavailable message, not a generic 500")
+        void shouldReturn503() {
+            var ex = new PdfUnavailableException("browser endpoint unreachable", new RuntimeException("refused"));
+
+            StepVerifier.create(handler.handlePdfUnavailable(ex, exchange))
+                    .assertNext(resp -> {
+                        assertThat(resp.status()).isEqualTo(503);
+                        assertThat(resp.error()).isEqualTo("error.service_unavailable");
+                        assertThat(resp.message()).isEqualTo("error.pdf_unavailable");
+                        assertThat(resp.path()).isEqualTo("/api/test");
+                    })
+                    .verifyComplete();
+        }
+    }
+
+    // ──────────────────────────────────────────────
     // handleResourceNotFound
     // ──────────────────────────────────────────────
     @Nested

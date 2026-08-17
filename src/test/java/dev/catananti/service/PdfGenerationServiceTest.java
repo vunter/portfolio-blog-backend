@@ -471,4 +471,40 @@ class PdfGenerationServiceTest {
                 })
                 .verifyComplete();
     }
+
+    @Test
+    @DisplayName("Should surface PdfUnavailableException when the browser endpoint is unreachable")
+    void shouldMapBrowserFailureToPdfUnavailable() {
+        PdfGenerationService remoteService = new PdfGenerationService(blogMetrics);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                remoteService, "browserWsEndpoint", "ws://127.0.0.1:9/playwright");
+
+        StepVerifier.create(remoteService.generatePdf("<html><body>x</body></html>", "A4", false))
+                .expectError(dev.catananti.exception.PdfUnavailableException.class)
+                .verify(java.time.Duration.ofSeconds(60));
+    }
+
+    @Test
+    @DisplayName("Should retry browser initialization on the next request instead of caching the failure")
+    void browserFailureIsNotSticky() {
+        PdfGenerationService remoteService = new PdfGenerationService(blogMetrics);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                remoteService, "browserWsEndpoint", "ws://127.0.0.1:9/playwright");
+
+        java.util.concurrent.atomic.AtomicReference<Throwable> first = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Throwable> second = new java.util.concurrent.atomic.AtomicReference<>();
+
+        StepVerifier.create(remoteService.generatePdf("<html><body>x</body></html>", "A4", false))
+                .consumeErrorWith(first::set)
+                .verify(java.time.Duration.ofSeconds(60));
+        StepVerifier.create(remoteService.generatePdf("<html><body>x</body></html>", "A4", false))
+                .consumeErrorWith(second::set)
+                .verify(java.time.Duration.ofSeconds(60));
+
+        // A Mono.cache()d init failure would replay the SAME terminal error instance
+        // on every later request, leaving PDF generation dead until an app restart
+        // even after the sidecar recovers. A fresh attempt produces a fresh error.
+        assertThat(first.get()).isNotNull();
+        assertThat(second.get()).isNotNull().isNotSameAs(first.get());
+    }
 }
