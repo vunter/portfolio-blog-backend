@@ -14,8 +14,6 @@ public interface ReadingHistoryRepository extends ReactiveCrudRepository<Reading
     @Query("SELECT COUNT(*) FROM reading_history WHERE user_id = :userId")
     Mono<Long> countByUserId(Long userId);
 
-    Mono<ReadingHistory> findByUserIdAndArticleId(Long userId, Long articleId);
-
     /**
      * BUG-2: Atomic upsert against the UNIQUE(user_id, article_id) constraint.
      * Inserts a new row (read_count = 1) or, on conflict, increments read_count and

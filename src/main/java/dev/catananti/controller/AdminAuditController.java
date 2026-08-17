@@ -83,8 +83,8 @@ public class AdminAuditController {
             @PathVariable @jakarta.validation.constraints.Pattern(regexp = "^[A-Z_]+$", message = "Invalid entity type format") String entityType,
             @PathVariable String entityId) {
         log.debug("Fetching audit logs for entityType={}, entityId={}", entityType, entityId);
-        return auditService.getLogsByEntity(entityType, entityId)
-                .take(500)
+        // RQ-05: the 500-row cap is applied in SQL (LIMIT), not after transferring rows
+        return auditService.getLogsByEntity(entityType, entityId, 500)
                 .map(this::sanitizeAuditLog);
     }
 

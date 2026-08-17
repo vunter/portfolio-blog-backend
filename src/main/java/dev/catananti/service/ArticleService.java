@@ -163,13 +163,14 @@ public class ArticleService {
             countMono = articleRepository.countByStatus(status);
         }
 
+        // NP-4: translation overlay applied per page (1 IN query) instead of per article
         return articleFlux
-                .flatMap(article -> applyLocale(article, locale))
                 .collectList()
+                .flatMap(articles -> applyLocaleBatch(articles, locale))
                 .flatMap(this::enrichArticlesWithMetadata)
                 .zipWith(countMono)
                 .map(tuple -> {
-                    var content = tuple.getT1().stream().map(this::mapToResponse).toList();
+                    var content = tuple.getT1().stream().map(this::mapToListResponse).toList();
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
@@ -269,12 +270,12 @@ public class ArticleService {
         String sanitizedQuery = DigestUtils.escapeLikePattern(query);
 
         return runSearchQuery(ArticleStatus.PUBLISHED.name(), sanitizedQuery, size, offset)
-                .flatMap(article -> applyLocale(article, locale))
                 .collectList()
+                .flatMap(articles -> applyLocaleBatch(articles, locale))
                 .flatMap(this::enrichArticlesWithMetadata)
                 .zipWith(runSearchCount(ArticleStatus.PUBLISHED.name(), sanitizedQuery))
                 .map(tuple -> {
-                    var content = tuple.getT1().stream().map(this::mapToResponse).toList();
+                    var content = tuple.getT1().stream().map(this::mapToListResponse).toList();
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
@@ -290,12 +291,12 @@ public class ArticleService {
         int offset = page * size;
 
         return articleRepository.findByTagSlugAndStatus(tagSlug, ArticleStatus.PUBLISHED.name(), size, offset)
-                .flatMap(article -> applyLocale(article, locale))
                 .collectList()
+                .flatMap(articles -> applyLocaleBatch(articles, locale))
                 .flatMap(this::enrichArticlesWithMetadata)
                 .zipWith(articleRepository.countByTagSlugAndStatus(tagSlug, ArticleStatus.PUBLISHED.name()))
                 .map(tuple -> {
-                    var content = tuple.getT1().stream().map(this::mapToResponse).toList();
+                    var content = tuple.getT1().stream().map(this::mapToListResponse).toList();
                     var total = tuple.getT2();
                     return PageResponse.of(content, page, size, total);
                 })
@@ -461,7 +462,19 @@ public class ArticleService {
                 .seoKeywords(article.getSeoKeywords())
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
+                .version(article.getVersion())
                 .build();
+    }
+
+    /**
+     * NP-6: list payloads never carry the article body — cards render the excerpt.
+     * The list queries already project content out; this also strips the translated
+     * content the i18n overlay sets for non-en locales.
+     */
+    private ArticleResponse mapToListResponse(Article article) {
+        ArticleResponse response = mapToResponse(article);
+        response.setContent(null);
+        return response;
     }
 
     private TagResponse mapTagToResponse(Tag tag) {
@@ -495,7 +508,7 @@ public class ArticleService {
                             .collectList()
                             .flatMap(this::enrichArticlesWithMetadata)
                             .flatMapMany(Flux::fromIterable)
-                            .map(this::mapToResponse)
+                            .map(this::mapToListResponse)
                 );
     }
 
@@ -512,11 +525,28 @@ public class ArticleService {
         return articleTranslationService.applyTranslation(article, locale);
     }
 
+    /** NP-4: page-level overlay — at most one translation query per page. */
+    private Mono<java.util.List<Article>> applyLocaleBatch(java.util.List<Article> articles, String locale) {
+        if (locale == null || locale.isBlank() || locale.equalsIgnoreCase("en")) {
+            return Mono.just(articles);
+        }
+        return articleTranslationService.applyTranslations(articles, locale);
+    }
+
     /**
      * MIN-07: Service-layer access for feed controllers (Sitemap, RSS).
      * Returns raw Article entities for published articles, ordered by publishedAt desc.
      */
     public Flux<Article> findAllPublishedForFeed() {
         return articleRepository.findAllPublishedOrderByPublishedAtDesc(paginationConfig.getFeedMaxItems());
+    }
+
+    /**
+     * NP-5: feed access with an explicit item budget so consumers that render
+     * fewer items (RSS renders 20) don't transfer feedMaxItems full rows.
+     */
+    public Flux<Article> findAllPublishedForFeed(int limit) {
+        return articleRepository.findAllPublishedOrderByPublishedAtDesc(
+                Math.min(limit, paginationConfig.getFeedMaxItems()));
     }
 }

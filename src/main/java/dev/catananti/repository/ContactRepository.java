@@ -21,6 +21,4 @@ public interface ContactRepository extends ReactiveCrudRepository<Contact, Long>
     @Query("SELECT COUNT(*) FROM contacts")
     Mono<Long> countAll();
 
-    @Query("SELECT COUNT(*) FROM contacts WHERE is_read = false")
-    Mono<Long> countUnread();
 }

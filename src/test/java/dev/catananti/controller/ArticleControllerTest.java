@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.env.Environment;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -145,7 +146,11 @@ class ArticleControllerTest {
     @Test
     @DisplayName("Should increment views")
     void incrementViews_ShouldComplete() {
-        // Given
+        // Given — analytics consent is granted via the header, so the analytics VIEW
+        // event is recorded in addition to the view-count increment.
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Analytics-Consent", "granted");
+        when(mockRequest.getHeaders()).thenReturn(headers);
         when(deduplicationService.recordViewIfNew(eq("test-article"), any())).thenReturn(Mono.just(true));
         when(articleService.incrementViews("test-article"))
                 .thenReturn(Mono.empty());
@@ -157,6 +162,24 @@ class ArticleControllerTest {
                 .verifyComplete();
 
         verify(articleService).incrementViews("test-article");
+        verify(analyticsService).trackArticleView(eq("test-article"), any(ServerHttpRequest.class));
+    }
+
+    @Test
+    @DisplayName("Should increment views without recording analytics when consent is absent")
+    void incrementViews_WithoutConsent_SkipsAnalytics() {
+        // Given — no X-Analytics-Consent header: the view count still increments, but
+        // no analytics VIEW event is recorded.
+        when(mockRequest.getHeaders()).thenReturn(new HttpHeaders());
+        when(deduplicationService.recordViewIfNew(eq("test-article"), any())).thenReturn(Mono.just(true));
+        when(articleService.incrementViews("test-article")).thenReturn(Mono.empty());
+
+        // When & Then
+        StepVerifier.create(articleController.incrementViews("test-article", null, mockRequest))
+                .verifyComplete();
+
+        verify(articleService).incrementViews("test-article");
+        verify(analyticsService, never()).trackArticleView(anyString(), any(ServerHttpRequest.class));
     }
 
     @Test

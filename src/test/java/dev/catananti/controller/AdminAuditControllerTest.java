@@ -133,7 +133,7 @@ class AdminAuditControllerTest {
         @Test
         @DisplayName("Should return logs for specific entity")
         void shouldReturnLogsByEntity() {
-            when(auditService.getLogsByEntity("ARTICLE", "1001"))
+            when(auditService.getLogsByEntity("ARTICLE", "1001", 500))
                     .thenReturn(Flux.just(auditLog1, auditLog2));
 
             StepVerifier.create(controller.getLogsByEntity("ARTICLE", "1001"))

@@ -69,7 +69,13 @@ public class ArticlePublishScheduler {
                         return Mono.empty();
                     }
                     log.info("Published {} scheduled article(s), invalidating cache", published.size());
-                    return cacheService.invalidateAllArticles().then();
+                    // Invalidate both the article read-through caches AND the RSS/sitemap
+                    // feed caches, otherwise a scheduler-published article is missing from
+                    // the feeds for up to their TTL (15m/30m).
+                    return Mono.when(
+                            cacheService.invalidateAllArticles(),
+                            cacheService.invalidateFeedCache()
+                    );
                 })
                 .doOnError(e -> log.error("Error publishing scheduled articles: {}", e.getMessage(), e))
                 .onErrorResume(e -> Mono.empty());

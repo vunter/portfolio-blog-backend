@@ -38,6 +38,7 @@ public class AnalyticsService {
     );
 
     private final AnalyticsRepository analyticsRepository;
+    private final dev.catananti.repository.SearchQueryRepository searchQueryRepository;
     private final ArticleRepository articleRepository;
     private final ObjectMapper objectMapper;
     private final IdService idService;
@@ -174,11 +175,10 @@ public class AnalyticsService {
     public Mono<AnalyticsSummary> getAnalyticsSummary(int days) {
         LocalDateTime since = LocalDateTime.now().minusDays(days);
 
-        // BUG-RT6: Fall back to article table counts when analytics_events has no data
-        Mono<Long> totalViewsMono = analyticsRepository.countByEventTypeSince("VIEW", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCount());
-        Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumLikesCount());
+        // M11: return the real windowed counts (0 when empty); no all-time fallback,
+        // which contradicted the daily/unique fields.
+        Mono<Long> totalViewsMono = analyticsRepository.countByEventTypeSince("VIEW", since);
+        Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since);
         Mono<Long> totalSharesMono = analyticsRepository.countByEventTypeSince("SHARE", since);
 
         return buildSummary(since, null, totalViewsMono, totalLikesMono, totalSharesMono);
@@ -244,6 +244,7 @@ public class AnalyticsService {
                 "SELECT COUNT(DISTINCT ae.user_ip) AS cnt FROM analytics_events ae"
                         + authorJoin(authorId)
                         + " WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since"
+                        + " AND ae.device_type != 'Bot'"
                         + authorPredicate(authorId))
                 .bind("since", since);
         spec = bindAuthor(spec, authorId);
@@ -260,6 +261,7 @@ public class AnalyticsService {
                         + " FROM analytics_events ae"
                         + authorJoin(authorId)
                         + " WHERE ae.event_type = :eventType AND ae.created_at >= :since"
+                        + " AND ae.device_type != 'Bot'"
                         + authorPredicate(authorId)
                         + " GROUP BY CAST(ae.created_at AS DATE)"
                         + " ORDER BY stat_date"
@@ -289,6 +291,7 @@ public class AnalyticsService {
                 .bind("since", since)
                 .bind("limit", limit);
         spec = bindAuthor(spec, authorId);
+        // M11: return the windowed (possibly empty) period result; no all-time top-10 fallback.
         return spec
                 .map((row, meta) -> Map.entry(
                         row.get("article_id", Long.class),
@@ -311,30 +314,7 @@ public class AnalyticsService {
                                                 .build();
                                     })
                                     .toList());
-                })
-                .flatMap(list -> list.isEmpty() ? getTopArticlesFromViewCounts(limit, authorId) : Mono.just(list));
-    }
-
-    // BUG-RT6: Fallback to article view counts when analytics_events table has no data
-    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesFromViewCounts(int limit, Long authorId) {
-        var spec = databaseClient.sql(
-                "SELECT id, title, slug, views_count"
-                        + " FROM articles"
-                        + " WHERE views_count > 0"
-                        + (authorId != null ? " AND author_id = :authorId" : "")
-                        + " ORDER BY views_count DESC"
-                        + " LIMIT :limit")
-                .bind("limit", limit);
-        spec = bindAuthor(spec, authorId);
-        return spec
-                .map((row, meta) -> AnalyticsSummary.TopArticle.builder()
-                        .articleId(row.get("id", Long.class).toString())
-                        .title(row.get("title", String.class))
-                        .slug(row.get("slug", String.class))
-                        .views(row.get("views_count", Long.class))
-                        .build())
-                .all()
-                .collectList();
+                });
     }
 
     private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrers(LocalDateTime since, int limit, Long authorId) {
@@ -450,10 +430,9 @@ public class AnalyticsService {
     public Mono<AnalyticsSummary> getAnalyticsSummaryByAuthor(int days, Long authorId) {
         LocalDateTime since = LocalDateTime.now().minusDays(days);
 
-        Mono<Long> totalViewsMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCountByAuthorId(authorId));
-        Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since)
-                .flatMap(count -> count > 0 ? Mono.just(count) : Mono.just(0L));
+        // M11: return the real windowed counts (0 when empty); no all-time fallback.
+        Mono<Long> totalViewsMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", since);
+        Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since);
         Mono<Long> totalSharesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", since);
 
         return buildSummary(since, authorId, totalViewsMono, totalLikesMono, totalSharesMono);
@@ -576,14 +555,47 @@ public class AnalyticsService {
 
     public reactor.core.publisher.Mono<Void> cleanupOldEvents() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(retentionDays);
+        // RQ-02: each call deletes at most one 10k batch; repeat until a batch comes back
+        // short, so a backlog larger than 10k rows no longer takes days to drain.
         return schedulerLock.executeWithLock("analytics-cleanup", Duration.ofMinutes(10),
                 analyticsRepository.deleteByCreatedAtBefore(cutoff)
                         .timeout(Duration.ofSeconds(30))
-                        .doOnSuccess(count -> log.info("Analytics cleanup: deleted {} events older than {} days", count, retentionDays))
+                        .expand(deleted -> deleted == 10_000
+                                ? analyticsRepository.deleteByCreatedAtBefore(cutoff).timeout(Duration.ofSeconds(30))
+                                : reactor.core.publisher.Mono.empty())
+                        .reduce(0L, Long::sum)
+                        .doOnSuccess(total -> log.info("Analytics cleanup: deleted {} events older than {} days", total, retentionDays))
+                        // RQ-03/SI-5: search_queries and newsletter_events previously grew
+                        // forever; they now share the analytics retention window.
+                        .then(searchQueryRepository.deleteByCreatedAtBefore(cutoff)
+                                .timeout(Duration.ofSeconds(30))
+                                .expand(deleted -> deleted == 10_000
+                                        ? searchQueryRepository.deleteByCreatedAtBefore(cutoff).timeout(Duration.ofSeconds(30))
+                                        : reactor.core.publisher.Mono.empty())
+                                .reduce(0L, Long::sum)
+                                .doOnSuccess(total -> log.info("Search-query cleanup: deleted {} rows", total)))
+                        .then(deleteOldNewsletterEvents(cutoff)
+                                .doOnSuccess(total -> log.info("Newsletter-event cleanup: deleted {} rows", total)))
                         .doOnError(e -> log.error("Failed to cleanup old analytics events: {}", e.getMessage(), e))
                         .onErrorComplete()
                         .then()
         );
+    }
+
+    private reactor.core.publisher.Mono<Long> deleteOldNewsletterEvents(LocalDateTime cutoff) {
+        return databaseClient.sql("DELETE FROM newsletter_events WHERE id IN (SELECT id FROM newsletter_events WHERE created_at < :cutoff LIMIT 10000)")
+                .bind("cutoff", cutoff)
+                .fetch()
+                .rowsUpdated()
+                .timeout(Duration.ofSeconds(30))
+                .expand(deleted -> deleted == 10_000
+                        ? databaseClient.sql("DELETE FROM newsletter_events WHERE id IN (SELECT id FROM newsletter_events WHERE created_at < :cutoff LIMIT 10000)")
+                                .bind("cutoff", cutoff)
+                                .fetch()
+                                .rowsUpdated()
+                                .timeout(Duration.ofSeconds(30))
+                        : reactor.core.publisher.Mono.empty())
+                .reduce(0L, Long::sum);
     }
 
     /**

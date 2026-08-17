@@ -42,7 +42,16 @@ public enum AuditEventType {
     DATA_IMPORT,
     SETTINGS_UPDATE,
     EMAIL_CHANGE,
-    EMAIL_REVERT;
+    EMAIL_REVERT,
+
+    // Newsletter link and consent (LGPD)
+    NEWSLETTER_LINKED,
+    NEWSLETTER_UNLINKED,
+    CONSENT_UPDATED,
+
+    // Account deletion by the holder (LGPD art. 18)
+    ACCOUNT_DEACTIVATED,
+    ACCOUNT_ERASED;
 
     /**
      * Returns the action string used in audit log storage.

@@ -35,6 +35,15 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- Site-navigation analytics consent (V20). NULL = never decided, FALSE = refused.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS analytics_consent BOOLEAN;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS analytics_consent_at TIMESTAMP;
+
+-- Account deletion (V21): status distinguishes DEACTIVATED from ERASED — a
+-- difference `active` cannot express; `active` stays as what the login checks.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+
 -- Articles table
 CREATE TABLE IF NOT EXISTS articles (
     id BIGINT PRIMARY KEY,
@@ -90,6 +99,12 @@ CREATE TABLE IF NOT EXISTS comments (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Structural authorship without PII (V21): erasure nulls author_email while
+-- user_id keeps pointing at the (anonymized) account row.
+ALTER TABLE comments ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id) WHERE user_id IS NOT NULL;
+ALTER TABLE comments ALTER COLUMN author_email DROP NOT NULL;
 
 -- Analytics Events table
 CREATE TABLE IF NOT EXISTS analytics_events (
@@ -155,6 +170,16 @@ CREATE TABLE IF NOT EXISTS subscribers (
     unsubscribed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Link to the user account (V20): only set when both sides proved the address.
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS link_origin VARCHAR(32);
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS unlinked_at TIMESTAMP;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS unlinked_by VARCHAR(16);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_user_id
+    ON subscribers (user_id) WHERE user_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email);
 CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);
@@ -465,6 +490,9 @@ CREATE INDEX IF NOT EXISTS idx_contacts_unread ON contacts(is_read, created_at D
 
 -- Article i18n translations table (Translation Table Wide approach)
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_locale VARCHAR(10) DEFAULT 'en';
+
+-- CC-05: optimistic locking (kept in sync with V18 migration)
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
 
 -- Supported languages (centralised source of truth)
 CREATE TABLE IF NOT EXISTS languages (
@@ -788,6 +816,22 @@ CREATE TABLE IF NOT EXISTS email_change_tokens (
 CREATE INDEX IF NOT EXISTS idx_email_change_tokens_token ON email_change_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_email_change_tokens_revert ON email_change_tokens(revert_token);
 CREATE INDEX IF NOT EXISTS idx_email_change_tokens_user ON email_change_tokens(user_id);
+
+-- ============================================
+-- Email verification tokens (registration) — mirrors V19
+-- ============================================
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT FALSE,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_created ON email_verification_tokens(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_cleanup ON email_verification_tokens(expires_at, used_at);
 
 -- ============================================
 -- M12: MFA backup codes

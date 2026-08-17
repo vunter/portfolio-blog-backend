@@ -158,8 +158,13 @@ class CacheServiceTest {
 
         @BeforeEach
         void setUpScan() {
-            // Default: SCAN returns empty list
-            when(redisTemplate.scan(any())).thenReturn(Flux.empty());
+            // Default: SCAN returns empty list. lenient() because invalidateFeedCache
+            // no longer uses SCAN (it deletes fixed keys directly).
+            lenient().when(redisTemplate.scan(any())).thenReturn(Flux.empty());
+            // invalidateFeedCache deletes the fixed rss:feed / sitemap:xml keys directly
+            // (not via SCAN). lenient() because not every test in this block exercises it.
+            lenient().when(redisTemplate.delete("rss:feed")).thenReturn(Mono.just(0L));
+            lenient().when(redisTemplate.delete("sitemap:xml")).thenReturn(Mono.just(0L));
         }
 
         @Test

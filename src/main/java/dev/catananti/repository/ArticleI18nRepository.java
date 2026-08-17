@@ -30,6 +30,23 @@ public class ArticleI18nRepository {
                 .one();
     }
 
+    /**
+     * NP-4: batch variant for localized listings — one query for a whole page of
+     * articles instead of one per article. The List bind is expanded into an IN
+     * list by Spring's named-parameter support (Collections expand; arrays don't).
+     */
+    public Flux<ArticleI18n> findByArticleIdsAndLocale(java.util.List<Long> articleIds, String locale) {
+        if (articleIds.isEmpty()) {
+            return Flux.empty();
+        }
+        return databaseClient
+                .sql("SELECT * FROM article_i18n WHERE article_id IN (:articleIds) AND locale = :locale")
+                .bind("articleIds", articleIds)
+                .bind("locale", locale)
+                .map(this::mapRow)
+                .all();
+    }
+
     public Flux<ArticleI18n> findByArticleId(Long articleId) {
         return databaseClient
                 .sql("SELECT * FROM article_i18n WHERE article_id = :articleId")

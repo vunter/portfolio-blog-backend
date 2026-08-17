@@ -27,6 +27,7 @@ public class ArticleVersionService {
     private final ArticleVersionRepository versionRepository;
     private final ArticleRepository articleRepository;
     private final IdService idService;
+    private final CacheService cacheService;
 
     @org.springframework.beans.factory.annotation.Value("${app.article.max-versions:50}")
     private int maxVersions = 50;
@@ -114,8 +115,14 @@ public class ArticleVersionService {
                                             article.setUpdatedAt(LocalDateTime.now());
                                             
                                             return articleRepository.save(article)
-                                                    .doOnSuccess(a -> log.info("Restored article {} to version {}", 
-                                                            a.getSlug(), versionNumber));
+                                                    .doOnSuccess(a -> log.info("Restored article {} to version {}",
+                                                            a.getSlug(), versionNumber))
+                                                    // Restoring rewrites the article body, so drop the stale
+                                                    // read-through and feed caches (A6).
+                                                    .flatMap(a -> Mono.when(
+                                                            cacheService.invalidateArticle(a.getSlug()),
+                                                            cacheService.invalidateFeedCache()
+                                                    ).thenReturn(a));
                                         }));
                             })
                 );

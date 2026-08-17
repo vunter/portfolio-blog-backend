@@ -57,7 +57,9 @@ public class CacheService {
     private static final String TAGS_CACHE_PREFIX = "tags::";
     private static final String COMMENTS_CACHE_PREFIX = "comments::";
     private static final String SEARCH_CACHE_PREFIX = "search::";
-    private static final String FEED_CACHE_PREFIX = "feed::";
+    // Feed responses are cached under fixed keys (not a prefix namespace).
+    private static final String RSS_FEED_KEY = "rss:feed";
+    private static final String SITEMAP_KEY = "sitemap:xml";
     
     // ==================== GENERIC CACHE OPERATIONS ====================
 
@@ -88,7 +90,19 @@ public class CacheService {
                     cacheHits.incrementAndGet();
                     log.trace("Cache hit for key: {}", key);
                 })
-                .switchIfEmpty(Mono.<T>empty().doOnSubscribe(s -> cacheMisses.incrementAndGet()));
+                .switchIfEmpty(Mono.<T>empty().doOnSubscribe(s -> cacheMisses.incrementAndGet()))
+                // A cache that cannot be reached is a MISS, not a request failure.
+                // isRedisAvailable() above only null-checks the bean, so a connection
+                // error at call time used to propagate and surface as a 500 on every
+                // read-through endpoint (GitHub repos, articles, tags, search, RSS...).
+                // Returning empty lets callers fall through to their real source, which
+                // is the same behaviour set()/delete()/invalidate*() already have via
+                // withRedis(). Logged at warn, not error: the request still succeeds.
+                .onErrorResume(e -> {
+                    cacheMisses.incrementAndGet();
+                    log.warn("Redis read failed for key '{}', treating as cache miss: {}", key, e.toString());
+                    return Mono.empty();
+                });
     }
 
     /**
@@ -134,10 +148,14 @@ public class CacheService {
      */
     public Mono<Long> invalidateArticle(String slug) {
         return withRedis(0L, () -> Mono.zip(
+                // Exact slug key plus locale-suffixed variants (articles::slug_<slug>:pt, :es, ...).
+                // A bare SCAN MATCH without a wildcard only matches the exact key, so the
+                // locale variants would otherwise survive invalidation.
                 deleteByPattern(ARTICLES_CACHE_PREFIX + "slug_" + slug),
+                deleteByPattern(ARTICLES_CACHE_PREFIX + "slug_" + slug + ":*"),
                 deleteByPattern(ARTICLES_CACHE_PREFIX + "related_" + slug + "*"),
                 deleteByPattern(ARTICLES_CACHE_PREFIX + "published_page_*")
-        ).map(tuple -> tuple.getT1() + tuple.getT2() + tuple.getT3())
+        ).map(tuple -> tuple.getT1() + tuple.getT2() + tuple.getT3() + tuple.getT4())
          .doOnSuccess(count -> log.info("Invalidated cache for article: {}", slug)));
     }
 
@@ -195,7 +213,10 @@ public class CacheService {
      * Invalidate feed caches (RSS, Sitemap).
      */
     public Mono<Long> invalidateFeedCache() {
-        return withRedis(0L, () -> deleteByPattern(FEED_CACHE_PREFIX + "*")
+        return withRedis(0L, () -> Mono.zip(
+                delete(RSS_FEED_KEY).map(deleted -> deleted ? 1L : 0L),
+                delete(SITEMAP_KEY).map(deleted -> deleted ? 1L : 0L)
+        ).map(tuple -> tuple.getT1() + tuple.getT2())
                 .doOnSuccess(count -> {
                     if (count > 0) log.info("Invalidated {} feed cache entries", count);
                 }));
@@ -224,7 +245,7 @@ public class CacheService {
                 countByPattern(TAGS_CACHE_PREFIX + "*"),
                 countByPattern(COMMENTS_CACHE_PREFIX + "*"),
                 countByPattern(SEARCH_CACHE_PREFIX + "*"),
-                countByPattern(FEED_CACHE_PREFIX + "*")
+                countByPattern(RSS_FEED_KEY).zipWith(countByPattern(SITEMAP_KEY), Long::sum)
         ).map(tuple -> new CacheStats(
                 tuple.getT1(),
                 tuple.getT2(),

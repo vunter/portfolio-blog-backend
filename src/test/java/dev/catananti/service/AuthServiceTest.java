@@ -64,11 +64,17 @@ class AuthServiceTest {
     private EmailService emailService;
 
     @Mock
+    private EmailVerificationService emailVerificationService;
+
+    @Mock
     private ReactiveStringRedisTemplate redisTemplate;
 
     private AuthService authService;
 
     private User testUser;
+
+    @org.mockito.Mock
+    private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
 
     @BeforeEach
     void setUp() {
@@ -76,7 +82,8 @@ class AuthServiceTest {
                 userRepository, passwordEncoder, tokenProvider,
                 refreshTokenService, messageSource, idService,
                 htmlSanitizerService, tokenBlacklistService, emailService,
-                redisTemplate, loginAttemptService, null, null);
+                emailVerificationService, redisTemplate, transactionalOperator,
+                loginAttemptService, null, null);
         // Set jwtExpirationMs via reflection
         try {
             var field = AuthService.class.getDeclaredField("jwtExpirationMs");
@@ -86,6 +93,8 @@ class AuthServiceTest {
             throw new RuntimeException(e);
         }
 
+        lenient().when(transactionalOperator.transactional(any(reactor.core.publisher.Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
         lenient().when(messageSource.getMessage(anyString(), any(), any(Locale.class)))
                 .thenReturn("Invalid credentials");
         lenient().when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
@@ -341,6 +350,7 @@ class AuthServiceTest {
         when(tokenProvider.generateToken(555L, "VIEWER")).thenReturn("access-tok");
         when(emailService.sendRegistrationWelcome("new@example.com", "New User")).thenReturn(Mono.empty());
         when(refreshTokenService.createRefreshToken(555L)).thenReturn(Mono.just(refreshToken));
+        when(emailVerificationService.sendVerification(anyString())).thenReturn(Mono.empty());
 
         StepVerifier.create(authService.register(request, "127.0.0.1"))
                 .assertNext(resp -> {
@@ -350,6 +360,59 @@ class AuthServiceTest {
                     assertThat(resp.getName()).isEqualTo("New User");
                 })
                 .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("Should send verification email on registration")
+    void registerSendsVerificationEmail() {
+        RegisterRequest request = new RegisterRequest("New User", "new@example.com", "Password123!@", true, null);
+        User savedUser = User.builder()
+                .id(555L).name("New User").email("new@example.com")
+                .passwordHash("hashed").role("VIEWER").active(true)
+                .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+        RefreshToken refreshToken = RefreshToken.builder()
+                .id(10L).userId(555L).token("reg-refresh-tok").build();
+
+        when(userRepository.existsByEmail("new@example.com")).thenReturn(Mono.just(false));
+        when(idService.nextId()).thenReturn(555L);
+        when(passwordEncoder.encode("Password123!@")).thenReturn("hashed");
+        when(userRepository.save(any(User.class))).thenReturn(Mono.just(savedUser));
+        when(tokenProvider.generateToken(555L, "VIEWER")).thenReturn("access-tok");
+        when(emailService.sendRegistrationWelcome("new@example.com", "New User")).thenReturn(Mono.empty());
+        when(refreshTokenService.createRefreshToken(555L)).thenReturn(Mono.just(refreshToken));
+        when(emailVerificationService.sendVerification(anyString())).thenReturn(Mono.empty());
+
+        StepVerifier.create(authService.register(request, "127.0.0.1"))
+                .expectNextCount(1).verifyComplete();
+
+        verify(emailVerificationService).sendVerification("new@example.com");
+    }
+
+    @Test
+    @DisplayName("Should register even when verification email fails")
+    void registerSucceedsEvenIfVerificationEmailFails() {
+        // The send happens OUTSIDE the transaction and is best-effort: the account
+        // must not fail to be created because SMTP went down.
+        RegisterRequest request = new RegisterRequest("New User", "new@example.com", "Password123!@", true, null);
+        User savedUser = User.builder()
+                .id(555L).name("New User").email("new@example.com")
+                .passwordHash("hashed").role("VIEWER").active(true)
+                .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
+        RefreshToken refreshToken = RefreshToken.builder()
+                .id(10L).userId(555L).token("reg-refresh-tok").build();
+
+        when(userRepository.existsByEmail("new@example.com")).thenReturn(Mono.just(false));
+        when(idService.nextId()).thenReturn(555L);
+        when(passwordEncoder.encode("Password123!@")).thenReturn("hashed");
+        when(userRepository.save(any(User.class))).thenReturn(Mono.just(savedUser));
+        when(tokenProvider.generateToken(555L, "VIEWER")).thenReturn("access-tok");
+        when(emailService.sendRegistrationWelcome("new@example.com", "New User")).thenReturn(Mono.empty());
+        when(refreshTokenService.createRefreshToken(555L)).thenReturn(Mono.just(refreshToken));
+        when(emailVerificationService.sendVerification(anyString()))
+                .thenReturn(Mono.error(new RuntimeException("smtp down")));
+
+        StepVerifier.create(authService.register(request, "127.0.0.1"))
+                .expectNextCount(1).verifyComplete();
     }
 
     @Test

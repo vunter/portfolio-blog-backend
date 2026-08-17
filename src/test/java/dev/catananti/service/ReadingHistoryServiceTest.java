@@ -178,8 +178,9 @@ class ReadingHistoryServiceTest {
         when(userRepository.findByEmail("reader@example.com")).thenReturn(Mono.just(testUser));
         when(readingHistoryRepository.findByUserIdOrderByLastReadAtDesc(100L, 10, 0))
                 .thenReturn(Flux.just(testHistory));
-        when(articleRepository.findById(200L)).thenReturn(Mono.just(testArticle));
-        when(articleService.enrichArticleWithMetadata(any(Article.class))).thenReturn(Mono.just(testArticle));
+        when(articleRepository.findAllById(java.util.List.of(200L))).thenReturn(Flux.just(testArticle));
+        when(articleService.enrichArticlesWithMetadata(anyList()))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
         ArticleResponse articleResponse = ArticleResponse.builder()
                 .id("200")
@@ -242,8 +243,9 @@ class ReadingHistoryServiceTest {
         when(userRepository.findByEmail("reader@example.com")).thenReturn(Mono.just(testUser));
         when(readingHistoryRepository.findByUserIdOrderByLastReadAtDesc(100L, 5, 5))
                 .thenReturn(Flux.just(testHistory));
-        when(articleRepository.findById(200L)).thenReturn(Mono.just(testArticle));
-        when(articleService.enrichArticleWithMetadata(any(Article.class))).thenReturn(Mono.just(testArticle));
+        when(articleRepository.findAllById(java.util.List.of(200L))).thenReturn(Flux.just(testArticle));
+        when(articleService.enrichArticlesWithMetadata(anyList()))
+                .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
         when(articleService.mapToResponse(any(Article.class))).thenReturn(
                 ArticleResponse.builder().id("200").slug("test-article").build());
         when(readingHistoryRepository.countByUserId(100L)).thenReturn(Mono.just(6L));
@@ -278,9 +280,10 @@ class ReadingHistoryServiceTest {
         when(userRepository.findByEmail("reader@example.com")).thenReturn(Mono.just(testUser));
         when(readingHistoryRepository.findByUserIdOrderByLastReadAtDesc(100L, 10, 0))
                 .thenReturn(Flux.just(testHistory, history2));
-        when(articleRepository.findById(200L)).thenReturn(Mono.just(testArticle));
-        when(articleRepository.findById(201L)).thenReturn(Mono.just(article2));
-        when(articleService.enrichArticleWithMetadata(any(Article.class)))
+        // NP-3: articles come back from the DB in a different order than the history
+        when(articleRepository.findAllById(java.util.List.of(200L, 201L)))
+                .thenReturn(Flux.just(article2, testArticle));
+        when(articleService.enrichArticlesWithMetadata(anyList()))
                 .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
         when(articleService.mapToResponse(any(Article.class)))
                 .thenAnswer(inv -> {
@@ -296,8 +299,13 @@ class ReadingHistoryServiceTest {
                 .assertNext(page -> {
                     assertThat(page.getContent()).hasSize(2);
                     assertThat(page.getTotalElements()).isEqualTo(2);
+                    // history order (most recently read first) must be preserved
+                    assertThat(page.getContent().get(0).article().getId()).isEqualTo("200");
+                    assertThat(page.getContent().get(1).article().getId()).isEqualTo("201");
                 })
                 .verifyComplete();
+
+        verify(articleRepository, never()).findById(anyLong());
     }
 
     // ==================== clearHistory ====================

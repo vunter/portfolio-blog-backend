@@ -64,6 +64,26 @@ public class Subscriber implements Persistable<Long>, NewRecordAware {
     @Builder.Default
     private Boolean analyticsConsent = false;
 
+    // Link to the user account. Only set when both sides proved the address
+    // (users.email_verified AND status = CONFIRMED); written via conditional
+    // UPDATEs in SubscriberRepository, never through save().
+    @Column("user_id")
+    private Long userId;
+
+    @Column("linked_at")
+    private LocalDateTime linkedAt;
+
+    @Column("link_origin")
+    private String linkOrigin;
+
+    @Column("unlinked_at")
+    private LocalDateTime unlinkedAt;
+
+    // Who undid the link: only the holder's own refusal ('USER') blocks
+    // automatic re-linking; 'ADMIN' and 'ACCOUNT_DELETED' do not.
+    @Column("unlinked_by")
+    private String unlinkedBy;
+
     public boolean isConfirmed() {
         return status == SubscriberStatus.CONFIRMED;
     }

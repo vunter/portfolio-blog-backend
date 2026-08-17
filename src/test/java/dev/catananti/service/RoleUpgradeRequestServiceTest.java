@@ -38,6 +38,7 @@ class RoleUpgradeRequestServiceTest {
     @Mock private HtmlSanitizerService htmlSanitizerService;
     @Mock private EmailService emailService;
     @Mock private PaginationConfig paginationConfig;
+    @Mock private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
 
     private RoleUpgradeRequestService service;
 
@@ -47,9 +48,12 @@ class RoleUpgradeRequestServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
+        lenient().when(transactionalOperator.transactional(any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
         service = new RoleUpgradeRequestService(
                 roleUpgradeRequestRepository, userRepository, userService,
-                idService, htmlSanitizerService, emailService, paginationConfig);
+                idService, htmlSanitizerService, emailService, paginationConfig,
+                transactionalOperator);
 
         viewerUser = User.builder()
                 .id(100L).email("viewer@test.com").name("Viewer User").role("VIEWER").build();
@@ -140,7 +144,9 @@ class RoleUpgradeRequestServiceTest {
 
             when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(adminUser));
             when(roleUpgradeRequestRepository.findById(5001L)).thenReturn(Mono.just(request));
-            when(roleUpgradeRequestRepository.save(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(roleUpgradeRequestRepository.transitionFromPending(
+                    eq(5001L), eq("APPROVED"), anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
             when(userService.updateUserRoleSafe(eq(100L), any(), eq("admin@test.com")))
                     .thenReturn(Mono.empty());
             when(userRepository.findById(100L)).thenReturn(Mono.just(
@@ -155,6 +161,27 @@ class RoleUpgradeRequestServiceTest {
                     .verifyComplete();
 
             verify(userService).updateUserRoleSafe(eq(100L), any(), eq("admin@test.com"));
+        }
+
+        @Test
+        @DisplayName("should not promote when another admin concurrently processed the request")
+        void shouldNotPromote_WhenConcurrentlyProcessed() {
+            var request = RoleUpgradeRequest.builder()
+                    .id(5001L).userId(100L).requestedRole("DEV").status(RoleUpgradeRequestStatus.PENDING)
+                    .createdAt(LocalDateTime.now()).build();
+
+            when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(adminUser));
+            when(roleUpgradeRequestRepository.findById(5001L)).thenReturn(Mono.just(request));
+            // Another admin's transition won the race: the conditional UPDATE affects 0 rows
+            when(roleUpgradeRequestRepository.transitionFromPending(
+                    eq(5001L), eq("APPROVED"), anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(0L));
+
+            StepVerifier.create(service.approveRequest(5001L, "admin@test.com"))
+                    .expectError(ResponseStatusException.class)
+                    .verify();
+
+            verify(userService, never()).updateUserRoleSafe(anyLong(), any(), anyString());
         }
 
         @Test
@@ -186,7 +213,9 @@ class RoleUpgradeRequestServiceTest {
 
             when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(adminUser));
             when(roleUpgradeRequestRepository.findById(5001L)).thenReturn(Mono.just(request));
-            when(roleUpgradeRequestRepository.save(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(roleUpgradeRequestRepository.transitionFromPending(
+                    eq(5001L), eq("REJECTED"), anyLong(), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
             when(userRepository.findById(100L)).thenReturn(Mono.just(viewerUser));
             when(emailService.sendRoleRequestRejected(anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(Mono.empty());

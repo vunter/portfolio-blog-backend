@@ -157,32 +157,11 @@ public class PublicResumeService {
      * Used by the public profile selector component.
      */
     public Flux<dev.catananti.dto.PublicProfileSummary> getPublishedProfiles(String lang) {
+        // NP-1: one constant projection query instead of loading each owner's full
+        // profile (11 child tables) and full template row per active alias.
         String validLang = validateLocale(lang);
-        return resumeTemplateRepository.findActiveWithAlias()
-                .flatMap(template -> {
-                    Long ownerId = template.getOwnerId();
-                    if (ownerId == null) {
-                        return Mono.empty();
-                    }
-                    // Fetch user info (name, avatar) and profile title in parallel
-                    Mono<User> userMono = userRepository.findById(ownerId).defaultIfEmpty(User.builder().name("Unknown").build());
-                    Mono<ResumeProfileResponse> profileMono = resumeProfileService
-                            .getProfileByOwnerIdWithFallback(ownerId, validLang)
-                            .onErrorResume(e -> Mono.empty())
-                            .defaultIfEmpty(ResumeProfileResponse.builder().build());
-
-                    return Mono.zip(userMono, profileMono)
-                            .map(tuple -> {
-                                User user = tuple.getT1();
-                                ResumeProfileResponse profile = tuple.getT2();
-                                return dev.catananti.dto.PublicProfileSummary.builder()
-                                        .alias(template.getAlias())
-                                        .name(profile.getFullName() != null ? profile.getFullName() : user.getName())
-                                        .title(profile.getTitle())
-                                        .avatarUrl(user.getAvatarUrl())
-                                        .build();
-                            });
-                });
+        String langPrefix = validLang.length() >= 2 ? validLang.substring(0, 2) + "%" : validLang + "%";
+        return resumeTemplateRepository.findPublicProfileSummaries(validLang, langPrefix);
     }
 
     /**
@@ -249,10 +228,14 @@ public class PublicResumeService {
     private String buildFullHtml(ResumeTemplate template, String lang) {
         String html = template.getHtmlContent();
         
-        // If the HTML content is already a complete document, sanitize and return
+        // If the HTML content is already a complete document, sanitize and return.
+        // Must use the layout-preserving sanitizer: the Safelist-based sanitize() keeps
+        // only body content and an attribute allowlist, so it silently discarded the
+        // <head> (and every <style> in it) plus all class/style attributes — the template
+        // rendered with correct text and zero formatting.
         if (html != null && html.trim().toLowerCase().startsWith("<!doctype")) {
             log.debug("Template HTML is a complete document, sanitizing before use");
-            return htmlSanitizerService.sanitize(html);
+            return htmlSanitizerService.sanitizeFullDocument(html);
         }
         
         // Otherwise, wrap in a basic HTML structure

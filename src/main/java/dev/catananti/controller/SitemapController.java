@@ -16,6 +16,8 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
@@ -85,7 +87,8 @@ public class SitemapController {
             
             LocalDateTime lastMod = article.getUpdatedAt() != null ? article.getUpdatedAt() : article.getPublishedAt();
             if (lastMod != null) {
-                xml.append("    <lastmod>").append(lastMod.format(SITEMAP_DATE_FORMAT)).append("</lastmod>\n");
+                xml.append("    <lastmod>").append(lastMod.atZone(ZoneId.systemDefault())
+                        .withZoneSameInstant(ZoneOffset.UTC).format(SITEMAP_DATE_FORMAT)).append("</lastmod>\n");
             }
             
             xml.append("    <changefreq>weekly</changefreq>\n");

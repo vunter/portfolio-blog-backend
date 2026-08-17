@@ -106,7 +106,7 @@ class CommentServiceTest {
                 .thenReturn(Mono.just(testArticle));
         when(commentRepository.findApprovedByArticleId(eq(articleId), anyInt()))
                 .thenReturn(Flux.just(testComment));
-        when(commentRepository.findApprovedRepliesByParentIds(any(Long[].class)))
+        when(commentRepository.findApprovedRepliesByParentIds(anyList()))
                 .thenReturn(Flux.empty());
 
         // When
@@ -180,6 +180,42 @@ class CommentServiceTest {
                     assertThat(comment.getStatus()).isEqualTo("APPROVED");
                 })
                 .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("Should persist the authenticated author's user id on the comment")
+    void createComment_ShouldCarryAuthenticatedUserId() {
+        // Given — the controller resolves the logged user and stamps the request;
+        // without propagating it, erasure-by-user_id misses comments created
+        // after the V21 backfill ran.
+        CommentRequest request = CommentRequest.builder()
+                .authorName("Jane Doe")
+                .authorEmail("jane@example.com")
+                .content("Nice post!")
+                .userId(42L)
+                .build();
+
+        when(articleRepository.findBySlug("test-article"))
+                .thenReturn(Mono.just(testArticle));
+        when(commentRepository.save(any(Comment.class)))
+                .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+        when(htmlSanitizerService.stripHtml(anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(contentModerationService.analyzeContent(anyString(), anyString()))
+                .thenReturn(ContentModerationService.ModerationResult.builder()
+                        .severity(ContentModerationService.Severity.NONE).safe(true).reasons(java.util.List.of()).build());
+        when(commentRepository.countApprovedByAuthorEmail(anyString()))
+                .thenReturn(Mono.just(0L));
+
+        // When
+        StepVerifier.create(commentService.createComment("test-article", request))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        // Then
+        org.mockito.ArgumentCaptor<Comment> saved = org.mockito.ArgumentCaptor.forClass(Comment.class);
+        verify(commentRepository).save(saved.capture());
+        assertThat(saved.getValue().getUserId()).isEqualTo(42L);
     }
 
     @Test
@@ -402,7 +438,7 @@ class CommentServiceTest {
         when(commentRepository.findApprovedByArticleIdSortedByLikes(articleId, 10, 0))
                 .thenReturn(Flux.just(testComment));
         when(commentRepository.countApprovedByArticleId(articleId)).thenReturn(Mono.just(1L));
-        when(commentRepository.findApprovedRepliesByParentIds(any(Long[].class))).thenReturn(Flux.empty());
+        when(commentRepository.findApprovedRepliesByParentIds(anyList())).thenReturn(Flux.empty());
 
         StepVerifier.create(commentService.getApprovedCommentsByArticleSlugPaginated("test-article", 0, 10))
                 .assertNext(page -> {

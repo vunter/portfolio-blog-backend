@@ -142,6 +142,15 @@ public class MediaService {
                                                                     .build();
 
                                                             return mediaAssetRepository.save(asset)
+                                                                    // TX-12: if the DB insert fails, remove the objects
+                                                                    // already written to storage so they don't leak.
+                                                                    .onErrorResume(e -> storageProvider.delete(storageKey)
+                                                                            .onErrorResume(cleanupErr -> Mono.empty())
+                                                                            .then(thumbnailUrl.isEmpty()
+                                                                                    ? Mono.<Void>empty()
+                                                                                    : storageProvider.delete(deriveVariantKey(storageKey, "-thumb"))
+                                                                                            .onErrorResume(cleanupErr -> Mono.empty()))
+                                                                            .then(Mono.error(e)))
                                                                     .flatMap(savedAsset ->
                                                                             Mono.when(mediumMono, largeMono)
                                                                                     .thenReturn(savedAsset));
@@ -159,14 +168,23 @@ public class MediaService {
         return mediaAssetRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.media_not_found")))
                 .flatMap(asset -> {
-                    Mono<Void> deleteOriginal = storageProvider.delete(asset.getStorageKey());
+                    // TX-12: delete the DB row FIRST. If storage cleanup then fails we only
+                    // leak an orphaned file (harmless, GC-able); the old order could leave a
+                    // live DB row pointing at a deleted file (broken image on the site).
+                    Mono<Void> deleteOriginal = storageProvider.delete(asset.getStorageKey())
+                            .onErrorResume(e -> {
+                                log.warn("Orphaned storage object after asset delete: key={} ({})",
+                                        asset.getStorageKey(), e.getMessage());
+                                return Mono.empty();
+                            });
                     Mono<Void> deleteThumb = Mono.empty();
                     if (asset.getThumbnailUrl() != null && !asset.getThumbnailUrl().isEmpty()) {
                         String thumbKey = deriveVariantKey(asset.getStorageKey(), "-thumb");
                         deleteThumb = storageProvider.delete(thumbKey).onErrorResume(e -> Mono.empty());
                     }
-                    return deleteOriginal.then(deleteThumb)
-                            .then(mediaAssetRepository.delete(asset))
+                    return mediaAssetRepository.delete(asset)
+                            .then(deleteOriginal)
+                            .then(deleteThumb)
                             .doOnSuccess(_ -> log.debug("Media asset deleted: id={}, key={}", id, asset.getStorageKey()));
                 });
     }

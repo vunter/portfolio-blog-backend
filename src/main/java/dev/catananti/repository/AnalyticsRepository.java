@@ -1,6 +1,7 @@
 package dev.catananti.repository;
 
 import dev.catananti.entity.AnalyticsEvent;
+import org.springframework.data.r2dbc.repository.Modifying;
 import org.springframework.data.r2dbc.repository.Query;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.stereotype.Repository;
@@ -18,13 +19,17 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
     @Query("SELECT COUNT(*) FROM analytics_events WHERE article_id = :articleId AND event_type = :eventType")
     Mono<Long> countByArticleIdAndEventType(Long articleId, String eventType);
 
-    @Query("SELECT COUNT(*) FROM analytics_events WHERE event_type = :eventType AND created_at >= :since")
+    // Exclude bot traffic (device_type = 'Bot') from headline totals, consistent with
+    // the unique/daily aggregates in AnalyticsService.
+    @Query("SELECT COUNT(*) FROM analytics_events WHERE event_type = :eventType AND created_at >= :since " +
+           "AND (device_type IS NULL OR device_type <> 'Bot')")
     Mono<Long> countByEventTypeSince(String eventType, LocalDateTime since);
 
     // Author-scoped analytics queries (for DEV dashboard)
     @Query("SELECT COUNT(*) FROM analytics_events ae " +
            "JOIN articles a ON ae.article_id = a.id " +
-           "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :since")
+           "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :since " +
+           "AND (ae.device_type IS NULL OR ae.device_type <> 'Bot')")
     Mono<Long> countByAuthorIdAndEventTypeSince(Long authorId, String eventType, LocalDateTime since);
 
     // BUG-12: Removed Flux<Object[]> methods — R2DBC does not support Object[] projections.
@@ -32,6 +37,12 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
 
     Mono<Void> deleteByArticleId(Long articleId);
 
+    /**
+     * RQ-02: @Modifying makes this execute as DML and emit the affected-row count —
+     * without it the DELETE ran but the Mono completed empty, so the caller could
+     * never tell whether retention was working, nor loop until the backlog drained.
+     */
+    @Modifying
     @Query("DELETE FROM analytics_events WHERE id IN (SELECT id FROM analytics_events WHERE created_at < :cutoff LIMIT 10000)")
     Mono<Long> deleteByCreatedAtBefore(LocalDateTime cutoff);
 }

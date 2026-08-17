@@ -112,12 +112,47 @@ class RefreshTokenServiceTest {
                     .thenReturn(Mono.just(0L));
             when(refreshTokenRepository.findByToken(anyString()))
                     .thenReturn(Mono.just(revoked));
-            when(refreshTokenRepository.findActiveByUserId(1001L))
+            when(refreshTokenRepository.findActiveByUserId(eq(1001L), any(LocalDateTime.class)))
                     .thenReturn(Flux.empty());
 
             StepVerifier.create(refreshTokenService.verifyAndRotate("reused-token"))
                     .expectError(SecurityException.class)
                     .verify();
+        }
+
+        @Test
+        @DisplayName("Grace period: should not rotate when the latest active token was concurrently revoked")
+        void shouldNotRotateInGracePeriod_WhenLatestActiveConcurrentlyRevoked() {
+            ReflectionTestUtils.setField(refreshTokenService, "rotationGracePeriodSeconds", 10);
+            RefreshToken revoked = RefreshToken.builder()
+                    .id(7001L)
+                    .userId(1001L)
+                    .token("reused-token-hash")
+                    .revoked(true)
+                    .build();
+            RefreshToken latestActive = RefreshToken.builder()
+                    .id(7002L)
+                    .userId(1001L)
+                    .token("latest-active-hash")
+                    .revoked(false)
+                    .createdAt(LocalDateTime.now())
+                    .expiresAt(LocalDateTime.now().plusDays(7))
+                    .build();
+
+            when(refreshTokenRepository.revokeByTokenIfActive(anyString()))
+                    .thenReturn(Mono.just(0L));
+            when(refreshTokenRepository.findByToken(anyString()))
+                    .thenReturn(Mono.just(revoked));
+            when(refreshTokenRepository.findActiveByUserId(eq(1001L), any(LocalDateTime.class)))
+                    .thenReturn(Flux.just(latestActive));
+
+            // The concurrent retry already revoked latestActive and rotated; the loser
+            // must NOT mint a second active token.
+            StepVerifier.create(refreshTokenService.verifyAndRotate("reused-token"))
+                    .expectError(SecurityException.class)
+                    .verify();
+
+            verify(refreshTokenRepository, never()).save(any(RefreshToken.class));
         }
 
         @Test

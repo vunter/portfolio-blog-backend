@@ -8,7 +8,9 @@ import reactor.core.publisher.Mono;
 
 public interface BookmarkRepository extends ReactiveCrudRepository<Bookmark, Long> {
 
-    @Query("SELECT b.* FROM bookmarks b JOIN articles a ON b.article_id = a.id WHERE b.visitor_hash = :visitorHash ORDER BY b.created_at DESC LIMIT :limit OFFSET :offset")
+    // RQ-10: no JOIN — it filtered nothing (bookmarks.article_id is a FK) and only
+    // added cost; it also disagreed with the plain COUNT below, skewing pagination.
+    @Query("SELECT * FROM bookmarks WHERE visitor_hash = :visitorHash ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Bookmark> findByVisitorHash(String visitorHash, int limit, int offset);
 
     @Query("SELECT COUNT(*) FROM bookmarks WHERE visitor_hash = :visitorHash")
@@ -18,13 +20,14 @@ public interface BookmarkRepository extends ReactiveCrudRepository<Bookmark, Lon
 
     Mono<Void> deleteByArticleIdAndVisitorHash(Long articleId, String visitorHash);
 
-    @Query("SELECT b.* FROM bookmarks b JOIN articles a ON b.article_id = a.id WHERE b.user_id = :userId ORDER BY b.created_at DESC LIMIT :limit OFFSET :offset")
+    @Query("SELECT * FROM bookmarks WHERE user_id = :userId ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
     Flux<Bookmark> findByUserId(Long userId, int limit, int offset);
 
     @Query("SELECT COUNT(*) FROM bookmarks WHERE user_id = :userId")
     Mono<Long> countByUserId(Long userId);
 
-    Mono<Bookmark> findByArticleIdAndUserId(Long articleId, Long userId);
-
-    Mono<Void> deleteByArticleIdAndUserId(Long articleId, Long userId);
+    // Account deletion: bookmarks are private data with no public value.
+    @Query("DELETE FROM bookmarks WHERE user_id = :userId")
+    @org.springframework.data.r2dbc.repository.Modifying
+    Mono<Long> deleteByUserId(Long userId);
 }

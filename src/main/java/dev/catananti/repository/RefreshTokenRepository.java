@@ -25,8 +25,12 @@ public interface RefreshTokenRepository extends ReactiveCrudRepository<RefreshTo
     @Query("UPDATE refresh_tokens SET revoked = true WHERE user_id = :userId AND token != :currentToken")
     Mono<Void> revokeAllByUserIdExcept(Long userId, String currentToken);
 
-    @Query("SELECT * FROM refresh_tokens WHERE user_id = :userId AND revoked = false AND expires_at > NOW() ORDER BY created_at DESC")
-    Flux<RefreshToken> findActiveByUserId(Long userId);
+    // SI-6: expiry rows are WRITTEN with the JVM clock (LocalDateTime.now()), so the
+    // validity comparison must use the same clock — NOW() compared against a column
+    // in the Postgres server's timezone, which silently shifts token lifetimes when
+    // app and DB clocks/timezones differ.
+    @Query("SELECT * FROM refresh_tokens WHERE user_id = :userId AND revoked = false AND expires_at > :now ORDER BY created_at DESC")
+    Flux<RefreshToken> findActiveByUserId(Long userId, java.time.LocalDateTime now);
 
     /**
      * Revokes a token by setting revoked=true. Returns the number of updated rows.
@@ -40,5 +44,9 @@ public interface RefreshTokenRepository extends ReactiveCrudRepository<RefreshTo
     @Query("DELETE FROM refresh_tokens WHERE expires_at < :now")
     Mono<Void> deleteExpired(LocalDateTime now);
 
-    Mono<Void> deleteByUserId(Long userId);
+    // Erasure deletes the rows themselves (deactivation only revokes): the token
+    // strings are credentials tied to an account that must leave no artifacts.
+    @Modifying
+    @Query("DELETE FROM refresh_tokens WHERE user_id = :userId")
+    Mono<Long> deleteByUserId(Long userId);
 }

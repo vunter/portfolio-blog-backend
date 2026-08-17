@@ -109,6 +109,13 @@ class ArticleAdminServiceTest {
     void setUp() {
         articleId = 1234567890123456L;
 
+        // Every mutating op now invalidates the article read-through + feed caches (A6),
+        // including create/update which previously did no cache invalidation.
+        // lenient() because not all tests exercise a mutation path.
+        lenient().when(cacheService.delete(anyString())).thenReturn(Mono.just(true));
+        lenient().when(cacheService.invalidateArticle(anyString())).thenReturn(Mono.just(0L));
+        lenient().when(cacheService.invalidateAllArticles()).thenReturn(Mono.just(0L));
+
         testArticle = Article.builder()
                 .id(articleId)
                 .slug("test-article")

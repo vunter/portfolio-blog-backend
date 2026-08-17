@@ -185,10 +185,17 @@ public class ExportImportService {
      * Uses batch tag loading to avoid N+1 queries.
      */
     public Mono<Map<String, String>> exportToMarkdown() {
+        // NP-7: same cap as exportArticles — findAll() without a bound would load
+        // the entire articles table (with content) into memory.
         return articleRepository.findAll()
+                .take(maxExportArticles)
                 .collectList()
                 .flatMap(articles -> {
                     if (articles.isEmpty()) return Mono.just(Map.<String, String>of());
+                    if (articles.size() >= maxExportArticles) {
+                        log.warn("Markdown export reached the {}-article cap; result may be truncated. "
+                                + "Raise app.export.max-articles to export more.", maxExportArticles);
+                    }
                     Long[] articleIds = articles.stream().map(Article::getId).toArray(Long[]::new);
                     return articleTagRepository.findTagIdsByArticleIds(articleIds)
                             .collectMultimap(pair -> pair[0], pair -> pair[1])
@@ -266,7 +273,7 @@ public class ExportImportService {
 
     private Mono<Void> importTags(List<TagExportData> tags, boolean overwrite) {
         return Flux.fromIterable(tags)
-                .flatMap(tagData -> {
+                .concatMap(tagData -> {
 
                     return tagRepository.findBySlug(tagData.getSlug())
                             .flatMap(existingTag -> {
@@ -291,13 +298,15 @@ public class ExportImportService {
                                         .build();
                                 return tagRepository.save(newTag);
                             }));
-                }, 8)
+                // TX-10: concatMap — this runs inside importFromJson's transaction (single
+                // R2DBC connection); concurrent flatMap would interleave statements on it.
+                })
                 .then();
     }
 
     private Mono<ImportResult> importArticles(List<ArticleExportData> articles, boolean overwrite) {
         return Flux.fromIterable(articles)
-                .flatMap(articleData -> {
+                .concatMap(articleData -> {
                     return articleRepository.findBySlug(articleData.getSlug())
                             .flatMap(existingArticle -> {
                                 if (overwrite) {
@@ -314,7 +323,8 @@ public class ExportImportService {
                                         .flatMap(saved -> reconnectTags(saved.getId(), articleData.getTagSlugs()))
                                         .thenReturn(1);
                             }));
-                }, 8)
+                // TX-10: concatMap — see importTags
+                })
                 .reduce(0, Integer::sum)
                 .map(count -> {
                     long tagCount = articles.stream()

@@ -1,0 +1,1300 @@
+diff --git a/src/main/java/dev/catananti/controller/AdminArticleController.java b/src/main/java/dev/catananti/controller/AdminArticleController.java
+index 199ff8d..2b8bb2e 100644
+--- a/src/main/java/dev/catananti/controller/AdminArticleController.java
++++ b/src/main/java/dev/catananti/controller/AdminArticleController.java
+@@ -9,7 +9,6 @@ import dev.catananti.dto.PageResponse;
+ import dev.catananti.entity.ArticleReview;
+ import dev.catananti.entity.ArticleStatus;
+ import dev.catananti.service.ArticleAdminService;
+-import dev.catananti.service.ArticleService;
+ import dev.catananti.service.ArticleTranslationService;
+ import jakarta.validation.Valid;
+ import dev.catananti.config.PaginationConfig;
+@@ -39,7 +38,6 @@ import java.util.Set;
+ public class AdminArticleController {
+ 
+     private final ArticleAdminService articleAdminService;
+-    private final ArticleService articleService;
+     private final ArticleTranslationService articleTranslationService;
+     private final PaginationConfig paginationConfig;
+ 
+@@ -56,7 +54,9 @@ public class AdminArticleController {
+         size = paginationConfig.clampPageSize(size);
+         log.debug("Admin fetching articles: page={}, size={}, status={}, sort={}", page, size, status, sort);
+         if (search != null && !search.isBlank()) {
+-            return articleService.searchArticles(search.trim(), page, size);
++            // Admin search spans all statuses and is author-scoped for DEV users
++            // (public searchArticles is PUBLISHED-only and ignores ownership).
++            return articleAdminService.searchArticles(search.trim(), page, size);
+         }
+         return articleAdminService.getAllArticles(page, size, status, sort);
+     }
+diff --git a/src/main/java/dev/catananti/controller/ArticleController.java b/src/main/java/dev/catananti/controller/ArticleController.java
+index 3b69cbb..8d99fbc 100644
+--- a/src/main/java/dev/catananti/controller/ArticleController.java
++++ b/src/main/java/dev/catananti/controller/ArticleController.java
+@@ -115,17 +115,30 @@ public class ArticleController {
+             @AuthenticationPrincipal String email,
+             ServerHttpRequest request) {
+         log.debug("View tracked for slug='{}'", slug);
++
++        // Record analytics event for dashboard tracking — only when the visitor
++        // consented to analytics. The view-count increment below is an anonymous
++        // aggregate and is NOT consent-gated.
++        var requestHeaders = request.getHeaders();
++        boolean analyticsConsent = requestHeaders != null
++                && "granted".equals(requestHeaders.getFirst("X-Analytics-Consent"));
++        Mono<Void> analyticsMono = analyticsConsent
++                ? analyticsService.trackArticleView(slug, request)
++                        .onErrorResume(e -> {
++                            log.warn("Failed to record analytics for slug='{}': {}", slug, e.getMessage());
++                            return Mono.empty();
++                        })
++                : Mono.empty();
++
++        // M12: gate BOTH the view-count increment and the analytics VIEW record on the
++        // same dedup result, so repeat/bot requests neither inflate the counter nor insert
++        // duplicate VIEW rows. When deduplication is unavailable, track unconditionally.
+         Mono<Void> viewMono = deduplicationService
+                 .map(svc -> svc.recordViewIfNew(slug, request)
+-                        .flatMap(isNew -> isNew ? articleService.incrementViews(slug) : Mono.<Void>empty()))
+-                .orElseGet(() -> articleService.incrementViews(slug));
+-
+-        // Record analytics event for dashboard tracking
+-        Mono<Void> analyticsMono = analyticsService.trackArticleView(slug, request)
+-                .onErrorResume(e -> {
+-                    log.warn("Failed to record analytics for slug='{}': {}", slug, e.getMessage());
+-                    return Mono.empty();
+-                });
++                        .flatMap(isNew -> isNew
++                                ? articleService.incrementViews(slug).then(analyticsMono)
++                                : Mono.<Void>empty()))
++                .orElseGet(() -> articleService.incrementViews(slug).then(analyticsMono));
+ 
+         // Track reading history for authenticated users
+         if (email != null) {
+@@ -134,9 +147,9 @@ public class ArticleController {
+                         log.warn("Failed to record reading history for slug='{}': {}", slug, e.getMessage());
+                         return Mono.empty();
+                     });
+-            return viewMono.then(analyticsMono).then(historyMono);
++            return viewMono.then(historyMono);
+         }
+-        return viewMono.then(analyticsMono);
++        return viewMono;
+     }
+ 
+     @PostMapping("/{slug}/like")
+diff --git a/src/main/java/dev/catananti/controller/NewsletterTrackingController.java b/src/main/java/dev/catananti/controller/NewsletterTrackingController.java
+index 7b5e252..1b04db0 100644
+--- a/src/main/java/dev/catananti/controller/NewsletterTrackingController.java
++++ b/src/main/java/dev/catananti/controller/NewsletterTrackingController.java
+@@ -77,7 +77,10 @@ public class NewsletterTrackingController {
+         return trackingService.recordClick(token, url, request)
+                 .then(Mono.just(ResponseEntity.status(HttpStatus.FOUND)
+                         .location(URI.create(url))
+-                        .build()));
++                        .<Void>build()))
++                .onErrorResume(e -> Mono.just(ResponseEntity.status(HttpStatus.FOUND)
++                        .location(URI.create(url))
++                        .<Void>build()));
+     }
+ 
+     private boolean isValidRedirectUrl(String url) {
+diff --git a/src/main/java/dev/catananti/controller/RssFeedController.java b/src/main/java/dev/catananti/controller/RssFeedController.java
+index 6e78705..cf591a8 100644
+--- a/src/main/java/dev/catananti/controller/RssFeedController.java
++++ b/src/main/java/dev/catananti/controller/RssFeedController.java
+@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
+ import reactor.core.publisher.Mono;
+ 
+ import java.time.Duration;
++import java.time.ZoneId;
+ import java.time.ZoneOffset;
+ import java.time.format.DateTimeFormatter;
+ import java.util.Locale;
+@@ -82,7 +83,8 @@ public class RssFeedController {
+         
+         if (!items.isEmpty() && items.getFirst().publishedAt() != null) {
+             xml.append("    <lastBuildDate>")
+-               .append(items.getFirst().publishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
++               .append(items.getFirst().publishedAt().atZone(ZoneId.systemDefault())
++                       .withZoneSameInstant(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
+                .append("</lastBuildDate>\n");
+         }
+ 
+@@ -100,7 +102,8 @@ public class RssFeedController {
+             
+             if (item.publishedAt() != null) {
+                 xml.append("      <pubDate>")
+-                   .append(item.publishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
++                   .append(item.publishedAt().atZone(ZoneId.systemDefault())
++                           .withZoneSameInstant(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
+                    .append("</pubDate>\n");
+             }
+             
+diff --git a/src/main/java/dev/catananti/controller/SitemapController.java b/src/main/java/dev/catananti/controller/SitemapController.java
+index 65f015f..bf49366 100644
+--- a/src/main/java/dev/catananti/controller/SitemapController.java
++++ b/src/main/java/dev/catananti/controller/SitemapController.java
+@@ -16,6 +16,8 @@ import reactor.core.publisher.Mono;
+ 
+ import java.time.Duration;
+ import java.time.LocalDateTime;
++import java.time.ZoneId;
++import java.time.ZoneOffset;
+ import java.time.format.DateTimeFormatter;
+ import java.util.List;
+ 
+@@ -85,7 +87,8 @@ public class SitemapController {
+             
+             LocalDateTime lastMod = article.getUpdatedAt() != null ? article.getUpdatedAt() : article.getPublishedAt();
+             if (lastMod != null) {
+-                xml.append("    <lastmod>").append(lastMod.format(SITEMAP_DATE_FORMAT)).append("</lastmod>\n");
++                xml.append("    <lastmod>").append(lastMod.atZone(ZoneId.systemDefault())
++                        .withZoneSameInstant(ZoneOffset.UTC).format(SITEMAP_DATE_FORMAT)).append("</lastmod>\n");
+             }
+             
+             xml.append("    <changefreq>weekly</changefreq>\n");
+diff --git a/src/main/java/dev/catananti/repository/AnalyticsRepository.java b/src/main/java/dev/catananti/repository/AnalyticsRepository.java
+index 9cfca49..f1d4693 100644
+--- a/src/main/java/dev/catananti/repository/AnalyticsRepository.java
++++ b/src/main/java/dev/catananti/repository/AnalyticsRepository.java
+@@ -18,13 +18,17 @@ public interface AnalyticsRepository extends ReactiveCrudRepository<AnalyticsEve
+     @Query("SELECT COUNT(*) FROM analytics_events WHERE article_id = :articleId AND event_type = :eventType")
+     Mono<Long> countByArticleIdAndEventType(Long articleId, String eventType);
+ 
+-    @Query("SELECT COUNT(*) FROM analytics_events WHERE event_type = :eventType AND created_at >= :since")
++    // Exclude bot traffic (device_type = 'Bot') from headline totals, consistent with
++    // the unique/daily aggregates in AnalyticsService.
++    @Query("SELECT COUNT(*) FROM analytics_events WHERE event_type = :eventType AND created_at >= :since " +
++           "AND (device_type IS NULL OR device_type <> 'Bot')")
+     Mono<Long> countByEventTypeSince(String eventType, LocalDateTime since);
+ 
+     // Author-scoped analytics queries (for DEV dashboard)
+     @Query("SELECT COUNT(*) FROM analytics_events ae " +
+            "JOIN articles a ON ae.article_id = a.id " +
+-           "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :since")
++           "WHERE a.author_id = :authorId AND ae.event_type = :eventType AND ae.created_at >= :since " +
++           "AND (ae.device_type IS NULL OR ae.device_type <> 'Bot')")
+     Mono<Long> countByAuthorIdAndEventTypeSince(Long authorId, String eventType, LocalDateTime since);
+ 
+     // BUG-12: Removed Flux<Object[]> methods — R2DBC does not support Object[] projections.
+diff --git a/src/main/java/dev/catananti/repository/ArticleRepository.java b/src/main/java/dev/catananti/repository/ArticleRepository.java
+index e60c6e7..ccdc734 100644
+--- a/src/main/java/dev/catananti/repository/ArticleRepository.java
++++ b/src/main/java/dev/catananti/repository/ArticleRepository.java
+@@ -50,6 +50,36 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
+            "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
+     Mono<Long> countSearchByStatusAndQuery(String status, String query);
+ 
++    // Admin-facing search — spans ALL statuses (DRAFT/SCHEDULED/REVIEW/ARCHIVED/PUBLISHED),
++    // unlike the public search which is PUBLISHED-only. LIKE-based so it works on both
++    // Postgres and the H2 test profile.
++    @Query("SELECT * FROM articles WHERE " +
++           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%'))) " +
++           "ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
++    Flux<Article> adminSearchByQuery(String query, int limit, int offset);
++
++    @Query("SELECT COUNT(*) FROM articles WHERE " +
++           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
++    Mono<Long> countAdminSearchByQuery(String query);
++
++    // Author-scoped admin search — DEV users only see their own articles.
++    @Query("SELECT * FROM articles WHERE author_id = :authorId AND " +
++           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%'))) " +
++           "ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
++    Flux<Article> adminSearchByAuthorAndQuery(Long authorId, String query, int limit, int offset);
++
++    @Query("SELECT COUNT(*) FROM articles WHERE author_id = :authorId AND " +
++           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
++           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
++    Mono<Long> countAdminSearchByAuthorAndQuery(Long authorId, String query);
++
+     // Q4.2: PostgreSQL FTS variants — match against base article OR any article_i18n translation.
+     // Uses 'simple' config for language-agnostic matching (PT/ES/IT/EN all work equally).
+     // Backed by GIN indexes in V14 (articles) and V16 (article_i18n).
+diff --git a/src/main/java/dev/catananti/scheduler/ArticlePublishScheduler.java b/src/main/java/dev/catananti/scheduler/ArticlePublishScheduler.java
+index d3cb8f5..87cfa19 100644
+--- a/src/main/java/dev/catananti/scheduler/ArticlePublishScheduler.java
++++ b/src/main/java/dev/catananti/scheduler/ArticlePublishScheduler.java
+@@ -69,7 +69,13 @@ public class ArticlePublishScheduler {
+                         return Mono.empty();
+                     }
+                     log.info("Published {} scheduled article(s), invalidating cache", published.size());
+-                    return cacheService.invalidateAllArticles().then();
++                    // Invalidate both the article read-through caches AND the RSS/sitemap
++                    // feed caches, otherwise a scheduler-published article is missing from
++                    // the feeds for up to their TTL (15m/30m).
++                    return Mono.when(
++                            cacheService.invalidateAllArticles(),
++                            cacheService.invalidateFeedCache()
++                    );
+                 })
+                 .doOnError(e -> log.error("Error publishing scheduled articles: {}", e.getMessage(), e))
+                 .onErrorResume(e -> Mono.empty());
+diff --git a/src/main/java/dev/catananti/service/AnalyticsService.java b/src/main/java/dev/catananti/service/AnalyticsService.java
+index b6de754..6103f80 100644
+--- a/src/main/java/dev/catananti/service/AnalyticsService.java
++++ b/src/main/java/dev/catananti/service/AnalyticsService.java
+@@ -174,11 +174,10 @@ public class AnalyticsService {
+     public Mono<AnalyticsSummary> getAnalyticsSummary(int days) {
+         LocalDateTime since = LocalDateTime.now().minusDays(days);
+ 
+-        // BUG-RT6: Fall back to article table counts when analytics_events has no data
+-        Mono<Long> totalViewsMono = analyticsRepository.countByEventTypeSince("VIEW", since)
+-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCount());
+-        Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since)
+-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumLikesCount());
++        // M11: return the real windowed counts (0 when empty); no all-time fallback,
++        // which contradicted the daily/unique fields.
++        Mono<Long> totalViewsMono = analyticsRepository.countByEventTypeSince("VIEW", since);
++        Mono<Long> totalLikesMono = analyticsRepository.countByEventTypeSince("LIKE", since);
+         Mono<Long> totalSharesMono = analyticsRepository.countByEventTypeSince("SHARE", since);
+ 
+         return buildSummary(since, null, totalViewsMono, totalLikesMono, totalSharesMono);
+@@ -244,6 +243,7 @@ public class AnalyticsService {
+                 "SELECT COUNT(DISTINCT ae.user_ip) AS cnt FROM analytics_events ae"
+                         + authorJoin(authorId)
+                         + " WHERE ae.event_type = 'VIEW' AND ae.created_at >= :since"
++                        + " AND ae.device_type != 'Bot'"
+                         + authorPredicate(authorId))
+                 .bind("since", since);
+         spec = bindAuthor(spec, authorId);
+@@ -260,6 +260,7 @@ public class AnalyticsService {
+                         + " FROM analytics_events ae"
+                         + authorJoin(authorId)
+                         + " WHERE ae.event_type = :eventType AND ae.created_at >= :since"
++                        + " AND ae.device_type != 'Bot'"
+                         + authorPredicate(authorId)
+                         + " GROUP BY CAST(ae.created_at AS DATE)"
+                         + " ORDER BY stat_date"
+@@ -289,6 +290,7 @@ public class AnalyticsService {
+                 .bind("since", since)
+                 .bind("limit", limit);
+         spec = bindAuthor(spec, authorId);
++        // M11: return the windowed (possibly empty) period result; no all-time top-10 fallback.
+         return spec
+                 .map((row, meta) -> Map.entry(
+                         row.get("article_id", Long.class),
+@@ -311,30 +313,7 @@ public class AnalyticsService {
+                                                 .build();
+                                     })
+                                     .toList());
+-                })
+-                .flatMap(list -> list.isEmpty() ? getTopArticlesFromViewCounts(limit, authorId) : Mono.just(list));
+-    }
+-
+-    // BUG-RT6: Fallback to article view counts when analytics_events table has no data
+-    private Mono<List<AnalyticsSummary.TopArticle>> getTopArticlesFromViewCounts(int limit, Long authorId) {
+-        var spec = databaseClient.sql(
+-                "SELECT id, title, slug, views_count"
+-                        + " FROM articles"
+-                        + " WHERE views_count > 0"
+-                        + (authorId != null ? " AND author_id = :authorId" : "")
+-                        + " ORDER BY views_count DESC"
+-                        + " LIMIT :limit")
+-                .bind("limit", limit);
+-        spec = bindAuthor(spec, authorId);
+-        return spec
+-                .map((row, meta) -> AnalyticsSummary.TopArticle.builder()
+-                        .articleId(row.get("id", Long.class).toString())
+-                        .title(row.get("title", String.class))
+-                        .slug(row.get("slug", String.class))
+-                        .views(row.get("views_count", Long.class))
+-                        .build())
+-                .all()
+-                .collectList();
++                });
+     }
+ 
+     private Mono<List<AnalyticsSummary.TopReferrer>> getTopReferrers(LocalDateTime since, int limit, Long authorId) {
+@@ -450,10 +429,9 @@ public class AnalyticsService {
+     public Mono<AnalyticsSummary> getAnalyticsSummaryByAuthor(int days, Long authorId) {
+         LocalDateTime since = LocalDateTime.now().minusDays(days);
+ 
+-        Mono<Long> totalViewsMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", since)
+-                .flatMap(count -> count > 0 ? Mono.just(count) : articleRepository.sumViewsCountByAuthorId(authorId));
+-        Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since)
+-                .flatMap(count -> count > 0 ? Mono.just(count) : Mono.just(0L));
++        // M11: return the real windowed counts (0 when empty); no all-time fallback.
++        Mono<Long> totalViewsMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "VIEW", since);
++        Mono<Long> totalLikesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "LIKE", since);
+         Mono<Long> totalSharesMono = analyticsRepository.countByAuthorIdAndEventTypeSince(authorId, "SHARE", since);
+ 
+         return buildSummary(since, authorId, totalViewsMono, totalLikesMono, totalSharesMono);
+diff --git a/src/main/java/dev/catananti/service/ArticleAdminService.java b/src/main/java/dev/catananti/service/ArticleAdminService.java
+index 045138e..e9c7de8 100644
+--- a/src/main/java/dev/catananti/service/ArticleAdminService.java
++++ b/src/main/java/dev/catananti/service/ArticleAdminService.java
+@@ -17,6 +17,7 @@ import dev.catananti.repository.ArticleRepository;
+ import dev.catananti.repository.ArticleReviewRepository;
+ import dev.catananti.repository.SubscriberRepository;
+ import dev.catananti.repository.TagRepository;
++import dev.catananti.util.DigestUtils;
+ import dev.catananti.util.PiiMasker;
+ import lombok.RequiredArgsConstructor;
+ import lombok.extern.slf4j.Slf4j;
+@@ -105,6 +106,38 @@ public class ArticleAdminService {
+         });
+     }
+ 
++    /**
++     * Admin-facing search across the caller's articles. Unlike the public
++     * {@link ArticleService#searchArticles} (PUBLISHED-only), this spans ALL statuses so an
++     * author can find DRAFT/SCHEDULED/REVIEW/ARCHIVED articles. DEV users are scoped to their
++     * own articles; ADMIN sees everything.
++     */
++    public Mono<PageResponse<ArticleResponse>> searchArticles(String query, int page, int size) {
++        int offset = page * size;
++        // F-291: sanitize LIKE wildcards to prevent pattern injection.
++        String sanitizedQuery = DigestUtils.escapeLikePattern(query);
++
++        return getCurrentUser().flatMap(user -> {
++            Flux<Article> articlesFlux;
++            Mono<Long> countMono;
++            if (isAdmin(user)) {
++                articlesFlux = articleRepository.adminSearchByQuery(sanitizedQuery, size, offset);
++                countMono = articleRepository.countAdminSearchByQuery(sanitizedQuery);
++            } else {
++                articlesFlux = articleRepository.adminSearchByAuthorAndQuery(user.getId(), sanitizedQuery, size, offset);
++                countMono = articleRepository.countAdminSearchByAuthorAndQuery(user.getId(), sanitizedQuery);
++            }
++            return articlesFlux
++                    .collectList()
++                    .flatMap(articleService::enrichArticlesWithMetadata)
++                    .zipWith(countMono)
++                    .map(tuple -> {
++                        var content = tuple.getT1().stream().map(articleService::mapToResponse).toList();
++                        return PageResponse.of(content, page, size, tuple.getT2());
++                    });
++        });
++    }
++
+     private Flux<Article> findByStatusSorted(String status, String sort, int limit, int offset) {
+         return switch (sort) {
+             case "oldest" -> articleRepository.findByStatusOrderByCreatedAtAsc(status, limit, offset);
+@@ -146,7 +179,12 @@ public class ArticleAdminService {
+                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
+                 .flatMap(article -> {
+                     article.setStatus(ArticleStatus.PUBLISHED);
+-                    article.setPublishedAt(LocalDateTime.now());
++                    // Preserve the original publish timestamp on republish so feed/RSS
++                    // ordering is not shuffled every time an already-published article is
++                    // re-published.
++                    if (article.getPublishedAt() == null) {
++                        article.setPublishedAt(LocalDateTime.now());
++                    }
+                     article.setUpdatedAt(LocalDateTime.now());
+                     return articleRepository.save(article);
+                 })
+@@ -155,7 +193,7 @@ public class ArticleAdminService {
+                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
+                 });
+         return transactionalOperator.transactional(publish)
+-                .flatMap(article -> invalidateFeedCaches()
++                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
+                         .then(notifySubscribersAboutNewArticle(article))
+                         .thenReturn(article))
+                 .flatMap(articleService::enrichArticleWithMetadata)
+@@ -173,7 +211,7 @@ public class ArticleAdminService {
+                     return articleRepository.save(article);
+                 })
+                 .doOnSuccess(a -> log.info("Article unpublished: {}", a.getSlug()))
+-                .flatMap(article -> invalidateFeedCaches().thenReturn(article))
++                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug()).thenReturn(article))
+                 .flatMap(articleService::enrichArticleWithMetadata)
+                 .map(articleService::mapToResponse);
+     }
+@@ -189,7 +227,7 @@ public class ArticleAdminService {
+                     return articleRepository.save(article);
+                 })
+                 .doOnSuccess(a -> log.info("Article archived: {}", a.getSlug()))
+-                .flatMap(article -> invalidateFeedCaches().thenReturn(article))
++                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug()).thenReturn(article))
+                 .flatMap(articleService::enrichArticleWithMetadata)
+                 .map(articleService::mapToResponse);
+     }
+@@ -263,6 +301,7 @@ public class ArticleAdminService {
+                         notificationEventService.articleCreated(a.getTitle(), a.getSlug());
+                     }
+                 })
++                .flatMap(a -> invalidateArticleAndFeedCaches(a.getSlug()).thenReturn(a))
+                 .flatMap(articleService::enrichArticleWithMetadata)
+                 .map(articleService::mapToResponse);
+     }
+@@ -300,6 +339,9 @@ public class ArticleAdminService {
+                             .then(Mono.just(article));
+                 })
+                 .flatMap(article -> {
++                    // Capture the slug before any mutation so both the old and new
++                    // slug caches can be invalidated after the save.
++                    final String oldSlug = article.getSlug();
+                     // BUG-06 fix: Check for slug collision with other articles
+                     String newSlug = request.getSlug();
+                     Mono<Void> slugCheck = Mono.empty();
+@@ -314,7 +356,9 @@ public class ArticleAdminService {
+                     // Otherwise an error path can leave the entity in a partially-mutated
+                     // state that a retry could persist.
+                     return slugCheck.then(Mono.defer(() -> {
+-                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
++                        // When the request omits the status, keep the article's current
++                        // status instead of silently demoting a PUBLISHED article to DRAFT.
++                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), article.getStatus());
+                         ArticleStatus oldStatus = article.getStatus();
+ 
+                         article.setSlug(request.getSlug());
+@@ -352,6 +396,16 @@ public class ArticleAdminService {
+                                                     .then(Mono.just(saved));
+                                         });
+                             })
++                            .flatMap(saved -> {
++                                String savedSlug = saved.getSlug();
++                                Mono<Void> invalidate = oldSlug.equals(savedSlug)
++                                        ? invalidateArticleAndFeedCaches(savedSlug)
++                                        : Mono.when(
++                                                invalidateFeedCaches(),
++                                                cacheService.invalidateArticle(oldSlug),
++                                                cacheService.invalidateArticle(savedSlug));
++                                return invalidate.thenReturn(saved);
++                            })
+                             .doOnSuccess(a -> log.info("Article updated: {}", a.getSlug()))
+                             .flatMap(articleService::enrichArticleWithMetadata)
+                             .map(articleService::mapToResponse);
+@@ -382,7 +436,8 @@ public class ArticleAdminService {
+                                     return articleRepository.save(article);
+                                 }))
+                         .count())
+-                .flatMap(count -> invalidateFeedCaches().thenReturn(count))
++                .flatMap(count -> Mono.when(invalidateFeedCaches(), cacheService.invalidateAllArticles())
++                        .thenReturn(count))
+                 .doOnSuccess(count -> log.info("Bulk status update: {} articles → {}", count, status));
+     }
+ 
+@@ -398,8 +453,8 @@ public class ArticleAdminService {
+                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
+                 .flatMap(article -> articleRepository.deleteById(id)
+                         .doOnSuccess(v -> log.info("Article deleted: {} (slug={})", id, article.getSlug()))
+-                )
+-                .then(invalidateFeedCaches());
++                        .then(invalidateArticleAndFeedCaches(article.getSlug()))
++                );
+     }
+ 
+     // ==================== REVIEW WORKFLOW ====================
+@@ -456,7 +511,7 @@ public class ArticleAdminService {
+                     log.info("Article review approved: {}", a.getSlug());
+                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
+                 })
+-                .flatMap(article -> invalidateFeedCaches()
++                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
+                         .then(notifySubscribersAboutNewArticle(article))
+                         .thenReturn(article))
+                 .flatMap(articleService::enrichArticleWithMetadata)
+@@ -508,6 +563,19 @@ public class ArticleAdminService {
+         ).doOnSuccess(v -> log.debug("Feed caches invalidated"));
+     }
+ 
++    /**
++     * Invalidate both the public article read-through cache (slug + published-page
++     * entries, including locale variants) and the RSS/sitemap feed caches. Called
++     * after every mutating article operation so unpublished/deleted/edited content
++     * is not served stale from Redis.
++     */
++    private Mono<Void> invalidateArticleAndFeedCaches(String slug) {
++        return Mono.when(
++                invalidateFeedCaches(),
++                cacheService.invalidateArticle(slug)
++        );
++    }
++
+     private Mono<Void> notifySubscribersAboutNewArticle(Article article) {
+         return subscriberRepository.findAllConfirmed(paginationConfig.getBulkQueryMax())
+                 // PERF-01: Limit concurrency to prevent SMTP overload
+diff --git a/src/main/java/dev/catananti/service/ArticleTranslationService.java b/src/main/java/dev/catananti/service/ArticleTranslationService.java
+index e895581..fec2c15 100644
+--- a/src/main/java/dev/catananti/service/ArticleTranslationService.java
++++ b/src/main/java/dev/catananti/service/ArticleTranslationService.java
+@@ -87,7 +87,26 @@ public class ArticleTranslationService {
+                             .map(translated -> buildI18n(articleId, targetLang, translated, true));
+                 })
+                 .flatMap(i18n -> articleI18nRepository.upsert(i18n).thenReturn(i18n))
+-                .doOnSuccess(i18n -> log.info("Article {} translated to {}", articleId, targetLang));
++                .doOnSuccess(i18n -> {
++                    // Drop any cached (stale) overlay so the fresh translation is served.
++                    invalidateTranslationCache(articleId, targetLang);
++                    log.info("Article {} translated to {}", articleId, targetLang);
++                });
++    }
++
++    /**
++     * Evict the in-memory translation overlay for an article+locale. Called whenever a
++     * translation is (re-)created or deleted, so the public localized article does not keep
++     * serving the previous/removed translation for up to the 1h cache TTL.
++     */
++    private void invalidateTranslationCache(Long articleId, String locale) {
++        if (locale == null) {
++            return;
++        }
++        // getTranslation() caches under the raw locale; applyTranslation() under the
++        // lower-cased locale — evict both spellings.
++        translationCache.invalidate(articleId + ":" + locale);
++        translationCache.invalidate(articleId + ":" + locale.toLowerCase());
+     }
+ 
+     /**
+@@ -122,7 +141,8 @@ public class ArticleTranslationService {
+      * Delete a specific translation.
+      */
+     public Mono<Void> deleteTranslation(Long articleId, String locale) {
+-        return articleI18nRepository.deleteByArticleIdAndLocale(articleId, locale);
++        return articleI18nRepository.deleteByArticleIdAndLocale(articleId, locale)
++                .doOnSuccess(v -> invalidateTranslationCache(articleId, locale));
+     }
+ 
+     /**
+diff --git a/src/main/java/dev/catananti/service/ArticleVersionService.java b/src/main/java/dev/catananti/service/ArticleVersionService.java
+index cf9fd5e..04111c5 100644
+--- a/src/main/java/dev/catananti/service/ArticleVersionService.java
++++ b/src/main/java/dev/catananti/service/ArticleVersionService.java
+@@ -27,6 +27,7 @@ public class ArticleVersionService {
+     private final ArticleVersionRepository versionRepository;
+     private final ArticleRepository articleRepository;
+     private final IdService idService;
++    private final CacheService cacheService;
+ 
+     @org.springframework.beans.factory.annotation.Value("${app.article.max-versions:50}")
+     private int maxVersions = 50;
+@@ -114,8 +115,14 @@ public class ArticleVersionService {
+                                             article.setUpdatedAt(LocalDateTime.now());
+                                             
+                                             return articleRepository.save(article)
+-                                                    .doOnSuccess(a -> log.info("Restored article {} to version {}", 
+-                                                            a.getSlug(), versionNumber));
++                                                    .doOnSuccess(a -> log.info("Restored article {} to version {}",
++                                                            a.getSlug(), versionNumber))
++                                                    // Restoring rewrites the article body, so drop the stale
++                                                    // read-through and feed caches (A6).
++                                                    .flatMap(a -> Mono.when(
++                                                            cacheService.invalidateArticle(a.getSlug()),
++                                                            cacheService.invalidateFeedCache()
++                                                    ).thenReturn(a));
+                                         }));
+                             })
+                 );
+diff --git a/src/main/java/dev/catananti/service/CacheService.java b/src/main/java/dev/catananti/service/CacheService.java
+index 6bdad34..29d8e1e 100644
+--- a/src/main/java/dev/catananti/service/CacheService.java
++++ b/src/main/java/dev/catananti/service/CacheService.java
+@@ -57,7 +57,9 @@ public class CacheService {
+     private static final String TAGS_CACHE_PREFIX = "tags::";
+     private static final String COMMENTS_CACHE_PREFIX = "comments::";
+     private static final String SEARCH_CACHE_PREFIX = "search::";
+-    private static final String FEED_CACHE_PREFIX = "feed::";
++    // Feed responses are cached under fixed keys (not a prefix namespace).
++    private static final String RSS_FEED_KEY = "rss:feed";
++    private static final String SITEMAP_KEY = "sitemap:xml";
+     
+     // ==================== GENERIC CACHE OPERATIONS ====================
+ 
+@@ -88,7 +90,19 @@ public class CacheService {
+                     cacheHits.incrementAndGet();
+                     log.trace("Cache hit for key: {}", key);
+                 })
+-                .switchIfEmpty(Mono.<T>empty().doOnSubscribe(s -> cacheMisses.incrementAndGet()));
++                .switchIfEmpty(Mono.<T>empty().doOnSubscribe(s -> cacheMisses.incrementAndGet()))
++                // A cache that cannot be reached is a MISS, not a request failure.
++                // isRedisAvailable() above only null-checks the bean, so a connection
++                // error at call time used to propagate and surface as a 500 on every
++                // read-through endpoint (GitHub repos, articles, tags, search, RSS...).
++                // Returning empty lets callers fall through to their real source, which
++                // is the same behaviour set()/delete()/invalidate*() already have via
++                // withRedis(). Logged at warn, not error: the request still succeeds.
++                .onErrorResume(e -> {
++                    cacheMisses.incrementAndGet();
++                    log.warn("Redis read failed for key '{}', treating as cache miss: {}", key, e.toString());
++                    return Mono.empty();
++                });
+     }
+ 
+     /**
+@@ -134,10 +148,14 @@ public class CacheService {
+      */
+     public Mono<Long> invalidateArticle(String slug) {
+         return withRedis(0L, () -> Mono.zip(
++                // Exact slug key plus locale-suffixed variants (articles::slug_<slug>:pt, :es, ...).
++                // A bare SCAN MATCH without a wildcard only matches the exact key, so the
++                // locale variants would otherwise survive invalidation.
+                 deleteByPattern(ARTICLES_CACHE_PREFIX + "slug_" + slug),
++                deleteByPattern(ARTICLES_CACHE_PREFIX + "slug_" + slug + ":*"),
+                 deleteByPattern(ARTICLES_CACHE_PREFIX + "related_" + slug + "*"),
+                 deleteByPattern(ARTICLES_CACHE_PREFIX + "published_page_*")
+-        ).map(tuple -> tuple.getT1() + tuple.getT2() + tuple.getT3())
++        ).map(tuple -> tuple.getT1() + tuple.getT2() + tuple.getT3() + tuple.getT4())
+          .doOnSuccess(count -> log.info("Invalidated cache for article: {}", slug)));
+     }
+ 
+@@ -195,7 +213,10 @@ public class CacheService {
+      * Invalidate feed caches (RSS, Sitemap).
+      */
+     public Mono<Long> invalidateFeedCache() {
+-        return withRedis(0L, () -> deleteByPattern(FEED_CACHE_PREFIX + "*")
++        return withRedis(0L, () -> Mono.zip(
++                delete(RSS_FEED_KEY).map(deleted -> deleted ? 1L : 0L),
++                delete(SITEMAP_KEY).map(deleted -> deleted ? 1L : 0L)
++        ).map(tuple -> tuple.getT1() + tuple.getT2())
+                 .doOnSuccess(count -> {
+                     if (count > 0) log.info("Invalidated {} feed cache entries", count);
+                 }));
+@@ -224,7 +245,7 @@ public class CacheService {
+                 countByPattern(TAGS_CACHE_PREFIX + "*"),
+                 countByPattern(COMMENTS_CACHE_PREFIX + "*"),
+                 countByPattern(SEARCH_CACHE_PREFIX + "*"),
+-                countByPattern(FEED_CACHE_PREFIX + "*")
++                countByPattern(RSS_FEED_KEY).zipWith(countByPattern(SITEMAP_KEY), Long::sum)
+         ).map(tuple -> new CacheStats(
+                 tuple.getT1(),
+                 tuple.getT2(),
+diff --git a/src/main/java/dev/catananti/service/EmailService.java b/src/main/java/dev/catananti/service/EmailService.java
+index 1f97e21..eed28cb 100644
+--- a/src/main/java/dev/catananti/service/EmailService.java
++++ b/src/main/java/dev/catananti/service/EmailService.java
+@@ -422,7 +422,9 @@ public class EmailService {
+         String subject = msg("email.comment.notification.subject", articleTitle);
+         String articleUrl = siteUrl + "/blog/" + articleSlug;
+ 
+-        String safeCommentContent = escapeHtml(commentContent);
++        // B4: bodyText is bound via th:utext (unescaped) so its interpolated values must be
++        // pre-escaped; commentContent is bound via th:text (Thymeleaf escapes it) so passing
++        // it raw avoids double-escaping.
+         String safeCommenterName = escapeHtml(commenterName);
+         String safeArticleTitle = escapeHtml(articleTitle);
+ 
+@@ -432,7 +434,7 @@ public class EmailService {
+             Map.of(
+                 "greeting", msg("email.greeting", authorName),
+                 "bodyText", msg("email.comment.notification.body", safeCommenterName, safeArticleTitle),
+-                "commentContent", safeCommentContent,
++                "commentContent", commentContent,
+                 "articleUrl", articleUrl,
+                 "viewText", msg("email.comment.notification.view")
+             )
+diff --git a/src/main/java/dev/catananti/service/HtmlSanitizerService.java b/src/main/java/dev/catananti/service/HtmlSanitizerService.java
+index 5618bf0..36e5c69 100644
+--- a/src/main/java/dev/catananti/service/HtmlSanitizerService.java
++++ b/src/main/java/dev/catananti/service/HtmlSanitizerService.java
+@@ -71,6 +71,49 @@ public class HtmlSanitizerService {
+         return Jsoup.clean(input, RESUME_CONTENT_SAFELIST);
+     }
+ 
++    /**
++     * Sanitize a COMPLETE, owner-authored HTML document while preserving its layout.
++     *
++     * <p>Why this exists: {@link #sanitize(String)} runs {@code Jsoup.clean} with a
++     * {@code Safelist}, which keeps only <em>body</em> content and an attribute allowlist.
++     * For a full document that means the entire {@code <head>} is dropped (taking every
++     * {@code <style>} block with it), {@code class} attributes are not on the relaxed
++     * allowlist, and {@code style} is explicitly removed. A resume template therefore came
++     * out with its markup intact but every bit of styling gone — a visually broken PDF.
++     *
++     * <p>This method instead keeps the document structure (head, style, class, inline style)
++     * and removes only active content: script-bearing tags, {@code on*} event handlers and
++     * {@code javascript:} URLs. It is intended ONLY for HTML authored by the site owner and
++     * stored in {@code resume_templates} — never for visitor-supplied input, which must keep
++     * using {@link #sanitize(String)} or {@link #sanitizeResumeContent(String)}.
++     *
++     * <p>Defence in depth: the PDF pipeline sanitizes again and blocks every outbound
++     * request before rendering, so external {@code url()} references cannot phone home.
++     *
++     * @param input A full HTML document
++     * @return The document with active content stripped and presentation preserved
++     */
++    public String sanitizeFullDocument(String input) {
++        if (input == null || input.isEmpty()) {
++            return input;
++        }
++        log.debug("Sanitizing full HTML document (layout-preserving), length={}", input.length());
++        org.jsoup.nodes.Document doc = Jsoup.parse(input);
++        doc.select("script, iframe, object, embed, applet, form, input, textarea, select, button").remove();
++        doc.getAllElements().forEach(element -> {
++            element.attributes().asList().stream()
++                    .filter(attr -> attr.getKey().toLowerCase().startsWith("on"))
++                    .forEach(attr -> element.removeAttr(attr.getKey()));
++            for (String urlAttr : new String[]{"href", "src", "action"}) {
++                String val = element.attr(urlAttr);
++                if (val != null && val.trim().toLowerCase().replaceAll("\\s", "").startsWith("javascript:")) {
++                    element.removeAttr(urlAttr);
++                }
++            }
++        });
++        return doc.html();
++    }
++
+     /**
+      * Sanitize plain text content by escaping HTML entities.
+      * Use this for content that should not contain any HTML.
+diff --git a/src/main/java/dev/catananti/service/PublicResumeService.java b/src/main/java/dev/catananti/service/PublicResumeService.java
+index 7ea0673..cf41ab5 100644
+--- a/src/main/java/dev/catananti/service/PublicResumeService.java
++++ b/src/main/java/dev/catananti/service/PublicResumeService.java
+@@ -249,10 +249,14 @@ public class PublicResumeService {
+     private String buildFullHtml(ResumeTemplate template, String lang) {
+         String html = template.getHtmlContent();
+         
+-        // If the HTML content is already a complete document, sanitize and return
++        // If the HTML content is already a complete document, sanitize and return.
++        // Must use the layout-preserving sanitizer: the Safelist-based sanitize() keeps
++        // only body content and an attribute allowlist, so it silently discarded the
++        // <head> (and every <style> in it) plus all class/style attributes — the template
++        // rendered with correct text and zero formatting.
+         if (html != null && html.trim().toLowerCase().startsWith("<!doctype")) {
+             log.debug("Template HTML is a complete document, sanitizing before use");
+-            return htmlSanitizerService.sanitize(html);
++            return htmlSanitizerService.sanitizeFullDocument(html);
+         }
+         
+         // Otherwise, wrap in a basic HTML structure
+diff --git a/src/main/java/dev/catananti/service/SearchService.java b/src/main/java/dev/catananti/service/SearchService.java
+index a7233db..2db4ae1 100644
+--- a/src/main/java/dev/catananti/service/SearchService.java
++++ b/src/main/java/dev/catananti/service/SearchService.java
+@@ -40,14 +40,44 @@ public class SearchService {
+     private static final String ALIAS_ARTICLE_TAGS = "at";
+     private static final String ALIAS_TAGS = "t";
+ 
+-    /** Allowlist of sort-key → SQL ORDER BY fragment. New keys must be added here, not built dynamically. */
+-    private static final java.util.Map<String, String> SORT_OPTIONS = java.util.Map.of(
+-            "date",  "a.published_at DESC",
+-            "views", "a.views_count DESC",
+-            "likes", "a.likes_count DESC",
+-            "title", "a.title ASC"
++    /**
++     * Allowlist of sort-key → unqualified SQL column. Direction is applied separately from
++     * {@code sortOrder}. New keys must be added here, never built from raw input.
++     */
++    private static final java.util.Map<String, String> SORT_COLUMNS = java.util.Map.of(
++            "date",      "published_at",
++            "relevance", "published_at",
++            "views",     "views_count",
++            "viewcount", "views_count",
++            "likes",     "likes_count",
++            "title",     "title"
+     );
+ 
++    /**
++     * Build a safe {@code ORDER BY} fragment from the allowlisted column and direction.
++     * Never interpolates raw user input — both the column and the direction are chosen from
++     * fixed allowlists. {@code aliasPrefix} is "a." for aliased joins, "" for the bare table.
++     */
++    private String resolveOrderBy(String sortBy, String sortOrder, String aliasPrefix) {
++        String column = SORT_COLUMNS.getOrDefault(
++                sortBy != null ? sortBy.toLowerCase() : "date", "published_at");
++        String direction = "asc".equalsIgnoreCase(sortOrder) ? "ASC" : "DESC";
++        return aliasPrefix + column + " " + direction;
++    }
++
++    /**
++     * True when the requested sort is equivalent to the fixed {@code published_at DESC}
++     * order that the query-only FTS/LIKE repository methods already produce — i.e. sortBy is
++     * date/relevance (or unset) and the direction is descending (or unset). When true, the
++     * query-only path can safely use those repository methods; otherwise it must fall back to
++     * the dynamic path to honor the requested sort.
++     */
++    private boolean isDefaultDateDescSort(String sortBy, String sortOrder) {
++        String sb = sortBy != null ? sortBy.toLowerCase() : "date";
++        String so = sortOrder != null ? sortOrder.toLowerCase() : "desc";
++        return (sb.equals("date") || sb.equals("relevance")) && so.equals("desc");
++    }
++
+     private final ArticleRepository articleRepository;
+     private final TagRepository tagRepository;
+     private final UserRepository userRepository;
+@@ -139,15 +169,24 @@ public class SearchService {
+ 
+         if (request.getTags() != null && !request.getTags().isEmpty()) {
+             // Search with tags filter (and optional date range)
+-            articlesFlux = searchByQueryAndTags(sanitizedQuery, request.getTags(), request.getSize(), offset, request.getSortBy(), from, to);
++            articlesFlux = searchByQueryAndTags(sanitizedQuery, request.getTags(), request.getSize(), offset,
++                    request.getSortBy(), request.getSortOrder(), from, to);
+             countMono = countByQueryAndTags(sanitizedQuery, request.getTags(), from, to);
+         } else if (hasDateFilter) {
+             // Search with date range (using dynamic SQL). ftsCondition() inside already
+             // covers article_i18n, so this path is multi-language.
+-            articlesFlux = searchByQueryAndDateRange(sanitizedQuery, from, to, request.getSize(), offset);
++            articlesFlux = searchByQueryAndDateRange(sanitizedQuery, from, to, request.getSize(), offset,
++                    request.getSortBy(), request.getSortOrder());
+             countMono = countByQueryAndDateRange(sanitizedQuery, from, to);
++        } else if (!isDefaultDateDescSort(request.getSortBy(), request.getSortOrder())) {
++            // Query-only with an explicit non-default sort (views/likes/title, or ascending):
++            // the fixed-order repository methods below can't honor it, so use the dynamic
++            // path (which also covers article_i18n via ftsCondition and applies the sort).
++            articlesFlux = searchByQueryAndDateRange(sanitizedQuery, null, null, request.getSize(), offset,
++                    request.getSortBy(), request.getSortOrder());
++            countMono = countByQueryAndDateRange(sanitizedQuery, null, null);
+         } else if (useFts) {
+-            // Q4.2: Query-only + Postgres — use FTS variant that also matches article_i18n translations.
++            // Q4.2: Query-only + Postgres, default sort — FTS variant also matches article_i18n translations.
+             articlesFlux = articleRepository.searchByStatusAndQueryFts(
+                     ArticleStatus.PUBLISHED.name(), sanitizedQuery, request.getSize(), offset);
+             countMono = articleRepository.countSearchByStatusAndQueryFts(
+@@ -179,7 +218,8 @@ public class SearchService {
+                 });
+     }
+ 
+-    private Flux<Article> searchByQueryAndTags(String query, List<String> tags, int limit, int offset, String sortBy,
++    private Flux<Article> searchByQueryAndTags(String query, List<String> tags, int limit, int offset,
++                                                String sortBy, String sortOrder,
+                                                 LocalDateTime dateFrom, LocalDateTime dateTo) {
+         // Validate and sanitize tags - only allow alphanumeric and hyphens
+         List<String> sanitizedTags = tags.stream()
+@@ -191,9 +231,11 @@ public class SearchService {
+             return Flux.empty();
+         }
+ 
+-        String orderBy = SORT_OPTIONS.getOrDefault(
+-                sortBy != null ? sortBy.toLowerCase() : "date",
+-                SORT_OPTIONS.get("date"));
++        // Only apply the full-text condition when there is an actual query term.
++        // An empty plainto_tsquery matches no rows in Postgres, which would make a
++        // tag-only search (q="") return zero results in production.
++        boolean hasQuery = query != null && !query.isEmpty();
++        String orderBy = resolveOrderBy(sortBy, sortOrder, "a.");
+ 
+         // Build parameterized query with positional parameters for tags
+         StringBuilder sql = new StringBuilder("""
+@@ -202,9 +244,12 @@ public class SearchService {
+                 JOIN tags t ON at.tag_id = t.id
+                 WHERE a.status = 'PUBLISHED'
+                 AND t.slug = ANY($1)
+-                AND """ + ftsCondition("a", "$2") + "\n");
++                """);
+ 
+-        int paramIdx = 3;
++        int paramIdx = 2;
++        if (hasQuery) {
++            sql.append(" AND ").append(ftsCondition("a", "$" + paramIdx++)).append("\n");
++        }
+         if (dateFrom != null) {
+             sql.append(" AND a.published_at >= $").append(paramIdx++);
+         }
+@@ -219,10 +264,12 @@ public class SearchService {
+ 
+         var spec = r2dbcTemplate.getDatabaseClient()
+                 .sql(sql.toString())
+-                .bind("$1", tagArray)
+-                .bind("$2", query != null ? query : "");
++                .bind("$1", tagArray);
+ 
+-        int bindIdx = 3;
++        int bindIdx = 2;
++        if (hasQuery) {
++            spec = spec.bind("$" + bindIdx++, query);
++        }
+         if (dateFrom != null) {
+             spec = spec.bind("$" + bindIdx++, dateFrom);
+         }
+@@ -247,15 +294,20 @@ public class SearchService {
+             return Mono.just(0L);
+         }
+ 
++        boolean hasQuery = query != null && !query.isEmpty();
++
+         StringBuilder sql = new StringBuilder("""
+                 SELECT COUNT(DISTINCT a.id) FROM articles a
+                 JOIN article_tags at ON a.id = at.article_id
+                 JOIN tags t ON at.tag_id = t.id
+                 WHERE a.status = 'PUBLISHED'
+                 AND t.slug = ANY($1)
+-                AND """ + ftsCondition("a", "$2") + "\n");
++                """);
+ 
+-        int paramIdx = 3;
++        int paramIdx = 2;
++        if (hasQuery) {
++            sql.append(" AND ").append(ftsCondition("a", "$" + paramIdx++)).append("\n");
++        }
+         if (dateFrom != null) {
+             sql.append(" AND a.published_at >= $").append(paramIdx++);
+         }
+@@ -267,10 +319,12 @@ public class SearchService {
+ 
+         var spec = r2dbcTemplate.getDatabaseClient()
+                 .sql(sql.toString())
+-                .bind("$1", tagArray)
+-                .bind("$2", query != null ? query : "");
++                .bind("$1", tagArray);
+ 
+-        int bindIdx = 3;
++        int bindIdx = 2;
++        if (hasQuery) {
++            spec = spec.bind("$" + bindIdx++, query);
++        }
+         if (dateFrom != null) {
+             spec = spec.bind("$" + bindIdx++, dateFrom);
+         }
+@@ -284,7 +338,7 @@ public class SearchService {
+     }
+ 
+     private Flux<Article> searchByQueryAndDateRange(String query, LocalDateTime dateFrom, LocalDateTime dateTo,
+-                                                     int limit, int offset) {
++                                                     int limit, int offset, String sortBy, String sortOrder) {
+         StringBuilder sql = new StringBuilder("""
+                 SELECT * FROM articles
+                 WHERE status = 'PUBLISHED'
+@@ -305,7 +359,8 @@ public class SearchService {
+             sql.append(" AND published_at <= $").append(paramIdx++);
+         }
+ 
+-        sql.append(" ORDER BY published_at DESC LIMIT $").append(paramIdx++).append(" OFFSET $").append(paramIdx);
++        sql.append(" ORDER BY ").append(resolveOrderBy(sortBy, sortOrder, ""))
++                .append(" LIMIT $").append(paramIdx++).append(" OFFSET $").append(paramIdx);
+ 
+         var spec = r2dbcTemplate.getDatabaseClient().sql(sql.toString());
+ 
+diff --git a/src/main/resources/application-local.properties b/src/main/resources/application-local.properties
+index 95602ea..630137d 100644
+--- a/src/main/resources/application-local.properties
++++ b/src/main/resources/application-local.properties
+@@ -28,8 +28,15 @@ app.schema.init=false
+ # Flyway off in local — cluster Postgres is managed externally; enable per-developer if needed
+ spring.flyway.enabled=false
+ 
+-# Redis on rpi5 K3s (NodePort 30679) — simple caching, not Redis-backed
+-spring.cache.type=simple
++# Redis on rpi5 K3s (NodePort 30679).
++# NOTE: this MUST stay `redis`. RedisConfig is @ConditionalOnProperty(spring.cache.type=redis)
++# and is the only bean providing ReactiveRedisTemplate<String,String> named "reactiveRedisTemplate",
++# which AnalyticsProofOfWorkService / AnalyticsTokenService / RateLimitingFilter require
++# non-optionally. DevRedisConfig supplies it only for @Profile({"dev","e2e"}), so with
++# `simple` the local profile fails to start outright (NoSuchBeanDefinitionException).
++# Redis being unreachable at runtime is fine — those callers degrade via onErrorResume —
++# but the bean must exist.
++spring.cache.type=redis
+ spring.data.redis.host=192.168.1.235
+ spring.data.redis.port=30679
+ # Password resolved from Vault key (spring.data.redis.password) like the other
+diff --git a/src/test/java/dev/catananti/controller/AdminArticleControllerTest.java b/src/test/java/dev/catananti/controller/AdminArticleControllerTest.java
+index d8258ac..0fb27dd 100644
+--- a/src/test/java/dev/catananti/controller/AdminArticleControllerTest.java
++++ b/src/test/java/dev/catananti/controller/AdminArticleControllerTest.java
+@@ -7,7 +7,6 @@ import dev.catananti.dto.ArticleResponse;
+ import dev.catananti.dto.PageResponse;
+ import dev.catananti.entity.ArticleI18n;
+ import dev.catananti.service.ArticleAdminService;
+-import dev.catananti.service.ArticleService;
+ import dev.catananti.service.ArticleTranslationService;
+ import org.junit.jupiter.api.BeforeEach;
+ import org.junit.jupiter.api.DisplayName;
+@@ -36,9 +35,6 @@ class AdminArticleControllerTest {
+     @Mock
+     private ArticleAdminService articleAdminService;
+ 
+-    @Mock
+-    private ArticleService articleService;
+-
+     @Mock
+     private ArticleTranslationService articleTranslationService;
+ 
+@@ -145,7 +141,7 @@ class AdminArticleControllerTest {
+                     .last(true)
+                     .build();
+ 
+-            when(articleService.searchArticles("Spring", 0, 10))
++            when(articleAdminService.searchArticles("Spring", 0, 10))
+                     .thenReturn(Mono.just(page));
+ 
+             StepVerifier.create(controller.getAllArticles(0, 10, null, "Spring", "newest"))
+@@ -154,8 +150,7 @@ class AdminArticleControllerTest {
+                     })
+                     .verifyComplete();
+ 
+-            verify(articleService).searchArticles("Spring", 0, 10);
+-            verifyNoInteractions(articleAdminService);
++            verify(articleAdminService).searchArticles("Spring", 0, 10);
+         }
+     }
+ 
+diff --git a/src/test/java/dev/catananti/controller/ArticleControllerTest.java b/src/test/java/dev/catananti/controller/ArticleControllerTest.java
+index 6d426de..d876caf 100644
+--- a/src/test/java/dev/catananti/controller/ArticleControllerTest.java
++++ b/src/test/java/dev/catananti/controller/ArticleControllerTest.java
+@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
+ import org.mockito.Mock;
+ import org.mockito.junit.jupiter.MockitoExtension;
+ import org.springframework.core.env.Environment;
++import org.springframework.http.HttpHeaders;
+ import org.springframework.http.server.reactive.ServerHttpRequest;
+ import reactor.core.publisher.Mono;
+ import reactor.test.StepVerifier;
+@@ -145,7 +146,11 @@ class ArticleControllerTest {
+     @Test
+     @DisplayName("Should increment views")
+     void incrementViews_ShouldComplete() {
+-        // Given
++        // Given — analytics consent is granted via the header, so the analytics VIEW
++        // event is recorded in addition to the view-count increment.
++        HttpHeaders headers = new HttpHeaders();
++        headers.set("X-Analytics-Consent", "granted");
++        when(mockRequest.getHeaders()).thenReturn(headers);
+         when(deduplicationService.recordViewIfNew(eq("test-article"), any())).thenReturn(Mono.just(true));
+         when(articleService.incrementViews("test-article"))
+                 .thenReturn(Mono.empty());
+@@ -157,6 +162,24 @@ class ArticleControllerTest {
+                 .verifyComplete();
+ 
+         verify(articleService).incrementViews("test-article");
++        verify(analyticsService).trackArticleView(eq("test-article"), any(ServerHttpRequest.class));
++    }
++
++    @Test
++    @DisplayName("Should increment views without recording analytics when consent is absent")
++    void incrementViews_WithoutConsent_SkipsAnalytics() {
++        // Given — no X-Analytics-Consent header: the view count still increments, but
++        // no analytics VIEW event is recorded.
++        when(mockRequest.getHeaders()).thenReturn(new HttpHeaders());
++        when(deduplicationService.recordViewIfNew(eq("test-article"), any())).thenReturn(Mono.just(true));
++        when(articleService.incrementViews("test-article")).thenReturn(Mono.empty());
++
++        // When & Then
++        StepVerifier.create(articleController.incrementViews("test-article", null, mockRequest))
++                .verifyComplete();
++
++        verify(articleService).incrementViews("test-article");
++        verify(analyticsService, never()).trackArticleView(anyString(), any(ServerHttpRequest.class));
+     }
+ 
+     @Test
+diff --git a/src/test/java/dev/catananti/integration/ApiEndpointIntegrationTest.java b/src/test/java/dev/catananti/integration/ApiEndpointIntegrationTest.java
+index 15db4d3..b479a42 100644
+--- a/src/test/java/dev/catananti/integration/ApiEndpointIntegrationTest.java
++++ b/src/test/java/dev/catananti/integration/ApiEndpointIntegrationTest.java
+@@ -530,7 +530,7 @@ class ApiEndpointIntegrationTest {
+         @BeforeEach
+         void setUp() {
+             lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+-            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService, paginationConfig);
++            adminArticleController = new AdminArticleController(articleAdminService, articleTranslationService, paginationConfig);
+             client = WebTestClient.bindToController(adminArticleController)
+                     .configureClient().build();
+         }
+@@ -1454,7 +1454,7 @@ class ApiEndpointIntegrationTest {
+         @BeforeEach
+         void setUp() {
+             lenient().when(paginationConfig.clampPageSize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+-            adminArticleController = new AdminArticleController(articleAdminService, articleService, articleTranslationService, paginationConfig);
++            adminArticleController = new AdminArticleController(articleAdminService, articleTranslationService, paginationConfig);
+             tagClient = WebTestClient.bindToController(adminTagController)
+                     .configureClient().build();
+             commentClient = WebTestClient.bindToController(adminCommentController)
+diff --git a/src/test/java/dev/catananti/service/AnalyticsServiceTest.java b/src/test/java/dev/catananti/service/AnalyticsServiceTest.java
+index 9392f34..73ceae8 100644
+--- a/src/test/java/dev/catananti/service/AnalyticsServiceTest.java
++++ b/src/test/java/dev/catananti/service/AnalyticsServiceTest.java
+@@ -260,16 +260,15 @@ class AnalyticsServiceTest {
+     }
+ 
+     @Nested
+-    @DisplayName("getAnalyticsSummary - fallback paths")
+-    class GetAnalyticsSummaryFallback {
++    @DisplayName("getAnalyticsSummary - windowed counts (M11: no all-time fallback)")
++    class GetAnalyticsSummaryWindowed {
+ 
+         @Test
+-        @DisplayName("Should fallback to article table when VIEW count is zero")
++        @DisplayName("Should return windowed zero when VIEW count is zero (no all-time fallback)")
+         @SuppressWarnings("unchecked")
+-        void shouldFallbackForViewCount() {
++        void shouldReturnZeroForViewCount() {
+             when(analyticsRepository.countByEventTypeSince(eq("VIEW"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(0L));
+-            when(articleRepository.sumViewsCount()).thenReturn(Mono.just(500L));
+             when(analyticsRepository.countByEventTypeSince(eq("LIKE"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(10L));
+             when(analyticsRepository.countByEventTypeSince(eq("SHARE"), any(LocalDateTime.class)))
+@@ -283,24 +282,23 @@ class AnalyticsServiceTest {
+ 
+             StepVerifier.create(analyticsService.getAnalyticsSummary(30))
+                     .assertNext(summary -> {
+-                        assertThat(summary.getTotalViews()).isEqualTo(500L);
++                        assertThat(summary.getTotalViews()).isZero();
+                         assertThat(summary.getTotalLikes()).isEqualTo(10L);
+                         assertThat(summary.getTotalShares()).isEqualTo(5L);
+                     })
+                     .verifyComplete();
+ 
+-            verify(articleRepository).sumViewsCount();
++            verify(articleRepository, never()).sumViewsCount();
+         }
+ 
+         @Test
+-        @DisplayName("Should fallback to article table when LIKE count is zero")
++        @DisplayName("Should return windowed zero when LIKE count is zero (no all-time fallback)")
+         @SuppressWarnings("unchecked")
+-        void shouldFallbackForLikeCount() {
++        void shouldReturnZeroForLikeCount() {
+             when(analyticsRepository.countByEventTypeSince(eq("VIEW"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(100L));
+             when(analyticsRepository.countByEventTypeSince(eq("LIKE"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(0L));
+-            when(articleRepository.sumLikesCount()).thenReturn(Mono.just(200L));
+             when(analyticsRepository.countByEventTypeSince(eq("SHARE"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(3L));
+ 
+@@ -313,24 +311,22 @@ class AnalyticsServiceTest {
+             StepVerifier.create(analyticsService.getAnalyticsSummary(30))
+                     .assertNext(summary -> {
+                         assertThat(summary.getTotalViews()).isEqualTo(100L);
+-                        assertThat(summary.getTotalLikes()).isEqualTo(200L);
++                        assertThat(summary.getTotalLikes()).isZero();
+                         assertThat(summary.getTotalShares()).isEqualTo(3L);
+                     })
+                     .verifyComplete();
+ 
+-            verify(articleRepository).sumLikesCount();
++            verify(articleRepository, never()).sumLikesCount();
+         }
+ 
+         @Test
+-        @DisplayName("Should fallback both views and likes when both are zero")
++        @DisplayName("Should return windowed zero for views and likes when both are zero")
+         @SuppressWarnings("unchecked")
+-        void shouldFallbackBothViewsAndLikes() {
++        void shouldReturnZeroForViewsAndLikes() {
+             when(analyticsRepository.countByEventTypeSince(eq("VIEW"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(0L));
+-            when(articleRepository.sumViewsCount()).thenReturn(Mono.just(1000L));
+             when(analyticsRepository.countByEventTypeSince(eq("LIKE"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(0L));
+-            when(articleRepository.sumLikesCount()).thenReturn(Mono.just(300L));
+             when(analyticsRepository.countByEventTypeSince(eq("SHARE"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(0L));
+ 
+@@ -342,11 +338,14 @@ class AnalyticsServiceTest {
+ 
+             StepVerifier.create(analyticsService.getAnalyticsSummary(7))
+                     .assertNext(summary -> {
+-                        assertThat(summary.getTotalViews()).isEqualTo(1000L);
+-                        assertThat(summary.getTotalLikes()).isEqualTo(300L);
++                        assertThat(summary.getTotalViews()).isZero();
++                        assertThat(summary.getTotalLikes()).isZero();
+                         assertThat(summary.getTotalShares()).isZero();
+                     })
+                     .verifyComplete();
++
++            verify(articleRepository, never()).sumViewsCount();
++            verify(articleRepository, never()).sumLikesCount();
+         }
+     }
+ 
+@@ -393,12 +392,11 @@ class AnalyticsServiceTest {
+         }
+ 
+         @Test
+-        @DisplayName("Should fall back to author view counts when VIEW count is zero (not the global sum)")
++        @DisplayName("Should return windowed zero for author when VIEW count is zero (M11: no all-time fallback)")
+         @SuppressWarnings("unchecked")
+-        void shouldFallbackToAuthorViewCounts() {
++        void shouldReturnZeroForAuthorViewCounts() {
+             when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("VIEW"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(0L));
+-            when(articleRepository.sumViewsCountByAuthorId(AUTHOR_ID)).thenReturn(Mono.just(640L));
+             when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("LIKE"), any(LocalDateTime.class)))
+                     .thenReturn(Mono.just(0L));
+             when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("SHARE"), any(LocalDateTime.class)))
+@@ -412,14 +410,13 @@ class AnalyticsServiceTest {
+ 
+             StepVerifier.create(analyticsService.getAnalyticsSummaryByAuthor(7, AUTHOR_ID))
+                     .assertNext(summary -> {
+-                        assertThat(summary.getTotalViews()).isEqualTo(640L);
+-                        // LIKE has no author fallback: stays at zero (never uses global sumLikesCount)
++                        assertThat(summary.getTotalViews()).isZero();
+                         assertThat(summary.getTotalLikes()).isZero();
+                         assertThat(summary.getTotalShares()).isZero();
+                     })
+                     .verifyComplete();
+ 
+-            verify(articleRepository).sumViewsCountByAuthorId(AUTHOR_ID);
++            verify(articleRepository, never()).sumViewsCountByAuthorId(AUTHOR_ID);
+             verify(articleRepository, never()).sumViewsCount();
+             verify(articleRepository, never()).sumLikesCount();
+         }
+diff --git a/src/test/java/dev/catananti/service/ArticleAdminServiceTest.java b/src/test/java/dev/catananti/service/ArticleAdminServiceTest.java
+index a757b27..f0a5c21 100644
+--- a/src/test/java/dev/catananti/service/ArticleAdminServiceTest.java
++++ b/src/test/java/dev/catananti/service/ArticleAdminServiceTest.java
+@@ -109,6 +109,13 @@ class ArticleAdminServiceTest {
+     void setUp() {
+         articleId = 1234567890123456L;
+ 
++        // Every mutating op now invalidates the article read-through + feed caches (A6),
++        // including create/update which previously did no cache invalidation.
++        // lenient() because not all tests exercise a mutation path.
++        lenient().when(cacheService.delete(anyString())).thenReturn(Mono.just(true));
++        lenient().when(cacheService.invalidateArticle(anyString())).thenReturn(Mono.just(0L));
++        lenient().when(cacheService.invalidateAllArticles()).thenReturn(Mono.just(0L));
++
+         testArticle = Article.builder()
+                 .id(articleId)
+                 .slug("test-article")
+diff --git a/src/test/java/dev/catananti/service/ArticleVersionServiceTest.java b/src/test/java/dev/catananti/service/ArticleVersionServiceTest.java
+index 8ba8ba3..f5f613c 100644
+--- a/src/test/java/dev/catananti/service/ArticleVersionServiceTest.java
++++ b/src/test/java/dev/catananti/service/ArticleVersionServiceTest.java
+@@ -21,7 +21,7 @@ import reactor.test.StepVerifier;
+ import java.time.LocalDateTime;
+ 
+ import static org.assertj.core.api.Assertions.assertThat;
+-import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.*;
+ import static org.mockito.Mockito.*;
+ 
+ @ExtendWith(MockitoExtension.class)
+@@ -36,6 +36,9 @@ class ArticleVersionServiceTest {
+     @Mock
+     private IdService idService;
+ 
++    @Mock
++    private CacheService cacheService;
++
+     @InjectMocks
+     private ArticleVersionService versionService;
+ 
+@@ -45,6 +48,11 @@ class ArticleVersionServiceTest {
+ 
+     @BeforeEach
+     void setUp() {
++        // restoreVersion invalidates caches after saving (A6); lenient because the
++        // non-restore tests don't hit that path.
++        lenient().when(cacheService.invalidateArticle(anyString())).thenReturn(Mono.just(0L));
++        lenient().when(cacheService.invalidateFeedCache()).thenReturn(Mono.just(0L));
++
+         articleId = 1234567890123456789L;
+         testArticle = Article.builder()
+                 .id(articleId)
+diff --git a/src/test/java/dev/catananti/service/CacheServiceTest.java b/src/test/java/dev/catananti/service/CacheServiceTest.java
+index 6b9b8b2..a21fe4d 100644
+--- a/src/test/java/dev/catananti/service/CacheServiceTest.java
++++ b/src/test/java/dev/catananti/service/CacheServiceTest.java
+@@ -158,8 +158,13 @@ class CacheServiceTest {
+ 
+         @BeforeEach
+         void setUpScan() {
+-            // Default: SCAN returns empty list
+-            when(redisTemplate.scan(any())).thenReturn(Flux.empty());
++            // Default: SCAN returns empty list. lenient() because invalidateFeedCache
++            // no longer uses SCAN (it deletes fixed keys directly).
++            lenient().when(redisTemplate.scan(any())).thenReturn(Flux.empty());
++            // invalidateFeedCache deletes the fixed rss:feed / sitemap:xml keys directly
++            // (not via SCAN). lenient() because not every test in this block exercises it.
++            lenient().when(redisTemplate.delete("rss:feed")).thenReturn(Mono.just(0L));
++            lenient().when(redisTemplate.delete("sitemap:xml")).thenReturn(Mono.just(0L));
+         }
+ 
+         @Test

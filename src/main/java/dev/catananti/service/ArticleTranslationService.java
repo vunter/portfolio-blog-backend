@@ -87,7 +87,26 @@ public class ArticleTranslationService {
                             .map(translated -> buildI18n(articleId, targetLang, translated, true));
                 })
                 .flatMap(i18n -> articleI18nRepository.upsert(i18n).thenReturn(i18n))
-                .doOnSuccess(i18n -> log.info("Article {} translated to {}", articleId, targetLang));
+                .doOnSuccess(i18n -> {
+                    // Drop any cached (stale) overlay so the fresh translation is served.
+                    invalidateTranslationCache(articleId, targetLang);
+                    log.info("Article {} translated to {}", articleId, targetLang);
+                });
+    }
+
+    /**
+     * Evict the in-memory translation overlay for an article+locale. Called whenever a
+     * translation is (re-)created or deleted, so the public localized article does not keep
+     * serving the previous/removed translation for up to the 1h cache TTL.
+     */
+    private void invalidateTranslationCache(Long articleId, String locale) {
+        if (locale == null) {
+            return;
+        }
+        // getTranslation() caches under the raw locale; applyTranslation() under the
+        // lower-cased locale — evict both spellings.
+        translationCache.invalidate(articleId + ":" + locale);
+        translationCache.invalidate(articleId + ":" + locale.toLowerCase());
     }
 
     /**
@@ -122,7 +141,8 @@ public class ArticleTranslationService {
      * Delete a specific translation.
      */
     public Mono<Void> deleteTranslation(Long articleId, String locale) {
-        return articleI18nRepository.deleteByArticleIdAndLocale(articleId, locale);
+        return articleI18nRepository.deleteByArticleIdAndLocale(articleId, locale)
+                .doOnSuccess(v -> invalidateTranslationCache(articleId, locale));
     }
 
     /**
@@ -149,6 +169,47 @@ public class ArticleTranslationService {
                     return article;
                 })
                 .defaultIfEmpty(article);
+    }
+
+    /**
+     * NP-4: batch overlay for localized listings. Applies cached translations first
+     * and fetches the remaining ones in a single IN query, so a page of N articles
+     * costs at most 1 translation query instead of N.
+     */
+    public Mono<java.util.List<Article>> applyTranslations(java.util.List<Article> articles, String locale) {
+        if (locale == null || locale.isBlank() || locale.equalsIgnoreCase("en") || articles.isEmpty()) {
+            return Mono.just(articles);
+        }
+        String normalizedLocale = locale.toLowerCase();
+
+        java.util.List<Article> misses = new java.util.ArrayList<>();
+        for (Article article : articles) {
+            ArticleI18n cached = translationCache.getIfPresent(article.getId() + ":" + normalizedLocale);
+            if (cached != null) {
+                applyI18nToArticle(article, cached);
+            } else {
+                misses.add(article);
+            }
+        }
+        if (misses.isEmpty()) {
+            return Mono.just(articles);
+        }
+
+        var missIds = misses.stream().map(Article::getId).toList();
+        return articleI18nRepository.findByArticleIdsAndLocale(missIds, normalizedLocale)
+                .collectList()
+                .map(i18ns -> {
+                    var byArticleId = i18ns.stream()
+                            .collect(java.util.stream.Collectors.toMap(ArticleI18n::getArticleId, i -> i));
+                    for (Article article : misses) {
+                        ArticleI18n i18n = byArticleId.get(article.getId());
+                        if (i18n != null) {
+                            translationCache.put(article.getId() + ":" + normalizedLocale, i18n);
+                            applyI18nToArticle(article, i18n);
+                        }
+                    }
+                    return articles;
+                });
     }
 
     private void applyI18nToArticle(Article article, ArticleI18n i18n) {

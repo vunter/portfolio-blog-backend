@@ -115,17 +115,30 @@ public class ArticleController {
             @AuthenticationPrincipal String email,
             ServerHttpRequest request) {
         log.debug("View tracked for slug='{}'", slug);
+
+        // Record analytics event for dashboard tracking — only when the visitor
+        // consented to analytics. The view-count increment below is an anonymous
+        // aggregate and is NOT consent-gated.
+        var requestHeaders = request.getHeaders();
+        boolean analyticsConsent = requestHeaders != null
+                && "granted".equals(requestHeaders.getFirst("X-Analytics-Consent"));
+        Mono<Void> analyticsMono = analyticsConsent
+                ? analyticsService.trackArticleView(slug, request)
+                        .onErrorResume(e -> {
+                            log.warn("Failed to record analytics for slug='{}': {}", slug, e.getMessage());
+                            return Mono.empty();
+                        })
+                : Mono.empty();
+
+        // M12: gate BOTH the view-count increment and the analytics VIEW record on the
+        // same dedup result, so repeat/bot requests neither inflate the counter nor insert
+        // duplicate VIEW rows. When deduplication is unavailable, track unconditionally.
         Mono<Void> viewMono = deduplicationService
                 .map(svc -> svc.recordViewIfNew(slug, request)
-                        .flatMap(isNew -> isNew ? articleService.incrementViews(slug) : Mono.<Void>empty()))
-                .orElseGet(() -> articleService.incrementViews(slug));
-
-        // Record analytics event for dashboard tracking
-        Mono<Void> analyticsMono = analyticsService.trackArticleView(slug, request)
-                .onErrorResume(e -> {
-                    log.warn("Failed to record analytics for slug='{}': {}", slug, e.getMessage());
-                    return Mono.empty();
-                });
+                        .flatMap(isNew -> isNew
+                                ? articleService.incrementViews(slug).then(analyticsMono)
+                                : Mono.<Void>empty()))
+                .orElseGet(() -> articleService.incrementViews(slug).then(analyticsMono));
 
         // Track reading history for authenticated users
         if (email != null) {
@@ -134,9 +147,9 @@ public class ArticleController {
                         log.warn("Failed to record reading history for slug='{}': {}", slug, e.getMessage());
                         return Mono.empty();
                     });
-            return viewMono.then(analyticsMono).then(historyMono);
+            return viewMono.then(historyMono);
         }
-        return viewMono.then(analyticsMono);
+        return viewMono;
     }
 
     @PostMapping("/{slug}/like")

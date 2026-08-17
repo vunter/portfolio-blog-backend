@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS comments (
     status VARCHAR(50) DEFAULT 'PENDING',
     parent_id BIGINT REFERENCES comments(id) ON DELETE CASCADE,
     moderation_note VARCHAR(500),
+    likes_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -762,7 +763,8 @@ CREATE TABLE IF NOT EXISTS article_reviews (
     reviewer_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
     status VARCHAR(30) NOT NULL,
     feedback TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);
 
@@ -830,98 +832,6 @@ CREATE INDEX IF NOT EXISTS idx_comments_article_status ON comments(article_id, s
 CREATE INDEX IF NOT EXISTS idx_comments_parent_status ON comments(parent_id, status);
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user_created ON bookmarks(user_id, created_at DESC);
 
--- ============================================
--- M11: Email change tokens
--- ============================================
-CREATE TABLE IF NOT EXISTS email_change_tokens (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    new_email VARCHAR(255) NOT NULL,
-    token VARCHAR(255) UNIQUE NOT NULL,
-    revert_token VARCHAR(255) UNIQUE,
-    old_email VARCHAR(255),
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-    expires_at TIMESTAMP NOT NULL,
-    confirmed_at TIMESTAMP,
-    reverted_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_email_change_tokens_token ON email_change_tokens(token);
-CREATE INDEX IF NOT EXISTS idx_email_change_tokens_revert ON email_change_tokens(revert_token);
-CREATE INDEX IF NOT EXISTS idx_email_change_tokens_user ON email_change_tokens(user_id);
-
--- ============================================
--- M12: MFA backup codes
--- ============================================
-CREATE TABLE IF NOT EXISTS mfa_backup_codes (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    code_hash VARCHAR(255) NOT NULL,
-    used BOOLEAN DEFAULT FALSE,
-    used_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================
--- M13: User social accounts (OAuth)
--- ============================================
-CREATE TABLE IF NOT EXISTS user_social_accounts (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider VARCHAR(50) NOT NULL,
-    provider_id VARCHAR(255) NOT NULL,
-    provider_email VARCHAR(255),
-    display_name VARCHAR(255),
-    avatar_url VARCHAR(500),
-    access_token VARCHAR(1000),
-    refresh_token VARCHAR(1000),
-    token_expires_at TIMESTAMP,
-    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(provider, provider_id)
-);
-CREATE INDEX IF NOT EXISTS idx_social_accounts_user ON user_social_accounts(user_id);
-CREATE INDEX IF NOT EXISTS idx_social_accounts_provider ON user_social_accounts(provider, provider_id);
-
--- ============================================
--- M14: Search queries
--- ============================================
-CREATE TABLE IF NOT EXISTS search_queries (
-    id BIGINT PRIMARY KEY,
-    query_text VARCHAR(500) NOT NULL,
-    results_count INTEGER DEFAULT 0,
-    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-    session_id VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_search_queries_text ON search_queries(query_text);
-CREATE INDEX IF NOT EXISTS idx_search_queries_created ON search_queries(created_at DESC);
-
--- ============================================
--- M15: Article reviews
--- ============================================
-CREATE TABLE IF NOT EXISTS article_reviews (
-    id BIGINT PRIMARY KEY,
-    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-    reviewer_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
-    feedback TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================
--- M16: Reading history
--- ============================================
-CREATE TABLE IF NOT EXISTS reading_history (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    article_id BIGINT NOT NULL,
-    read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    read_count INTEGER DEFAULT 1,
-    UNIQUE(user_id, article_id)
-);
-CREATE INDEX IF NOT EXISTS idx_reading_history_user ON reading_history(user_id, last_read_at DESC);
 
 -- ============================================
 -- M17: Supported languages (i18n)
@@ -971,6 +881,11 @@ CREATE TABLE IF NOT EXISTS email_template_overrides (
 -- ============================================
 -- M20: Email custom variables
 -- ============================================
+-- NOTE: the UNIQUE(var_key, template_id, locale) constraint is intentionally NOT
+-- declared here — V9 adds it under the same auto-generated name, and its
+-- exception handler only catches duplicate_object (42710), not the 42P07 a
+-- duplicate unique index raises. V9 is already applied in production, so the
+-- baseline must leave the constraint for V9 to create.
 CREATE TABLE IF NOT EXISTS email_custom_variables (
     id SERIAL PRIMARY KEY,
     var_key VARCHAR(100) NOT NULL,
@@ -979,8 +894,7 @@ CREATE TABLE IF NOT EXISTS email_custom_variables (
     template_id VARCHAR(100) NOT NULL DEFAULT '__global__',
     locale VARCHAR(10) NOT NULL DEFAULT '*',
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(var_key, template_id, locale)
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- ============================================

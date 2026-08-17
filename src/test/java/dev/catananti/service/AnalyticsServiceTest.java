@@ -33,6 +33,7 @@ import static org.mockito.Mockito.*;
 class AnalyticsServiceTest {
 
     @Mock private AnalyticsRepository analyticsRepository;
+    @Mock private dev.catananti.repository.SearchQueryRepository searchQueryRepository;
     @Mock private ArticleRepository articleRepository;
     @Mock private IdService idService;
     @Mock private DatabaseClient databaseClient;
@@ -47,7 +48,7 @@ class AnalyticsServiceTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        analyticsService = new AnalyticsService(analyticsRepository, articleRepository, objectMapper, idService, databaseClient, geoIPService, new dev.catananti.scheduler.SchedulerLock(null));
+        analyticsService = new AnalyticsService(analyticsRepository, searchQueryRepository, articleRepository, objectMapper, idService, databaseClient, geoIPService, new dev.catananti.scheduler.SchedulerLock(null));
 
         // Lenient stubs for DatabaseClient chain used by trackEvent and analytics queries
         lenient().when(databaseClient.sql(anyString())).thenReturn(executeSpec);
@@ -260,16 +261,15 @@ class AnalyticsServiceTest {
     }
 
     @Nested
-    @DisplayName("getAnalyticsSummary - fallback paths")
-    class GetAnalyticsSummaryFallback {
+    @DisplayName("getAnalyticsSummary - windowed counts (M11: no all-time fallback)")
+    class GetAnalyticsSummaryWindowed {
 
         @Test
-        @DisplayName("Should fallback to article table when VIEW count is zero")
+        @DisplayName("Should return windowed zero when VIEW count is zero (no all-time fallback)")
         @SuppressWarnings("unchecked")
-        void shouldFallbackForViewCount() {
+        void shouldReturnZeroForViewCount() {
             when(analyticsRepository.countByEventTypeSince(eq("VIEW"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(0L));
-            when(articleRepository.sumViewsCount()).thenReturn(Mono.just(500L));
             when(analyticsRepository.countByEventTypeSince(eq("LIKE"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(10L));
             when(analyticsRepository.countByEventTypeSince(eq("SHARE"), any(LocalDateTime.class)))
@@ -283,24 +283,23 @@ class AnalyticsServiceTest {
 
             StepVerifier.create(analyticsService.getAnalyticsSummary(30))
                     .assertNext(summary -> {
-                        assertThat(summary.getTotalViews()).isEqualTo(500L);
+                        assertThat(summary.getTotalViews()).isZero();
                         assertThat(summary.getTotalLikes()).isEqualTo(10L);
                         assertThat(summary.getTotalShares()).isEqualTo(5L);
                     })
                     .verifyComplete();
 
-            verify(articleRepository).sumViewsCount();
+            verify(articleRepository, never()).sumViewsCount();
         }
 
         @Test
-        @DisplayName("Should fallback to article table when LIKE count is zero")
+        @DisplayName("Should return windowed zero when LIKE count is zero (no all-time fallback)")
         @SuppressWarnings("unchecked")
-        void shouldFallbackForLikeCount() {
+        void shouldReturnZeroForLikeCount() {
             when(analyticsRepository.countByEventTypeSince(eq("VIEW"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(100L));
             when(analyticsRepository.countByEventTypeSince(eq("LIKE"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(0L));
-            when(articleRepository.sumLikesCount()).thenReturn(Mono.just(200L));
             when(analyticsRepository.countByEventTypeSince(eq("SHARE"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(3L));
 
@@ -313,24 +312,22 @@ class AnalyticsServiceTest {
             StepVerifier.create(analyticsService.getAnalyticsSummary(30))
                     .assertNext(summary -> {
                         assertThat(summary.getTotalViews()).isEqualTo(100L);
-                        assertThat(summary.getTotalLikes()).isEqualTo(200L);
+                        assertThat(summary.getTotalLikes()).isZero();
                         assertThat(summary.getTotalShares()).isEqualTo(3L);
                     })
                     .verifyComplete();
 
-            verify(articleRepository).sumLikesCount();
+            verify(articleRepository, never()).sumLikesCount();
         }
 
         @Test
-        @DisplayName("Should fallback both views and likes when both are zero")
+        @DisplayName("Should return windowed zero for views and likes when both are zero")
         @SuppressWarnings("unchecked")
-        void shouldFallbackBothViewsAndLikes() {
+        void shouldReturnZeroForViewsAndLikes() {
             when(analyticsRepository.countByEventTypeSince(eq("VIEW"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(0L));
-            when(articleRepository.sumViewsCount()).thenReturn(Mono.just(1000L));
             when(analyticsRepository.countByEventTypeSince(eq("LIKE"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(0L));
-            when(articleRepository.sumLikesCount()).thenReturn(Mono.just(300L));
             when(analyticsRepository.countByEventTypeSince(eq("SHARE"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(0L));
 
@@ -342,11 +339,14 @@ class AnalyticsServiceTest {
 
             StepVerifier.create(analyticsService.getAnalyticsSummary(7))
                     .assertNext(summary -> {
-                        assertThat(summary.getTotalViews()).isEqualTo(1000L);
-                        assertThat(summary.getTotalLikes()).isEqualTo(300L);
+                        assertThat(summary.getTotalViews()).isZero();
+                        assertThat(summary.getTotalLikes()).isZero();
                         assertThat(summary.getTotalShares()).isZero();
                     })
                     .verifyComplete();
+
+            verify(articleRepository, never()).sumViewsCount();
+            verify(articleRepository, never()).sumLikesCount();
         }
     }
 
@@ -393,12 +393,11 @@ class AnalyticsServiceTest {
         }
 
         @Test
-        @DisplayName("Should fall back to author view counts when VIEW count is zero (not the global sum)")
+        @DisplayName("Should return windowed zero for author when VIEW count is zero (M11: no all-time fallback)")
         @SuppressWarnings("unchecked")
-        void shouldFallbackToAuthorViewCounts() {
+        void shouldReturnZeroForAuthorViewCounts() {
             when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("VIEW"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(0L));
-            when(articleRepository.sumViewsCountByAuthorId(AUTHOR_ID)).thenReturn(Mono.just(640L));
             when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("LIKE"), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(0L));
             when(analyticsRepository.countByAuthorIdAndEventTypeSince(eq(AUTHOR_ID), eq("SHARE"), any(LocalDateTime.class)))
@@ -412,14 +411,13 @@ class AnalyticsServiceTest {
 
             StepVerifier.create(analyticsService.getAnalyticsSummaryByAuthor(7, AUTHOR_ID))
                     .assertNext(summary -> {
-                        assertThat(summary.getTotalViews()).isEqualTo(640L);
-                        // LIKE has no author fallback: stays at zero (never uses global sumLikesCount)
+                        assertThat(summary.getTotalViews()).isZero();
                         assertThat(summary.getTotalLikes()).isZero();
                         assertThat(summary.getTotalShares()).isZero();
                     })
                     .verifyComplete();
 
-            verify(articleRepository).sumViewsCountByAuthorId(AUTHOR_ID);
+            verify(articleRepository, never()).sumViewsCountByAuthorId(AUTHOR_ID);
             verify(articleRepository, never()).sumViewsCount();
             verify(articleRepository, never()).sumLikesCount();
         }

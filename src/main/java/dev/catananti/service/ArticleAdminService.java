@@ -17,6 +17,7 @@ import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.ArticleReviewRepository;
 import dev.catananti.repository.SubscriberRepository;
 import dev.catananti.repository.TagRepository;
+import dev.catananti.util.DigestUtils;
 import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -105,6 +106,38 @@ public class ArticleAdminService {
         });
     }
 
+    /**
+     * Admin-facing search across the caller's articles. Unlike the public
+     * {@link ArticleService#searchArticles} (PUBLISHED-only), this spans ALL statuses so an
+     * author can find DRAFT/SCHEDULED/REVIEW/ARCHIVED articles. DEV users are scoped to their
+     * own articles; ADMIN sees everything.
+     */
+    public Mono<PageResponse<ArticleResponse>> searchArticles(String query, int page, int size) {
+        int offset = page * size;
+        // F-291: sanitize LIKE wildcards to prevent pattern injection.
+        String sanitizedQuery = DigestUtils.escapeLikePattern(query);
+
+        return getCurrentUser().flatMap(user -> {
+            Flux<Article> articlesFlux;
+            Mono<Long> countMono;
+            if (isAdmin(user)) {
+                articlesFlux = articleRepository.adminSearchByQuery(sanitizedQuery, size, offset);
+                countMono = articleRepository.countAdminSearchByQuery(sanitizedQuery);
+            } else {
+                articlesFlux = articleRepository.adminSearchByAuthorAndQuery(user.getId(), sanitizedQuery, size, offset);
+                countMono = articleRepository.countAdminSearchByAuthorAndQuery(user.getId(), sanitizedQuery);
+            }
+            return articlesFlux
+                    .collectList()
+                    .flatMap(articleService::enrichArticlesWithMetadata)
+                    .zipWith(countMono)
+                    .map(tuple -> {
+                        var content = tuple.getT1().stream().map(articleService::mapToResponse).toList();
+                        return PageResponse.of(content, page, size, tuple.getT2());
+                    });
+        });
+    }
+
     private Flux<Article> findByStatusSorted(String status, String sort, int limit, int offset) {
         return switch (sort) {
             case "oldest" -> articleRepository.findByStatusOrderByCreatedAtAsc(status, limit, offset);
@@ -146,7 +179,12 @@ public class ArticleAdminService {
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
                     article.setStatus(ArticleStatus.PUBLISHED);
-                    article.setPublishedAt(LocalDateTime.now());
+                    // Preserve the original publish timestamp on republish so feed/RSS
+                    // ordering is not shuffled every time an already-published article is
+                    // re-published.
+                    if (article.getPublishedAt() == null) {
+                        article.setPublishedAt(LocalDateTime.now());
+                    }
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
                 })
@@ -155,7 +193,7 @@ public class ArticleAdminService {
                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
                 });
         return transactionalOperator.transactional(publish)
-                .flatMap(article -> invalidateFeedCaches()
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
                         .then(notifySubscribersAboutNewArticle(article))
                         .thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
@@ -173,7 +211,7 @@ public class ArticleAdminService {
                     return articleRepository.save(article);
                 })
                 .doOnSuccess(a -> log.info("Article unpublished: {}", a.getSlug()))
-                .flatMap(article -> invalidateFeedCaches().thenReturn(article))
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug()).thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -189,7 +227,7 @@ public class ArticleAdminService {
                     return articleRepository.save(article);
                 })
                 .doOnSuccess(a -> log.info("Article archived: {}", a.getSlug()))
-                .flatMap(article -> invalidateFeedCaches().thenReturn(article))
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug()).thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -263,6 +301,7 @@ public class ArticleAdminService {
                         notificationEventService.articleCreated(a.getTitle(), a.getSlug());
                     }
                 })
+                .flatMap(a -> invalidateArticleAndFeedCaches(a.getSlug()).thenReturn(a))
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -286,6 +325,11 @@ public class ArticleAdminService {
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
+                    // TX-09: do NOT swallow createVersion errors here. This runs inside the
+                    // update transaction — after a failed SQL statement PostgreSQL marks the
+                    // whole transaction aborted (25P02), so continuing the chain would turn a
+                    // versioning error into a confusing "current transaction is aborted"
+                    // failure on the article save. Let it propagate and roll back cleanly.
                     return getCurrentUser()
                             .flatMap(user -> articleVersionService.createVersion(
                                     article,
@@ -293,13 +337,12 @@ public class ArticleAdminService {
                                     user.getId(),
                                     user.getName()
                             ))
-                            .onErrorResume(e -> {
-                                log.warn("Failed to create article version: {}", e.getMessage());
-                                return Mono.empty();
-                            })
                             .then(Mono.just(article));
                 })
                 .flatMap(article -> {
+                    // Capture the slug before any mutation so both the old and new
+                    // slug caches can be invalidated after the save.
+                    final String oldSlug = article.getSlug();
                     // BUG-06 fix: Check for slug collision with other articles
                     String newSlug = request.getSlug();
                     Mono<Void> slugCheck = Mono.empty();
@@ -314,7 +357,9 @@ public class ArticleAdminService {
                     // Otherwise an error path can leave the entity in a partially-mutated
                     // state that a retry could persist.
                     return slugCheck.then(Mono.defer(() -> {
-                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
+                        // When the request omits the status, keep the article's current
+                        // status instead of silently demoting a PUBLISHED article to DRAFT.
+                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), article.getStatus());
                         ArticleStatus oldStatus = article.getStatus();
 
                         article.setSlug(request.getSlug());
@@ -329,6 +374,12 @@ public class ArticleAdminService {
                         article.setSeoDescription(htmlSanitizerService.stripHtml(request.getSeoDescription()));
                         article.setSeoKeywords(htmlSanitizerService.stripHtml(request.getSeoKeywords()));
                         article.setUpdatedAt(LocalDateTime.now());
+
+                        // CC-05: when the editor sent the version it loaded, save against it —
+                        // a stale version makes the UPDATE match 0 rows and surface as 409.
+                        if (request.getVersion() != null) {
+                            article.setVersion(request.getVersion());
+                        }
 
                         if (oldStatus != ArticleStatus.PUBLISHED && newStatus == ArticleStatus.PUBLISHED) {
                             article.setPublishedAt(LocalDateTime.now());
@@ -351,6 +402,16 @@ public class ArticleAdminService {
                                             return saveArticleTags(saved.getId(), tags)
                                                     .then(Mono.just(saved));
                                         });
+                            })
+                            .flatMap(saved -> {
+                                String savedSlug = saved.getSlug();
+                                Mono<Void> invalidate = oldSlug.equals(savedSlug)
+                                        ? invalidateArticleAndFeedCaches(savedSlug)
+                                        : Mono.when(
+                                                invalidateFeedCaches(),
+                                                cacheService.invalidateArticle(oldSlug),
+                                                cacheService.invalidateArticle(savedSlug));
+                                return invalidate.thenReturn(saved);
                             })
                             .doOnSuccess(a -> log.info("Article updated: {}", a.getSlug()))
                             .flatMap(articleService::enrichArticleWithMetadata)
@@ -382,7 +443,8 @@ public class ArticleAdminService {
                                     return articleRepository.save(article);
                                 }))
                         .count())
-                .flatMap(count -> invalidateFeedCaches().thenReturn(count))
+                .flatMap(count -> Mono.when(invalidateFeedCaches(), cacheService.invalidateAllArticles())
+                        .thenReturn(count))
                 .doOnSuccess(count -> log.info("Bulk status update: {} articles → {}", count, status));
     }
 
@@ -398,8 +460,8 @@ public class ArticleAdminService {
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> articleRepository.deleteById(id)
                         .doOnSuccess(v -> log.info("Article deleted: {} (slug={})", id, article.getSlug()))
-                )
-                .then(invalidateFeedCaches());
+                        .then(invalidateArticleAndFeedCaches(article.getSlug()))
+                );
     }
 
     // ==================== REVIEW WORKFLOW ====================
@@ -425,9 +487,11 @@ public class ArticleAdminService {
                 .map(articleService::mapToResponse);
     }
 
-    @Transactional
     public Mono<ArticleResponse> approveReview(Long id) {
-        return articleRepository.findById(id)
+        // TX-07: same shape as publishArticle — only the DB writes run inside the
+        // transaction; cache invalidation and the subscriber email fan-out happen
+        // after commit so no pool connection is held during SMTP sends.
+        Mono<Article> approve = articleRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> getCurrentUser().flatMap(user -> {
                     if (!isAdmin(user)) {
@@ -455,8 +519,9 @@ public class ArticleAdminService {
                 .doOnSuccess(a -> {
                     log.info("Article review approved: {}", a.getSlug());
                     notificationEventService.articlePublished(a.getTitle(), a.getSlug());
-                })
-                .flatMap(article -> invalidateFeedCaches()
+                });
+        return transactionalOperator.transactional(approve)
+                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
                         .then(notifySubscribersAboutNewArticle(article))
                         .thenReturn(article))
                 .flatMap(articleService::enrichArticleWithMetadata)
@@ -506,6 +571,19 @@ public class ArticleAdminService {
                 cacheService.delete(RSS_CACHE_KEY),
                 cacheService.delete(SITEMAP_CACHE_KEY)
         ).doOnSuccess(v -> log.debug("Feed caches invalidated"));
+    }
+
+    /**
+     * Invalidate both the public article read-through cache (slug + published-page
+     * entries, including locale variants) and the RSS/sitemap feed caches. Called
+     * after every mutating article operation so unpublished/deleted/edited content
+     * is not served stale from Redis.
+     */
+    private Mono<Void> invalidateArticleAndFeedCaches(String slug) {
+        return Mono.when(
+                invalidateFeedCaches(),
+                cacheService.invalidateArticle(slug)
+        );
     }
 
     private Mono<Void> notifySubscribersAboutNewArticle(Article article) {

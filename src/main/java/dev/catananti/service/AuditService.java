@@ -177,7 +177,7 @@ public class AuditService {
         return auditLogRepository.findByPerformedByOrderByCreatedAtDesc(userId, PageRequest.of(page, size));
     }
 
-    public Flux<AuditLog> getLogsByEntity(String entityType, String entityId) {
-        return auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc(entityType, entityId);
+    public Flux<AuditLog> getLogsByEntity(String entityType, String entityId, int limit) {
+        return auditLogRepository.findByEntityTypeAndEntityIdOrderByCreatedAtDesc(entityType, entityId, limit);
     }
 }

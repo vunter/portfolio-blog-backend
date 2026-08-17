@@ -18,10 +18,13 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("SELECT * FROM articles WHERE slug = :slug AND status = :status")
     Mono<Article> findBySlugAndStatus(String slug, String status);
 
-    @Query("SELECT * FROM articles WHERE status = :status ORDER BY published_at DESC LIMIT :limit OFFSET :offset")
+    // NP-6: listing queries project every column EXCEPT content — list pages render
+    // excerpts, and articles' markdown bodies (20-50KB each) dominated row transfer,
+    // JSON size and Redis payloads. content stays null on entities from these queries.
+    @Query("SELECT id, version, slug, title, subtitle, excerpt, cover_image_url, author_id, status, published_at, reading_time_minutes, views_count, likes_count, seo_title, seo_description, seo_keywords, scheduled_at, original_locale, created_at, updated_at FROM articles WHERE status = :status ORDER BY published_at DESC LIMIT :limit OFFSET :offset")
     Flux<Article> findByStatusOrderByPublishedAtDesc(String status, int limit, int offset);
 
-    @Query("SELECT * FROM articles WHERE status = :status ORDER BY views_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
+    @Query("SELECT id, version, slug, title, subtitle, excerpt, cover_image_url, author_id, status, published_at, reading_time_minutes, views_count, likes_count, seo_title, seo_description, seo_keywords, scheduled_at, original_locale, created_at, updated_at FROM articles WHERE status = :status ORDER BY views_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
     Flux<Article> findByStatusOrderByViewsCountDesc(String status, int limit, int offset);
 
     @Query("SELECT * FROM articles ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
@@ -37,7 +40,7 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     Mono<Long> countByStatus(String status);
 
     // LIKE-based fallback for H2 dev/test profile (to_tsvector not supported).
-    @Query("SELECT * FROM articles WHERE status = :status AND " +
+    @Query("SELECT id, version, slug, title, subtitle, excerpt, cover_image_url, author_id, status, published_at, reading_time_minutes, views_count, likes_count, seo_title, seo_description, seo_keywords, scheduled_at, original_locale, created_at, updated_at FROM articles WHERE status = :status AND " +
            "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
            "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
            "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%'))) " +
@@ -49,6 +52,36 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
            "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
            "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
     Mono<Long> countSearchByStatusAndQuery(String status, String query);
+
+    // Admin-facing search — spans ALL statuses (DRAFT/SCHEDULED/REVIEW/ARCHIVED/PUBLISHED),
+    // unlike the public search which is PUBLISHED-only. LIKE-based so it works on both
+    // Postgres and the H2 test profile.
+    @Query("SELECT * FROM articles WHERE " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+           "ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Article> adminSearchByQuery(String query, int limit, int offset);
+
+    @Query("SELECT COUNT(*) FROM articles WHERE " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
+    Mono<Long> countAdminSearchByQuery(String query);
+
+    // Author-scoped admin search — DEV users only see their own articles.
+    @Query("SELECT * FROM articles WHERE author_id = :authorId AND " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+           "ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Article> adminSearchByAuthorAndQuery(Long authorId, String query, int limit, int offset);
+
+    @Query("SELECT COUNT(*) FROM articles WHERE author_id = :authorId AND " +
+           "(LOWER(title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(content) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(excerpt) LIKE LOWER(CONCAT('%', :query, '%')))")
+    Mono<Long> countAdminSearchByAuthorAndQuery(Long authorId, String query);
 
     // Q4.2: PostgreSQL FTS variants — match against base article OR any article_i18n translation.
     // Uses 'simple' config for language-agnostic matching (PT/ES/IT/EN all work equally).
@@ -84,7 +117,7 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
             """)
     Mono<Long> countSearchByStatusAndQueryFts(String status, String query);
 
-    @Query("SELECT a.* FROM articles a " +
+    @Query("SELECT a.id, a.version, a.slug, a.title, a.subtitle, a.excerpt, a.cover_image_url, a.author_id, a.status, a.published_at, a.reading_time_minutes, a.views_count, a.likes_count, a.seo_title, a.seo_description, a.seo_keywords, a.scheduled_at, a.original_locale, a.created_at, a.updated_at FROM articles a " +
            "JOIN article_tags at ON a.id = at.article_id " +
            "JOIN tags t ON at.tag_id = t.id " +
            "WHERE t.slug = :tagSlug AND a.status = :status " +
@@ -97,14 +130,14 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
            "WHERE t.slug = :tagSlug AND a.status = :status")
     Mono<Long> countByTagSlugAndStatus(String tagSlug, String status);
 
-    @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC LIMIT :limit")
+    @Query("SELECT id, version, slug, title, subtitle, excerpt, cover_image_url, author_id, status, published_at, reading_time_minutes, views_count, likes_count, seo_title, seo_description, seo_keywords, scheduled_at, original_locale, created_at, updated_at FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC LIMIT :limit")
     Flux<Article> findAllPublishedOrderByPublishedAtDesc(int limit);
 
     Mono<Boolean> existsBySlug(String slug);
 
     // Related articles - articles that share tags with the given article
     @Query("""
-            SELECT DISTINCT a.* FROM articles a
+            SELECT DISTINCT a.id, a.version, a.slug, a.title, a.subtitle, a.excerpt, a.cover_image_url, a.author_id, a.status, a.published_at, a.reading_time_minutes, a.views_count, a.likes_count, a.seo_title, a.seo_description, a.seo_keywords, a.scheduled_at, a.original_locale, a.created_at, a.updated_at FROM articles a
             JOIN article_tags at ON a.id = at.article_id
             WHERE a.id != :articleId
             AND a.status = 'PUBLISHED'
@@ -117,11 +150,11 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     Flux<Article> findRelatedArticles(Long articleId, int limit);
 
     // Find recent published articles excluding specific article
-    @Query("SELECT * FROM articles WHERE id != :excludeId AND status = 'PUBLISHED' ORDER BY published_at DESC LIMIT :limit")
+    @Query("SELECT id, version, slug, title, subtitle, excerpt, cover_image_url, author_id, status, published_at, reading_time_minutes, views_count, likes_count, seo_title, seo_description, seo_keywords, scheduled_at, original_locale, created_at, updated_at FROM articles WHERE id != :excludeId AND status = 'PUBLISHED' ORDER BY published_at DESC LIMIT :limit")
     Flux<Article> findRecentPublishedExcluding(Long excludeId, int limit);
 
     // Date-range filtered queries
-    @Query("SELECT * FROM articles WHERE status = :status AND published_at >= :dateFrom AND published_at <= :dateTo ORDER BY published_at DESC LIMIT :limit OFFSET :offset")
+    @Query("SELECT id, version, slug, title, subtitle, excerpt, cover_image_url, author_id, status, published_at, reading_time_minutes, views_count, likes_count, seo_title, seo_description, seo_keywords, scheduled_at, original_locale, created_at, updated_at FROM articles WHERE status = :status AND published_at >= :dateFrom AND published_at <= :dateTo ORDER BY published_at DESC LIMIT :limit OFFSET :offset")
     Flux<Article> findByStatusAndDateRangeOrderByPublishedAtDesc(String status, LocalDateTime dateFrom, LocalDateTime dateTo, int limit, int offset);
 
     @Query("SELECT COUNT(*) FROM articles WHERE status = :status AND published_at >= :dateFrom AND published_at <= :dateTo")
@@ -155,18 +188,17 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY views_count DESC NULLS LAST LIMIT :limit")
     Flux<Article> findTopByViewsCount(int limit);
 
-    // Find top articles by likes count
-    @Query("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY likes_count DESC NULLS LAST LIMIT :limit")
-    Flux<Article> findTopByLikesCount(int limit);
-
     // Atomic increment views count to avoid race conditions
+    @Modifying
     @Query("UPDATE articles SET views_count = COALESCE(views_count, 0) + 1 WHERE slug = :slug")
     Mono<Void> incrementViewsBySlug(String slug);
 
     // Atomic increment likes count to avoid race conditions
+    @Modifying
     @Query("UPDATE articles SET likes_count = COALESCE(likes_count, 0) + 1 WHERE slug = :slug")
     Mono<Void> incrementLikesBySlug(String slug);
 
+    @Modifying
     @Query("UPDATE articles SET likes_count = GREATEST(COALESCE(likes_count, 0) - 1, 0) WHERE slug = :slug")
     Mono<Void> decrementLikesBySlug(String slug);
 
@@ -176,9 +208,6 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
 
     @Query("SELECT COALESCE(SUM(likes_count), 0) FROM articles")
     Mono<Long> sumLikesCount();
-
-    @Query("SELECT COUNT(*) FROM articles WHERE created_at >= :since")
-    Mono<Long> countRecentArticles(LocalDateTime since);
 
     // Recent articles ordered by latest update, for admin dashboard activity feed
     @Query("SELECT * FROM articles ORDER BY COALESCE(updated_at, created_at) DESC LIMIT :limit")
@@ -198,6 +227,9 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
     @Query("SELECT * FROM articles ORDER BY created_at ASC LIMIT :limit OFFSET :offset")
     Flux<Article> findAllOrderByCreatedAtAsc(int limit, int offset);
 
+    // RQ-06: near-twin of findByStatusOrderByViewsCountDesc kept intentionally —
+    // that one is the PUBLIC listing (projects content out, NP-6); this one feeds the
+    // ADMIN list which needs the full row.
     @Query("SELECT * FROM articles WHERE status = :status ORDER BY views_count DESC NULLS LAST LIMIT :limit OFFSET :offset")
     Flux<Article> findByStatusOrderByViewsDesc(String status, int limit, int offset);
 

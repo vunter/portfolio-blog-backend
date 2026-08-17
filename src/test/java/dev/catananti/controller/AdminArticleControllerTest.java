@@ -7,7 +7,6 @@ import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
 import dev.catananti.entity.ArticleI18n;
 import dev.catananti.service.ArticleAdminService;
-import dev.catananti.service.ArticleService;
 import dev.catananti.service.ArticleTranslationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -35,9 +34,6 @@ class AdminArticleControllerTest {
 
     @Mock
     private ArticleAdminService articleAdminService;
-
-    @Mock
-    private ArticleService articleService;
 
     @Mock
     private ArticleTranslationService articleTranslationService;
@@ -145,7 +141,7 @@ class AdminArticleControllerTest {
                     .last(true)
                     .build();
 
-            when(articleService.searchArticles("Spring", 0, 10))
+            when(articleAdminService.searchArticles("Spring", 0, 10))
                     .thenReturn(Mono.just(page));
 
             StepVerifier.create(controller.getAllArticles(0, 10, null, "Spring", "newest"))
@@ -154,8 +150,7 @@ class AdminArticleControllerTest {
                     })
                     .verifyComplete();
 
-            verify(articleService).searchArticles("Spring", 0, 10);
-            verifyNoInteractions(articleAdminService);
+            verify(articleAdminService).searchArticles("Spring", 0, 10);
         }
     }
 

@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS users (
     terms_accepted BOOLEAN DEFAULT FALSE NOT NULL,
     terms_accepted_at TIMESTAMP,
     terms_version VARCHAR(20) DEFAULT '1.0',
+    analytics_consent BOOLEAN,
+    analytics_consent_at TIMESTAMP,
+    status VARCHAR(16) DEFAULT 'ACTIVE' NOT NULL,
+    deleted_at TIMESTAMP,
     preferred_locale VARCHAR(10) DEFAULT 'en',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -74,7 +78,9 @@ CREATE TABLE IF NOT EXISTS comments (
     id BIGINT PRIMARY KEY,
     article_id BIGINT REFERENCES articles(id) ON DELETE CASCADE,
     author_name VARCHAR(255) NOT NULL,
-    author_email VARCHAR(255) NOT NULL,
+    -- nullable since V21: erasure removes the email, user_id keeps the authorship
+    author_email VARCHAR(255),
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
     status VARCHAR(50) DEFAULT 'PENDING',
     parent_id BIGINT REFERENCES comments(id) ON DELETE CASCADE,
@@ -112,6 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_comments_article_id ON comments(article_id);
 CREATE INDEX IF NOT EXISTS idx_comments_author_email ON comments(author_email);
 CREATE INDEX IF NOT EXISTS idx_comments_status ON comments(status);
 CREATE INDEX IF NOT EXISTS idx_comments_parent_id ON comments(parent_id);
+CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
 CREATE INDEX IF NOT EXISTS idx_analytics_article_id ON analytics_events(article_id);
 CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON analytics_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type);
@@ -146,9 +153,16 @@ CREATE TABLE IF NOT EXISTS subscribers (
     confirmed_at TIMESTAMP,
     unsubscribed_at TIMESTAMP,
     analytics_consent BOOLEAN DEFAULT FALSE,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    linked_at TIMESTAMP,
+    link_origin VARCHAR(32),
+    unlinked_at TIMESTAMP,
+    unlinked_by VARCHAR(16),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- H2 allows multiple NULLs in a unique index, so no partial predicate is needed
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_user_id ON subscribers(user_id);
 CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email);
 CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);
 CREATE INDEX IF NOT EXISTS idx_subscribers_confirmation_token ON subscribers(confirmation_token);

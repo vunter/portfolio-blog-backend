@@ -48,6 +48,9 @@ class PasswordResetServiceTest {
     @Mock
     private RefreshTokenService refreshTokenService;
 
+    @Mock
+    private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
+
     @InjectMocks
     private PasswordResetService passwordResetService;
 
@@ -58,6 +61,8 @@ class PasswordResetServiceTest {
         ReflectionTestUtils.setField(passwordResetService, "appUrl", "http://localhost:8080");
         ReflectionTestUtils.setField(passwordResetService, "tokenValidityHours", 1);
         ReflectionTestUtils.setField(passwordResetService, "maxTokensPerHour", 3);
+        lenient().when(transactionalOperator.transactional(any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
 
         testUser = User.builder()
                 .id(1234567890123456789L)
@@ -218,7 +223,8 @@ class PasswordResetServiceTest {
             when(tokenRepository.findByTokenAndUsedFalse(anyString())).thenReturn(Mono.just(validToken));
             when(userRepository.findById(testUser.getId())).thenReturn(Mono.just(testUser));
             when(passwordEncoder.encode("StrongP@ss123!")).thenReturn("$2a$10$newhash");
-            when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.updatePasswordHash(eq(testUser.getId()), eq("$2a$10$newhash"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
             when(tokenRepository.markAsUsedConditionally(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(auditService.logPasswordReset(testUser.getId(), testUser.getEmail())).thenReturn(Mono.empty());
             when(emailService.sendPasswordChangedNotification("user@example.com", "Test User"))
@@ -229,7 +235,7 @@ class PasswordResetServiceTest {
                     .verifyComplete();
 
             verify(passwordEncoder).encode("StrongP@ss123!");
-            verify(userRepository).save(argThat(user -> "$2a$10$newhash".equals(user.getPasswordHash())));
+            verify(userRepository).updatePasswordHash(eq(testUser.getId()), eq("$2a$10$newhash"), any(LocalDateTime.class));
             verify(tokenRepository).markAsUsedConditionally(eq(100L), any(LocalDateTime.class));
             verify(auditService).logPasswordReset(testUser.getId(), testUser.getEmail());
             verify(emailService).sendPasswordChangedNotification("user@example.com", "Test User");
@@ -317,7 +323,6 @@ class PasswordResetServiceTest {
                     .build();
 
             when(tokenRepository.findByTokenAndUsedFalse(anyString())).thenReturn(Mono.just(validToken));
-            when(tokenRepository.markAsUsedConditionally(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(userRepository.findById(99999L)).thenReturn(Mono.empty());
 
             StepVerifier.create(passwordResetService.resetPassword("valid-token", "StrongP@ss123!"))
@@ -340,7 +345,8 @@ class PasswordResetServiceTest {
             when(tokenRepository.findByTokenAndUsedFalse(anyString())).thenReturn(Mono.just(validToken));
             when(userRepository.findById(testUser.getId())).thenReturn(Mono.just(testUser));
             when(passwordEncoder.encode("StrongP@ss123!")).thenReturn("$2a$10$newhash");
-            when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(userRepository.updatePasswordHash(eq(testUser.getId()), eq("$2a$10$newhash"), any(LocalDateTime.class)))
+                    .thenReturn(Mono.just(1L));
             when(tokenRepository.markAsUsedConditionally(eq(100L), any(LocalDateTime.class))).thenReturn(Mono.just(1L));
             when(auditService.logPasswordReset(testUser.getId(), testUser.getEmail())).thenReturn(Mono.empty());
             when(emailService.sendPasswordChangedNotification(anyString(), anyString()))
@@ -351,7 +357,7 @@ class PasswordResetServiceTest {
                     .verifyComplete();
 
             // Password was still reset even though notification failed
-            verify(userRepository).save(argThat(user -> "$2a$10$newhash".equals(user.getPasswordHash())));
+            verify(userRepository).updatePasswordHash(eq(testUser.getId()), eq("$2a$10$newhash"), any(LocalDateTime.class));
         }
     }
 

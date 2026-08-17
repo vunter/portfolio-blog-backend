@@ -422,7 +422,9 @@ public class EmailService {
         String subject = msg("email.comment.notification.subject", articleTitle);
         String articleUrl = siteUrl + "/blog/" + articleSlug;
 
-        String safeCommentContent = escapeHtml(commentContent);
+        // B4: bodyText is bound via th:utext (unescaped) so its interpolated values must be
+        // pre-escaped; commentContent is bound via th:text (Thymeleaf escapes it) so passing
+        // it raw avoids double-escaping.
         String safeCommenterName = escapeHtml(commenterName);
         String safeArticleTitle = escapeHtml(articleTitle);
 
@@ -432,7 +434,7 @@ public class EmailService {
             Map.of(
                 "greeting", msg("email.greeting", authorName),
                 "bodyText", msg("email.comment.notification.body", safeCommenterName, safeArticleTitle),
-                "commentContent", safeCommentContent,
+                "commentContent", commentContent,
                 "articleUrl", articleUrl,
                 "viewText", msg("email.comment.notification.view")
             )
@@ -827,6 +829,34 @@ public class EmailService {
         ));
 
         return sendHtmlEmail(newEmail, subject, html);
+    }
+
+    /**
+     * Send the address-ownership verification link used at registration.
+     * The plain token only travels in this email; the database stores its hash.
+     */
+    public Mono<Void> sendEmailVerification(String email, String name, String token) {
+        String subject = msg("email.verify.subject");
+        String verifyUrl = siteUrl + "/auth/verify-email?token=" + token;
+        String displayName = name != null ? name : msg("email.default.user");
+
+        String html = templateService.render("email-verify", baseVars(
+            "#0ea5e9 0%, #0369a1 100%",
+            msg("email.verify.header"),
+            Map.of(
+                "greeting", msg("email.greeting", displayName),
+                "bodyText", msg("email.verify.body"),
+                "verifyUrl", verifyUrl,
+                "buttonText", msg("email.verify.button"),
+                "importantTitle", msg("email.verify.important"),
+                "expiresText", msg("email.verify.expires"),
+                "onceText", msg("email.verify.once"),
+                "ignoreText", msg("email.verify.ignore"),
+                "fallbackText", msg("email.verify.fallback")
+            )
+        ));
+
+        return sendHtmlEmail(email, subject, html);
     }
 
     /**

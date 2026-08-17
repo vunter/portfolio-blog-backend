@@ -2,6 +2,7 @@ package dev.catananti.service;
 
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.PageResponse;
+import dev.catananti.entity.Article;
 import dev.catananti.entity.Bookmark;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.repository.BookmarkRepository;
@@ -12,6 +13,11 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Service layer for bookmark operations (CQ-01).
@@ -41,13 +47,32 @@ public class BookmarkService {
         String hashedId = hashVisitorId(visitorId);
         int offset = page * size;
 
+        // NP-2: load the page's articles in one batch (findAllById + the constant-query
+        // enrichArticlesWithMetadata) instead of 4 sequential queries per bookmark.
         return bookmarkRepository.findByVisitorHash(hashedId, size, offset)
-                .concatMap(bookmark -> articleRepository.findById(bookmark.getArticleId()))
-                .concatMap(articleService::enrichArticleWithMetadata)
-                .map(articleService::mapToResponse)
+                .map(Bookmark::getArticleId)
                 .collectList()
+                .flatMap(this::loadArticlesInBookmarkOrder)
                 .zipWith(bookmarkRepository.countByVisitorHash(hashedId))
                 .map(tuple -> PageResponse.of(tuple.getT1(), page, size, tuple.getT2()));
+    }
+
+    private Mono<List<ArticleResponse>> loadArticlesInBookmarkOrder(List<Long> articleIds) {
+        if (articleIds.isEmpty()) {
+            return Mono.just(List.of());
+        }
+        return articleRepository.findAllById(articleIds)
+                .collectList()
+                .flatMap(articleService::enrichArticlesWithMetadata)
+                .map(articles -> {
+                    Map<Long, Article> byId = articles.stream()
+                            .collect(Collectors.toMap(Article::getId, Function.identity()));
+                    return articleIds.stream()
+                            .map(byId::get)
+                            .filter(Objects::nonNull)
+                            .map(articleService::mapToResponse)
+                            .toList();
+                });
     }
 
     public Mono<Boolean> isBookmarked(String visitorId, String articleSlug) {

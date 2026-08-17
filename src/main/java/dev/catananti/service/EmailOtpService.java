@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
@@ -37,6 +38,7 @@ public class EmailOtpService {
     private final UserMfaConfigRepository mfaConfigRepository;
     private final UserRepository userRepository;
     private final IdService idService;
+    private final TransactionalOperator transactionalOperator;
 
     private final int otpLength;
     private final int expirationMinutes;
@@ -46,6 +48,7 @@ public class EmailOtpService {
                            UserMfaConfigRepository mfaConfigRepository,
                            UserRepository userRepository,
                            IdService idService,
+                           TransactionalOperator transactionalOperator,
                            @Value("${mfa.email-otp.length:6}") int otpLength,
                            @Value("${mfa.email-otp.expiration-minutes:10}") int expirationMinutes,
                            @Value("${mfa.email-otp.max-sends:3}") int maxOtpSendsPerEmail,
@@ -56,6 +59,7 @@ public class EmailOtpService {
         this.mfaConfigRepository = mfaConfigRepository;
         this.userRepository = userRepository;
         this.idService = idService;
+        this.transactionalOperator = transactionalOperator;
         this.otpLength = otpLength;
         this.expirationMinutes = expirationMinutes;
         this.maxOtpSendsPerEmail = maxOtpSendsPerEmail;
@@ -68,19 +72,22 @@ public class EmailOtpService {
      */
     public Mono<Void> initSetup(Long userId) {
         var now = LocalDateTime.now();
-        return mfaConfigRepository.deleteByUserIdAndMethod(userId, "EMAIL")
-                .then(Mono.defer(() -> {
-                    var config = UserMfaConfig.builder()
-                            .id(idService.nextId())
-                            .userId(userId)
-                            .method("EMAIL")
-                            .secretEncrypted(null)
-                            .verified(false)
-                            .createdAt(now)
-                            .updatedAt(now)
-                            .build();
-                    return mfaConfigRepository.save(config);
-                }))
+        // TX-02: delete+save commit atomically so a failed save cannot leave the user
+        // without their previous EMAIL config; the SMTP/Redis send stays outside the tx.
+        return transactionalOperator.transactional(
+                        mfaConfigRepository.deleteByUserIdAndMethod(userId, "EMAIL")
+                                .then(Mono.defer(() -> {
+                                    var config = UserMfaConfig.builder()
+                                            .id(idService.nextId())
+                                            .userId(userId)
+                                            .method("EMAIL")
+                                            .secretEncrypted(null)
+                                            .verified(false)
+                                            .createdAt(now)
+                                            .updatedAt(now)
+                                            .build();
+                                    return mfaConfigRepository.save(config);
+                                })))
                 .then(sendOtp(userId))
                 .doOnSuccess(_ -> log.info("Email OTP setup initiated for user {}", userId));
     }
@@ -94,26 +101,20 @@ public class EmailOtpService {
                     if (!valid) {
                         return Mono.error(new IllegalArgumentException("error.invalid_verification_code"));
                     }
-                    return mfaConfigRepository.findByUserIdAndMethod(userId, "EMAIL")
-                            .switchIfEmpty(Mono.error(new IllegalStateException("No pending email OTP setup")))
-                            .flatMap(config -> {
-                                config.setVerified(true);
-                                config.setUpdatedAt(LocalDateTime.now());
-                                config.setNewRecord(false);
-                                return mfaConfigRepository.save(config);
-                            })
-                            .then(userRepository.findById(userId))
-                            .flatMap(user -> {
-                                if (!Boolean.TRUE.equals(user.getMfaEnabled())) {
-                                    user.setMfaEnabled(true);
-                                }
-                                if (user.getMfaPreferredMethod() == null) {
-                                    user.setMfaPreferredMethod("EMAIL");
-                                }
-                                user.setUpdatedAt(LocalDateTime.now());
-                                user.setNewRecord(false);
-                                return userRepository.save(user);
-                            })
+                    // TX-03: config flip + user flags commit atomically; CC-07: the user row is
+                    // written via a partial UPDATE (COALESCE keeps an existing preferred method)
+                    // so no other column can be clobbered by this flow.
+                    return transactionalOperator.transactional(
+                                    mfaConfigRepository.findByUserIdAndMethod(userId, "EMAIL")
+                                            .switchIfEmpty(Mono.error(new IllegalStateException("No pending email OTP setup")))
+                                            .flatMap(config -> {
+                                                config.setVerified(true);
+                                                config.setUpdatedAt(LocalDateTime.now());
+                                                config.setNewRecord(false);
+                                                return mfaConfigRepository.save(config);
+                                            })
+                                            .then(userRepository.enableMfaWithFallbackPreferred(
+                                                    userId, "EMAIL", LocalDateTime.now())))
                             .doOnSuccess(_ -> log.info("Email OTP verified and enabled for user {}", userId))
                             .then();
                 });
@@ -208,10 +209,18 @@ public class EmailOtpService {
                                     if (java.security.MessageDigest.isEqual(
                                             storedOtp.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                                             code.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
-                                        // Delete OTP and attempt counter after successful verification (one-time use)
+                                        // CC-04: one-time use must hold under concurrency. Redis DEL is
+                                        // atomic and returns the number of keys removed — only the request
+                                        // that actually deleted the OTP may succeed; a concurrent verify
+                                        // that read the same OTP sees 0 and is rejected.
                                         return redisTemplate.delete(redisKey)
-                                                .then(redisTemplate.delete(attemptsKey))
-                                                .thenReturn(true);
+                                                .flatMap(deleted -> {
+                                                    if (deleted == 0) {
+                                                        log.warn("Email OTP concurrent reuse detected for userId={}", userId);
+                                                        return Mono.just(false);
+                                                    }
+                                                    return redisTemplate.delete(attemptsKey).thenReturn(true);
+                                                });
                                     }
                                     return Mono.just(false);
                                 })

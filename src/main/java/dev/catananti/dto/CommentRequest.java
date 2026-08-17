@@ -30,6 +30,13 @@ public class CommentRequest {
 
     private String recaptchaToken;
 
+    /**
+     * Structural authorship link. Never bound from the request body — the
+     * controller overwrites it from the authenticated principal, exactly like
+     * authorName/authorEmail above.
+     */
+    private Long userId;
+
     /** Q7.10: Normalize email to lowercase to prevent case-sensitive duplicates */
     public void setAuthorEmail(String authorEmail) {
         this.authorEmail = authorEmail != null ? authorEmail.toLowerCase().trim() : null;

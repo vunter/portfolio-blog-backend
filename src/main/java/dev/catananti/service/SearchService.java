@@ -40,13 +40,43 @@ public class SearchService {
     private static final String ALIAS_ARTICLE_TAGS = "at";
     private static final String ALIAS_TAGS = "t";
 
-    /** Allowlist of sort-key → SQL ORDER BY fragment. New keys must be added here, not built dynamically. */
-    private static final java.util.Map<String, String> SORT_OPTIONS = java.util.Map.of(
-            "date",  "a.published_at DESC",
-            "views", "a.views_count DESC",
-            "likes", "a.likes_count DESC",
-            "title", "a.title ASC"
+    /**
+     * Allowlist of sort-key → unqualified SQL column. Direction is applied separately from
+     * {@code sortOrder}. New keys must be added here, never built from raw input.
+     */
+    private static final java.util.Map<String, String> SORT_COLUMNS = java.util.Map.of(
+            "date",      "published_at",
+            "relevance", "published_at",
+            "views",     "views_count",
+            "viewcount", "views_count",
+            "likes",     "likes_count",
+            "title",     "title"
     );
+
+    /**
+     * Build a safe {@code ORDER BY} fragment from the allowlisted column and direction.
+     * Never interpolates raw user input — both the column and the direction are chosen from
+     * fixed allowlists. {@code aliasPrefix} is "a." for aliased joins, "" for the bare table.
+     */
+    private String resolveOrderBy(String sortBy, String sortOrder, String aliasPrefix) {
+        String column = SORT_COLUMNS.getOrDefault(
+                sortBy != null ? sortBy.toLowerCase() : "date", "published_at");
+        String direction = "asc".equalsIgnoreCase(sortOrder) ? "ASC" : "DESC";
+        return aliasPrefix + column + " " + direction;
+    }
+
+    /**
+     * True when the requested sort is equivalent to the fixed {@code published_at DESC}
+     * order that the query-only FTS/LIKE repository methods already produce — i.e. sortBy is
+     * date/relevance (or unset) and the direction is descending (or unset). When true, the
+     * query-only path can safely use those repository methods; otherwise it must fall back to
+     * the dynamic path to honor the requested sort.
+     */
+    private boolean isDefaultDateDescSort(String sortBy, String sortOrder) {
+        String sb = sortBy != null ? sortBy.toLowerCase() : "date";
+        String so = sortOrder != null ? sortOrder.toLowerCase() : "desc";
+        return (sb.equals("date") || sb.equals("relevance")) && so.equals("desc");
+    }
 
     private final ArticleRepository articleRepository;
     private final TagRepository tagRepository;
@@ -139,15 +169,24 @@ public class SearchService {
 
         if (request.getTags() != null && !request.getTags().isEmpty()) {
             // Search with tags filter (and optional date range)
-            articlesFlux = searchByQueryAndTags(sanitizedQuery, request.getTags(), request.getSize(), offset, request.getSortBy(), from, to);
+            articlesFlux = searchByQueryAndTags(sanitizedQuery, request.getTags(), request.getSize(), offset,
+                    request.getSortBy(), request.getSortOrder(), from, to);
             countMono = countByQueryAndTags(sanitizedQuery, request.getTags(), from, to);
         } else if (hasDateFilter) {
             // Search with date range (using dynamic SQL). ftsCondition() inside already
             // covers article_i18n, so this path is multi-language.
-            articlesFlux = searchByQueryAndDateRange(sanitizedQuery, from, to, request.getSize(), offset);
+            articlesFlux = searchByQueryAndDateRange(sanitizedQuery, from, to, request.getSize(), offset,
+                    request.getSortBy(), request.getSortOrder());
             countMono = countByQueryAndDateRange(sanitizedQuery, from, to);
+        } else if (!isDefaultDateDescSort(request.getSortBy(), request.getSortOrder())) {
+            // Query-only with an explicit non-default sort (views/likes/title, or ascending):
+            // the fixed-order repository methods below can't honor it, so use the dynamic
+            // path (which also covers article_i18n via ftsCondition and applies the sort).
+            articlesFlux = searchByQueryAndDateRange(sanitizedQuery, null, null, request.getSize(), offset,
+                    request.getSortBy(), request.getSortOrder());
+            countMono = countByQueryAndDateRange(sanitizedQuery, null, null);
         } else if (useFts) {
-            // Q4.2: Query-only + Postgres — use FTS variant that also matches article_i18n translations.
+            // Q4.2: Query-only + Postgres, default sort — FTS variant also matches article_i18n translations.
             articlesFlux = articleRepository.searchByStatusAndQueryFts(
                     ArticleStatus.PUBLISHED.name(), sanitizedQuery, request.getSize(), offset);
             countMono = articleRepository.countSearchByStatusAndQueryFts(
@@ -179,7 +218,8 @@ public class SearchService {
                 });
     }
 
-    private Flux<Article> searchByQueryAndTags(String query, List<String> tags, int limit, int offset, String sortBy,
+    private Flux<Article> searchByQueryAndTags(String query, List<String> tags, int limit, int offset,
+                                                String sortBy, String sortOrder,
                                                 LocalDateTime dateFrom, LocalDateTime dateTo) {
         // Validate and sanitize tags - only allow alphanumeric and hyphens
         List<String> sanitizedTags = tags.stream()
@@ -191,9 +231,11 @@ public class SearchService {
             return Flux.empty();
         }
 
-        String orderBy = SORT_OPTIONS.getOrDefault(
-                sortBy != null ? sortBy.toLowerCase() : "date",
-                SORT_OPTIONS.get("date"));
+        // Only apply the full-text condition when there is an actual query term.
+        // An empty plainto_tsquery matches no rows in Postgres, which would make a
+        // tag-only search (q="") return zero results in production.
+        boolean hasQuery = query != null && !query.isEmpty();
+        String orderBy = resolveOrderBy(sortBy, sortOrder, "a.");
 
         // Build parameterized query with positional parameters for tags
         StringBuilder sql = new StringBuilder("""
@@ -202,9 +244,12 @@ public class SearchService {
                 JOIN tags t ON at.tag_id = t.id
                 WHERE a.status = 'PUBLISHED'
                 AND t.slug = ANY($1)
-                AND """ + ftsCondition("a", "$2") + "\n");
+                """);
 
-        int paramIdx = 3;
+        int paramIdx = 2;
+        if (hasQuery) {
+            sql.append(" AND ").append(ftsCondition("a", "$" + paramIdx++)).append("\n");
+        }
         if (dateFrom != null) {
             sql.append(" AND a.published_at >= $").append(paramIdx++);
         }
@@ -219,10 +264,12 @@ public class SearchService {
 
         var spec = r2dbcTemplate.getDatabaseClient()
                 .sql(sql.toString())
-                .bind("$1", tagArray)
-                .bind("$2", query != null ? query : "");
+                .bind("$1", tagArray);
 
-        int bindIdx = 3;
+        int bindIdx = 2;
+        if (hasQuery) {
+            spec = spec.bind("$" + bindIdx++, query);
+        }
         if (dateFrom != null) {
             spec = spec.bind("$" + bindIdx++, dateFrom);
         }
@@ -247,15 +294,20 @@ public class SearchService {
             return Mono.just(0L);
         }
 
+        boolean hasQuery = query != null && !query.isEmpty();
+
         StringBuilder sql = new StringBuilder("""
                 SELECT COUNT(DISTINCT a.id) FROM articles a
                 JOIN article_tags at ON a.id = at.article_id
                 JOIN tags t ON at.tag_id = t.id
                 WHERE a.status = 'PUBLISHED'
                 AND t.slug = ANY($1)
-                AND """ + ftsCondition("a", "$2") + "\n");
+                """);
 
-        int paramIdx = 3;
+        int paramIdx = 2;
+        if (hasQuery) {
+            sql.append(" AND ").append(ftsCondition("a", "$" + paramIdx++)).append("\n");
+        }
         if (dateFrom != null) {
             sql.append(" AND a.published_at >= $").append(paramIdx++);
         }
@@ -267,10 +319,12 @@ public class SearchService {
 
         var spec = r2dbcTemplate.getDatabaseClient()
                 .sql(sql.toString())
-                .bind("$1", tagArray)
-                .bind("$2", query != null ? query : "");
+                .bind("$1", tagArray);
 
-        int bindIdx = 3;
+        int bindIdx = 2;
+        if (hasQuery) {
+            spec = spec.bind("$" + bindIdx++, query);
+        }
         if (dateFrom != null) {
             spec = spec.bind("$" + bindIdx++, dateFrom);
         }
@@ -284,7 +338,7 @@ public class SearchService {
     }
 
     private Flux<Article> searchByQueryAndDateRange(String query, LocalDateTime dateFrom, LocalDateTime dateTo,
-                                                     int limit, int offset) {
+                                                     int limit, int offset, String sortBy, String sortOrder) {
         StringBuilder sql = new StringBuilder("""
                 SELECT * FROM articles
                 WHERE status = 'PUBLISHED'
@@ -305,7 +359,8 @@ public class SearchService {
             sql.append(" AND published_at <= $").append(paramIdx++);
         }
 
-        sql.append(" ORDER BY published_at DESC LIMIT $").append(paramIdx++).append(" OFFSET $").append(paramIdx);
+        sql.append(" ORDER BY ").append(resolveOrderBy(sortBy, sortOrder, ""))
+                .append(" LIMIT $").append(paramIdx++).append(" OFFSET $").append(paramIdx);
 
         var spec = r2dbcTemplate.getDatabaseClient().sql(sql.toString());
 

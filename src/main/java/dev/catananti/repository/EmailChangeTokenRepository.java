@@ -28,4 +28,9 @@ public interface EmailChangeTokenRepository extends ReactiveCrudRepository<Email
 
     @Query("SELECT COUNT(*) FROM email_change_tokens WHERE new_email = :newEmail AND created_at > :since")
     Mono<Long> countRecentTokensByNewEmail(String newEmail, LocalDateTime since);
+
+    // Account deletion: the rows carry the old and new addresses in plain text.
+    @Modifying
+    @Query("DELETE FROM email_change_tokens WHERE user_id = :userId")
+    Mono<Long> deleteByUserId(Long userId);
 }

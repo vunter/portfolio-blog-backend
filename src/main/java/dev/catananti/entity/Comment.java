@@ -56,6 +56,14 @@ public class Comment implements Persistable<Long>, NewRecordAware {
     @Column("parent_id")
     private Long parentId;
 
+    /**
+     * Structural authorship (V21). Survives erasure on purpose: author_name and
+     * author_email are anonymized while user_id keeps referential integrity
+     * without re-identifying the person.
+     */
+    @Column("user_id")
+    private Long userId;
+
     @Column("moderation_note")
     private String moderationNote;
 

@@ -45,7 +45,7 @@
 		<project.build.outputTimestamp>2026-05-12T00:00:00Z</project.build.outputTimestamp>
 		<lombok.version>1.18.42</lombok.version>
 		<jjwt.version>0.13.0</jjwt.version>
-		<testcontainers.version>1.21.0</testcontainers.version>
+		<testcontainers.version>1.21.3</testcontainers.version>
 		<spring-cloud.version>2025.1.1</spring-cloud.version>
 		<!-- Override Boot-managed pgjdbc (4.0.6 manages 42.7.10, still vulnerable):
 		     42.7.11 fixes CVE-2026-42198 (SCRAM PBKDF2 iteration client-side DoS). -->

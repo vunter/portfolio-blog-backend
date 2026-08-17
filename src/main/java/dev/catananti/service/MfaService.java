@@ -16,6 +16,7 @@ import dev.catananti.security.AesEncryptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -56,6 +57,7 @@ public class MfaService {
     private final EmailOtpService emailOtpService;
     private final AuditService auditService;
     private final ReactiveStringRedisTemplate redisTemplate;
+    private final TransactionalOperator transactionalOperator;
 
     private final String issuer;
     private final int digits;
@@ -76,6 +78,7 @@ public class MfaService {
                       EmailOtpService emailOtpService,
                       AuditService auditService,
                       ReactiveStringRedisTemplate redisTemplate,
+                      TransactionalOperator transactionalOperator,
                       @Value("${mfa.totp.issuer:Catananti Portfolio}") String issuer,
                       @Value("${mfa.totp.digits:6}") int digits,
                       @Value("${mfa.totp.period-seconds:30}") int periodSeconds,
@@ -90,6 +93,7 @@ public class MfaService {
         this.emailOtpService = emailOtpService;
         this.auditService = auditService;
         this.redisTemplate = redisTemplate;
+        this.transactionalOperator = transactionalOperator;
         this.issuer = issuer;
         this.digits = digits;
         this.periodSeconds = periodSeconds;
@@ -135,8 +139,11 @@ public class MfaService {
                                 .updatedAt(now)
                                 .build();
 
-                        return mfaConfigRepository.deleteByUserIdAndMethod(userId, "TOTP")
-                                .then(mfaConfigRepository.save(config))
+                        // TX-04: delete+save must commit atomically — otherwise a failed
+                        // save after the delete destroys a verified TOTP config.
+                        return transactionalOperator.transactional(
+                                        mfaConfigRepository.deleteByUserIdAndMethod(userId, "TOTP")
+                                                .then(mfaConfigRepository.save(config)))
                                 .thenReturn(MfaSetupResponse.builder()
                                         .qrCodeDataUri(qrDataUri)
                                         .secretKey(base32Secret)
@@ -238,16 +245,10 @@ public class MfaService {
     public Mono<Void> disableMfa(Long userId) {
         return mfaConfigRepository.deleteByUserId(userId)
                 .then(backupCodeRepository.deleteByUserId(userId))
+                // CC-07: partial UPDATE instead of full-row save
+                .then(userRepository.disableMfa(userId, LocalDateTime.now()))
                 .then(userRepository.findById(userId))
-                .flatMap(user -> {
-                    user.setMfaEnabled(false);
-                    user.setMfaPreferredMethod(null);
-                    user.setUpdatedAt(LocalDateTime.now());
-                    user.setNewRecord(false);
-                    return userRepository.save(user)
-                            .flatMap(saved -> auditService.logMfaDisabled(userId, saved.getEmail())
-                                    .thenReturn(saved));
-                })
+                .flatMap(user -> auditService.logMfaDisabled(userId, user.getEmail()))
                 .doOnSuccess(_ -> log.info("MFA disabled for user {}", userId))
                 .then();
     }
@@ -263,27 +264,20 @@ public class MfaService {
                         .filter(UserMfaConfig::getVerified)
                         .collectList())
                 .flatMap(remaining -> {
+                    // CC-07: user flags written via partial UPDATEs instead of full-row save
                     if (remaining.isEmpty()) {
                         return backupCodeRepository.deleteByUserId(userId)
+                                .then(userRepository.disableMfa(userId, LocalDateTime.now()))
                                 .then(userRepository.findById(userId))
-                                .flatMap(user -> {
-                                    user.setMfaEnabled(false);
-                                    user.setMfaPreferredMethod(null);
-                                    user.setUpdatedAt(LocalDateTime.now());
-                                    user.setNewRecord(false);
-                                    return userRepository.save(user)
-                                            .flatMap(saved -> auditService.logMfaMethodDisabled(userId, saved.getEmail(), methodToDisable)
-                                                    .thenReturn(saved));
-                                })
+                                .flatMap(user -> auditService.logMfaMethodDisabled(userId, user.getEmail(), methodToDisable))
                                 .then();
                     }
                     return userRepository.findById(userId)
                             .flatMap(user -> {
                                 if (methodToDisable.equals(user.getMfaPreferredMethod())) {
-                                    user.setMfaPreferredMethod(remaining.getFirst().getMethod());
-                                    user.setUpdatedAt(LocalDateTime.now());
-                                    user.setNewRecord(false);
-                                    return userRepository.save(user);
+                                    return userRepository.updateMfaPreferredMethod(
+                                                    userId, remaining.getFirst().getMethod(), LocalDateTime.now())
+                                            .thenReturn(user);
                                 }
                                 return Mono.just(user);
                             })
@@ -400,13 +394,10 @@ public class MfaService {
                             return null;
                         })
                         .subscribeOn(Schedulers.boundedElastic())
-                        .flatMap(bc -> {
-                            if (bc == null) return Mono.just(false);
-                            bc.setUsed(true);
-                            bc.setUsedAt(LocalDateTime.now());
-                            bc.setNewRecord(false);
-                            return backupCodeRepository.save(bc).thenReturn(true);
-                        }));
+                        // CC-01: consume atomically — only the request that flips used=false
+                        // wins; a concurrent reuse of the same code gets rowsAffected=0.
+                        .flatMap(bc -> backupCodeRepository.markUsedIfUnused(bc.getId(), LocalDateTime.now())
+                                .map(rows -> rows == 1)));
     }
 
     /**
@@ -437,16 +428,11 @@ public class MfaService {
     // ==================== Private Helpers ====================
 
     private Mono<Void> enableMfaOnUser(Long userId, String method) {
-        return userRepository.findById(userId)
-                .flatMap(user -> {
-                    user.setMfaEnabled(true);
-                    user.setMfaPreferredMethod(method);
-                    user.setUpdatedAt(LocalDateTime.now());
-                    user.setNewRecord(false);
-                    return userRepository.save(user)
-                            .flatMap(saved -> auditService.logMfaEnabled(userId, saved.getEmail(), method)
-                                    .thenReturn(saved));
-                })
+        // CC-07: partial UPDATE — a concurrent full-row save (e.g. profile edit with a
+        // stale entity) can no longer revert the flag it doesn't know about.
+        return userRepository.enableMfa(userId, method, LocalDateTime.now())
+                .then(userRepository.findById(userId))
+                .flatMap(user -> auditService.logMfaEnabled(userId, user.getEmail(), method))
                 .doOnSuccess(_ -> log.info("MFA enabled for user {} with method {}", userId, method))
                 .then();
     }

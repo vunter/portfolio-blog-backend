@@ -49,6 +49,13 @@ public class ArticleRequest {
     @Size(max = 20, message = "Maximum 20 tags allowed")
     private List<String> tagSlugs;
 
+    /**
+     * CC-05: optimistic-lock version the editor loaded (from ArticleResponse.version).
+     * When present, an update against a newer server version fails with 409 instead
+     * of silently overwriting the other editor's changes. Optional for compatibility.
+     */
+    private Long version;
+
     @Size(max = 255, message = "SEO title must be at most 255 characters")
     private String seoTitle;
 

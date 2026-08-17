@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
@@ -30,6 +31,8 @@ public class RssFeedController {
     
     private static final String RSS_CACHE_KEY = "rss:feed";
     private static final Duration RSS_CACHE_TTL = Duration.ofMinutes(15);
+    // NP-5: the feed renders exactly this many items — fetch no more than that
+    private static final int RSS_ITEM_LIMIT = 20;
 
     @Value("${app.site-url:https://catananti.dev}")
     private String siteUrl;
@@ -48,8 +51,7 @@ public class RssFeedController {
         log.debug("Generating RSS feed");
         return cacheService.get(RSS_CACHE_KEY, String.class)
                 .switchIfEmpty(
-                        articleService.findAllPublishedForFeed()
-                                .take(20)
+                        articleService.findAllPublishedForFeed(RSS_ITEM_LIMIT)
                                 .map(article -> new RssFeedItem(
                                         article.getTitle(), article.getSlug(), article.getExcerpt(),
                                         article.getSeoDescription(), article.getPublishedAt()))
@@ -82,7 +84,8 @@ public class RssFeedController {
         
         if (!items.isEmpty() && items.getFirst().publishedAt() != null) {
             xml.append("    <lastBuildDate>")
-               .append(items.getFirst().publishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
+               .append(items.getFirst().publishedAt().atZone(ZoneId.systemDefault())
+                       .withZoneSameInstant(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
                .append("</lastBuildDate>\n");
         }
 
@@ -100,7 +103,8 @@ public class RssFeedController {
             
             if (item.publishedAt() != null) {
                 xml.append("      <pubDate>")
-                   .append(item.publishedAt().atOffset(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
+                   .append(item.publishedAt().atZone(ZoneId.systemDefault())
+                           .withZoneSameInstant(ZoneOffset.UTC).format(RSS_DATE_FORMAT))
                    .append("</pubDate>\n");
             }
             

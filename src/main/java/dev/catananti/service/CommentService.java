@@ -165,6 +165,7 @@ public class CommentService {
                                             .status(status)
                                             .moderationNote(moderationNote)
                                             .parentId(request.getParentId())
+                                            .userId(request.getUserId())
                                             .createdAt(LocalDateTime.now())
                                             .build();
 
@@ -406,7 +407,7 @@ public class CommentService {
         if (rootComments.isEmpty()) {
             return Mono.just(rootComments);
         }
-        var parentIds = rootComments.stream().map(Comment::getId).toArray(Long[]::new);
+        var parentIds = rootComments.stream().map(Comment::getId).toList();
         return commentRepository.findApprovedRepliesByParentIds(parentIds)
                 .collectList()
                 .map(allReplies -> {

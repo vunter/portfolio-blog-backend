@@ -114,6 +114,8 @@ public class CommentController {
                 .flatMap(user -> {
                     request.setAuthorName(user.getName() != null ? user.getName() : user.getUsername());
                     request.setAuthorEmail(user.getEmail());
+                    // UserResponse carries the id as String (JS-safe); the entity link is numeric
+                    request.setUserId(user.getId() != null ? Long.valueOf(user.getId()) : null);
                     return recaptchaService.verify(request.getRecaptchaToken(), "comment")
                             .then(commentService.createComment(slug, request));
                 });

@@ -27,6 +27,7 @@ class SiteSettingsServiceTest {
 
     @Mock private SiteSettingRepository repository;
     @Mock private IdService idService;
+    @Mock private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
 
     @InjectMocks
     private SiteSettingsService siteSettingsService;
@@ -39,6 +40,8 @@ class SiteSettingsServiceTest {
     void setUp() {
         ReflectionTestUtils.setField(siteSettingsService, "siteUrl", "https://catananti.dev");
         ReflectionTestUtils.setField(siteSettingsService, "activeProfile", "prod");
+        lenient().when(transactionalOperator.transactional(any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
 
         siteNameSetting = SiteSetting.builder()
                 .id(1L)
