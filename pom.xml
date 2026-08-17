@@ -49,7 +49,7 @@
 		<spring-cloud.version>2025.1.1</spring-cloud.version>
 		<!-- Override Boot-managed pgjdbc (4.0.6 manages 42.7.10, still vulnerable):
 		     42.7.11 fixes CVE-2026-42198 (SCRAM PBKDF2 iteration client-side DoS). -->
-		<postgresql.version>42.7.11</postgresql.version>
+		<postgresql.version>42.7.13</postgresql.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -65,15 +65,52 @@
 				<scope>import</scope>
 			</dependency>
 			<!-- Override Boot-managed netty (4.0.6 manages 4.2.12.Final, still vulnerable):
-			     4.2.15.Final fixes CVE-2026-42581/42579/42584 (HTTP request smuggling /
-			     info disclosure, fixed in 4.2.13.Final). netty-bom is imported first so it
-			     wins over the Spring Boot BOM. -->
+			     4.2.16.Final fixes the 2026-55xxx/56xxx/59xxx batch (ssl-ocsp, haproxy
+			     codec, transport — includes CVE-2026-56820, CVSS 9.1). netty-bom is
+			     imported first so it wins over the Spring Boot BOM. -->
 			<dependency>
 				<groupId>io.netty</groupId>
 				<artifactId>netty-bom</artifactId>
-				<version>4.2.15.Final</version>
+				<version>4.2.17.Final</version>
 				<type>pom</type>
 				<scope>import</scope>
+			</dependency>
+			<!-- httpcore5/httpclient5 arrive transitively via spring-cloud-vault-config.
+			     CVE-2026-54399/54428 (request smuggling in core5 < 5.4.3) and
+			     CVE-2026-64607 (client5 < 5.6.3) trip the CVSS>=7 gate. -->
+			<dependency>
+				<groupId>org.apache.httpcomponents.core5</groupId>
+				<artifactId>httpcore5</artifactId>
+				<version>5.4.3</version>
+			</dependency>
+			<dependency>
+				<groupId>org.apache.httpcomponents.core5</groupId>
+				<artifactId>httpcore5-h2</artifactId>
+				<version>5.4.3</version>
+			</dependency>
+			<dependency>
+				<groupId>org.apache.httpcomponents.client5</groupId>
+				<artifactId>httpclient5</artifactId>
+				<version>5.6.4</version>
+			</dependency>
+			<!-- scram comes transitively from r2dbc-postgresql at 3.2:
+			     CVE-2026-53712 (timing side channel, fixed in 3.3). -->
+			<dependency>
+				<groupId>com.ongres.scram</groupId>
+				<artifactId>scram-client</artifactId>
+				<version>3.4</version>
+			</dependency>
+			<dependency>
+				<groupId>com.ongres.scram</groupId>
+				<artifactId>scram-common</artifactId>
+				<version>3.4</version>
+			</dependency>
+			<!-- springdoc bundles the swagger-ui webjar, whose embedded DOMPurify 3.2.6
+			     carries the 2026 XSS batch. 5.32.x ships a patched DOMPurify. -->
+			<dependency>
+				<groupId>org.webjars</groupId>
+				<artifactId>swagger-ui</artifactId>
+				<version>5.32.13</version>
 			</dependency>
 			<dependency>
 				<groupId>org.apache.logging.log4j</groupId>
@@ -227,7 +264,7 @@
 		<dependency>
 			<groupId>org.springdoc</groupId>
 			<artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
-			<version>3.0.1</version>
+			<version>3.1.0</version>
 		</dependency>
 
 		<!-- Markdown Processing -->

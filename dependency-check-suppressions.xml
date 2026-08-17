@@ -25,4 +25,16 @@
         <cve>CVE-2026-41002</cve>
         <cve>CVE-2026-41004</cve>
     </suppress>
+
+    <!--
+      CVE-2026-53914 is a kotlin-gradle-plugin vulnerability (fixed in 2.4.20-Beta1).
+      Dependency-Check matches it against kotlin-stdlib/kotlin-stdlib-common via the
+      shared jetbrains:kotlin CPE. This is a Maven build; the Gradle plugin never
+      ships here and the stdlib artifacts do not contain the vulnerable code.
+    -->
+    <suppress>
+        <notes><![CDATA[CPE false positive: kotlin-gradle-plugin CVE matched against kotlin-stdlib artifacts pulled transitively (okhttp/mockwebserver). No Gradle tooling ships in this Maven build.]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/kotlin-stdlib.*$</packageUrl>
+        <cve>CVE-2026-53914</cve>
+    </suppress>
 </suppressions>
