@@ -180,15 +180,31 @@ public class PdfGenerationService {
      * on the Netty event loop before {@code @PostConstruct} fired).
      */
     private Mono<Browser> ensureBrowserReactive() {
-        Mono<Browser> current = browserMonoRef.get();
-        if (current != null) {
-            return current;
-        }
-        Mono<Browser> candidate = createBrowserMono();
-        if (browserMonoRef.compareAndSet(null, candidate)) {
-            return candidate;
-        }
-        return browserMonoRef.get();
+        return Mono.defer(() -> {
+            Mono<Browser> current = browserMonoRef.get();
+            if (current == null) {
+                Mono<Browser> candidate = createBrowserMono();
+                current = browserMonoRef.compareAndSet(null, candidate)
+                        ? candidate : browserMonoRef.get();
+            }
+            final Mono<Browser> used = current;
+            return used.flatMap(b -> {
+                if (b.isConnected()) {
+                    return Mono.just(b);
+                }
+                // The cached Mono holds a browser whose connection died after a
+                // successful init (sidecar restart, browser crash). Without this
+                // check every request replays the dead handle until an app
+                // restart — even once the sidecar is back. Drop it and connect
+                // fresh exactly once for this call.
+                browserMonoRef.compareAndSet(used, null);
+                Mono<Browser> fresh = createBrowserMono();
+                if (!browserMonoRef.compareAndSet(null, fresh)) {
+                    fresh = browserMonoRef.get();
+                }
+                return fresh;
+            });
+        });
     }
 
     /**

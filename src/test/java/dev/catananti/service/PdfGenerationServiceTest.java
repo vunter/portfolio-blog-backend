@@ -485,6 +485,31 @@ class PdfGenerationServiceTest {
     }
 
     @Test
+    @DisplayName("Should reconnect when the cached browser has died (sidecar restart)")
+    void reconnectsAfterBrowserDeath() {
+        PdfGenerationService service = new PdfGenerationService(blogMetrics);
+        String html = "<html><body><p>alive</p></body></html>";
+
+        StepVerifier.create(service.generatePdf(html, "A4", false))
+                .assertNext(bytes -> assertThat(new String(bytes, 0, 4)).isEqualTo("%PDF"))
+                .verifyComplete();
+
+        // Kill the underlying browser out from under the service — the remote
+        // sidecar restarting looks exactly like this to the Java client.
+        com.microsoft.playwright.Browser current =
+                (com.microsoft.playwright.Browser) org.springframework.test.util.ReflectionTestUtils
+                        .getField(service, "browser");
+        assertThat(current).isNotNull();
+        current.close();
+
+        // A cached Mono holding the dead connection would fail every request
+        // until an app restart. The service must notice and re-initialize.
+        StepVerifier.create(service.generatePdf(html, "A4", false))
+                .assertNext(bytes -> assertThat(new String(bytes, 0, 4)).isEqualTo("%PDF"))
+                .verifyComplete();
+    }
+
+    @Test
     @DisplayName("Should retry browser initialization on the next request instead of caching the failure")
     void browserFailureIsNotSticky() {
         PdfGenerationService remoteService = new PdfGenerationService(blogMetrics);
