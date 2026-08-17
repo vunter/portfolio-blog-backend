@@ -14,8 +14,11 @@ import java.util.UUID;
 
 /**
  * SEC-AH-02: Session token service for analytics proof-of-visit.
- * Issues short-lived, single-use tokens that prove a client loaded the site
- * before submitting analytics events. Prevents direct API abuse.
+ * Issues short-lived SESSION tokens that prove a client loaded the site before
+ * submitting analytics events. The token is reusable until its TTL — the client
+ * caches it against the returned expiresAt and attaches it to every event.
+ * Per-event uniqueness/abuse control is the PoW challenge's job (single-use,
+ * consumed on verification), not the token's.
  */
 @Service
 @Slf4j
@@ -52,20 +55,23 @@ public class AnalyticsTokenService {
     }
 
     /**
-     * Validate and consume a token. Single-use: deleted on validation.
+     * Validate a session token. NON-consuming: the token stays valid until its
+     * Redis TTL expires, matching the client contract (issueToken returns
+     * expiresAt and the frontend reuses the cached token for every event).
+     * The old getAndDelete here made every second analytics event 403.
      *
-     * @return Mono.empty() if valid, Mono.error() if invalid/expired/already used
+     * @return Mono.empty() if valid, Mono.error() if invalid/expired
      */
-    public Mono<Void> validateAndConsume(String token) {
+    public Mono<Void> validate(String token) {
         if (token == null || token.isBlank()) {
             return Mono.error(new IllegalArgumentException("error.analytics_token_required"));
         }
 
         String redisKey = TOKEN_KEY_PREFIX + token;
 
-        return redisTemplate.opsForValue().getAndDelete(redisKey)
+        return redisTemplate.opsForValue().get(redisKey)
                 .switchIfEmpty(Mono.error(new IllegalArgumentException("error.analytics_token_invalid")))
                 .then()
-                .doOnSuccess(v -> log.debug("Analytics token consumed"));
+                .doOnSuccess(v -> log.debug("Analytics token validated"));
     }
 }

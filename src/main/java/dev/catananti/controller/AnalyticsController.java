@@ -67,8 +67,9 @@ public class AnalyticsController {
                 })
                 // SEC-AH-04: Verify reCAPTCHA v3 token if present (non-destructive)
                 .then(verifyRecaptchaIfPresent(request.getRecaptchaToken()))
-                // SEC-AH-02: Validate and consume session token last (most valuable credential)
-                .then(tokenService.validateAndConsume(analyticsToken))
+                // SEC-AH-02: Validate the session token last (non-consuming — it is
+                // reusable until TTL; the PoW challenge above is the single-use part)
+                .then(tokenService.validate(analyticsToken))
                 .onErrorResume(e -> {
                     if (e instanceof org.springframework.web.server.ResponseStatusException) return Mono.error(e);
                     log.warn("Analytics token validation failed: {}", e.getMessage());

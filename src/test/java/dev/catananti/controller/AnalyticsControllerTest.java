@@ -75,14 +75,14 @@ class AnalyticsControllerTest {
             // Chain order: PoW -> reCAPTCHA -> Token -> Process
             when(powService.verifySolution(anyString(), anyString())).thenReturn(Mono.empty());
             when(recaptchaService.verify(anyString(), anyString())).thenReturn(Mono.empty());
-            when(tokenService.validateAndConsume(anyString())).thenReturn(Mono.empty());
+            when(tokenService.validate(anyString())).thenReturn(Mono.empty());
             when(analyticsService.trackEvent(any(), any())).thenReturn(Mono.empty());
 
             StepVerifier.create(controller.trackEvent(request, httpRequest))
                     .verifyComplete();
 
             verify(powService).verifySolution(request.getChallengeId(), request.getSolution());
-            verify(tokenService).validateAndConsume("valid-token-uuid");
+            verify(tokenService).validate("valid-token-uuid");
             verify(analyticsService).trackEvent(request, httpRequest);
         }
 
@@ -128,7 +128,7 @@ class AnalyticsControllerTest {
             when(httpRequest.getHeaders()).thenReturn(headers);
 
             when(powService.verifySolution(anyString(), anyString())).thenReturn(Mono.empty());
-            when(tokenService.validateAndConsume(anyString())).thenReturn(Mono.empty());
+            when(tokenService.validate(anyString())).thenReturn(Mono.empty());
             when(analyticsService.trackEvent(any(), any())).thenReturn(Mono.empty());
 
             StepVerifier.create(controller.trackEvent(request, httpRequest))
