@@ -387,7 +387,18 @@ public class PdfGenerationService {
             log.debug("PDF generated: {} bytes", pdfBytes.length);
             return pdfBytes;
             
+        } catch (PdfGenerationException e) {
+            throw e;
         } catch (Exception e) {
+            // The connection can die MID-conversion (sidecar restart) before
+            // isConnected() has flipped in ensureBrowserReactive — classify that
+            // as an infrastructure outage (503), not a document failure (500),
+            // and drop the cached browser so the next request reconnects.
+            if (browserInstance != null && !browserInstance.isConnected()) {
+                log.warn("Browser connection lost during PDF conversion: {}", e.getMessage());
+                browserMonoRef.set(null);
+                throw new PdfUnavailableException("PDF browser connection lost: " + e.getMessage(), e);
+            }
             log.error("Failed to generate PDF: {}", e.getMessage(), e);
             throw new PdfGenerationException("Failed to generate PDF: " + e.getMessage(), e);
         } finally {
