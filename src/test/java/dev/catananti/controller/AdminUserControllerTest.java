@@ -2,6 +2,7 @@ package dev.catananti.controller;
 
 import dev.catananti.config.PaginationConfig;
 import dev.catananti.dto.*;
+import dev.catananti.exception.ResourceNotFoundException;
 import dev.catananti.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -226,26 +227,6 @@ class AdminUserControllerTest {
     }
 
     @Nested
-    @DisplayName("GET /api/v1/admin/users/email/{email} - Get by Email")
-    class GetUserByEmail {
-
-        @Test
-        @DisplayName("Should return user by email")
-        void shouldReturnUserByEmail() {
-            when(userService.getUserByEmail("dev@catananti.dev"))
-                    .thenReturn(Mono.just(devUser));
-
-            StepVerifier.create(controller.getUserByEmail("dev@catananti.dev"))
-                    .assertNext(response -> {
-                        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-                        assertThat(response.getBody()).isNotNull();
-                        assertThat(response.getBody().getRole()).isEqualTo("DEV");
-                    })
-                    .verifyComplete();
-        }
-    }
-
-    @Nested
     @DisplayName("POST /api/v1/admin/users - Create User")
     class CreateUser {
 
@@ -417,47 +398,63 @@ class AdminUserControllerTest {
         }
     }
 
+    // AUD19C-5: GET /stats tests removed with the orphan endpoint.
+
     @Nested
-    @DisplayName("GET /api/v1/admin/users/stats - User Statistics")
-    class UserStats {
+    @DisplayName("GET /api/v1/admin/users/{id}/activity - User Activity (AUD19-F140)")
+    class UserActivity {
 
         @Test
-        @DisplayName("Should return user statistics with all role counts")
-        void shouldReturnUserStats() {
-            when(userService.getTotalUsers()).thenReturn(Mono.just(25L));
-            when(userService.countUsersByRole("ADMIN")).thenReturn(Mono.just(2L));
-            when(userService.countUsersByRole("DEV")).thenReturn(Mono.just(5L));
-            when(userService.countUsersByRole("VIEWER")).thenReturn(Mono.just(10L));
+        @DisplayName("Should return activity summary with all four fields")
+        void shouldReturnUserActivity() {
+            LocalDateTime lastLogin = LocalDateTime.now().minusHours(2);
+            LocalDateTime accountCreated = LocalDateTime.now().minusDays(30);
+            when(userService.getUserActivity(devId))
+                    .thenReturn(Mono.just(new UserActivityResponse(lastLogin, accountCreated, 7L, 12L)));
 
-            StepVerifier.create(controller.getUserStats())
+            StepVerifier.create(controller.getUserActivity(devId))
                     .assertNext(response -> {
                         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-                        var stats = response.getBody();
-                        assertThat(stats).isNotNull();
-                        assertThat(stats.getTotal()).isEqualTo(25);
-                        assertThat(stats.getAdmins()).isEqualTo(2);
-                        assertThat(stats.getDevs()).isEqualTo(5);
-                        assertThat(stats.getEditors()).isEqualTo(0);
-                        assertThat(stats.getViewers()).isEqualTo(10);
+                        var body = response.getBody();
+                        assertThat(body).isNotNull();
+                        assertThat(body.lastLogin()).isEqualTo(lastLogin);
+                        assertThat(body.accountCreated()).isEqualTo(accountCreated);
+                        assertThat(body.articlesCreated()).isEqualTo(7L);
+                        assertThat(body.commentsPosted()).isEqualTo(12L);
+                    })
+                    .verifyComplete();
+
+            verify(userService).getUserActivity(devId);
+        }
+
+        @Test
+        @DisplayName("Should allow null lastLogin for users who never logged in")
+        void shouldAllowNullLastLogin() {
+            LocalDateTime accountCreated = LocalDateTime.now().minusDays(3);
+            when(userService.getUserActivity(1004L))
+                    .thenReturn(Mono.just(new UserActivityResponse(null, accountCreated, 0L, 0L)));
+
+            StepVerifier.create(controller.getUserActivity(1004L))
+                    .assertNext(response -> {
+                        var body = response.getBody();
+                        assertThat(body).isNotNull();
+                        assertThat(body.lastLogin()).isNull();
+                        assertThat(body.accountCreated()).isEqualTo(accountCreated);
+                        assertThat(body.articlesCreated()).isZero();
+                        assertThat(body.commentsPosted()).isZero();
                     })
                     .verifyComplete();
         }
 
         @Test
-        @DisplayName("Should handle zero users")
-        void shouldHandleZeroUsers() {
-            when(userService.getTotalUsers()).thenReturn(Mono.just(0L));
-            when(userService.countUsersByRole("ADMIN")).thenReturn(Mono.just(0L));
-            when(userService.countUsersByRole("DEV")).thenReturn(Mono.just(0L));
-            when(userService.countUsersByRole("VIEWER")).thenReturn(Mono.just(0L));
+        @DisplayName("Should propagate not-found error for unknown user (handled as 404)")
+        void shouldErrorForUnknownUser() {
+            when(userService.getUserActivity(9999L))
+                    .thenReturn(Mono.error(new ResourceNotFoundException("error.user_not_found")));
 
-            StepVerifier.create(controller.getUserStats())
-                    .assertNext(response -> {
-                        var stats = response.getBody();
-                        assertThat(stats).isNotNull();
-                        assertThat(stats.getTotal()).isZero();
-                    })
-                    .verifyComplete();
+            StepVerifier.create(controller.getUserActivity(9999L))
+                    .expectError(ResourceNotFoundException.class)
+                    .verify();
         }
     }
 

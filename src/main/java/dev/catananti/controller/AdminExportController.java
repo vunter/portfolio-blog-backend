@@ -1,6 +1,5 @@
 package dev.catananti.controller;
 
-import dev.catananti.dto.BlogExport;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.service.ExportImportService;
 import dev.catananti.service.ExportImportService.ImportResult;
@@ -41,19 +40,8 @@ public class AdminExportController {
     @Value("${app.export.max-export-articles:10000}")
     private int maxExportArticles;
 
-    @GetMapping
-    @Operation(summary = "Export blog data", description = "Export all articles and tags as JSON")
-    public Mono<ResponseEntity<BlogExport>> exportBlog(
-            @Parameter(description = "Name of the person exporting")
-            @RequestParam(defaultValue = "Admin") @jakarta.validation.constraints.Size(max = 100) @jakarta.validation.constraints.Pattern(regexp = "^[a-zA-Z0-9 _-]+$", message = "exportedBy must contain only alphanumeric characters, spaces, hyphens, and underscores") String exportedBy) {
-        log.info("Exporting blog data");
-        // Mono.defer so the export pipeline (and its "Export started" log) is only
-        // built AFTER the limit check passes — eager evaluation would otherwise start
-        // the export even when it is rejected over-limit.
-        return checkExportLimit()
-                .then(Mono.defer(() -> exportImportService.exportAll(exportedBy)))
-                .map(ResponseEntity::ok);
-    }
+    // AUD19C-5: root GET /admin/export and GET /admin/export/stats removed —
+    // verified zero callers; the frontend uses /json, /markdown and /import only.
 
     @GetMapping("/json")
     @Operation(summary = "Export as JSON file", description = "Download blog data as a JSON file")
@@ -105,15 +93,6 @@ public class AdminExportController {
                         "tagsImported", result.tagsImported(),
                         "errors", result.errors()
                 )));
-    }
-
-    @GetMapping("/stats")
-    @Operation(summary = "Get export preview", description = "Get statistics about what will be exported")
-    public Mono<ResponseEntity<BlogExport.BlogStats>> getExportStats() {
-        log.debug("Fetching export statistics");
-        return exportImportService.exportAll("preview")
-                .map(BlogExport::getStats)
-                .map(ResponseEntity::ok);
     }
 
     private Mono<Void> checkExportLimit() {

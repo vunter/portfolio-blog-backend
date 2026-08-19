@@ -39,39 +39,38 @@ public class AdminArticleVersionController {
     @GetMapping
     @Operation(summary = "Get version history", description = "Get all versions of an article")
     public Mono<ResponseEntity<Map<String, Object>>> getVersionHistory(
-            @PathVariable Long articleId) {
+            @PathVariable Long articleId,
+            Authentication authentication) {
         log.debug("Fetching version history for articleId={}", articleId);
-        return versionService.getVersionHistory(articleId)
-                .collectList()
-                .zipWith(versionService.getVersionCount(articleId))
-                .map(tuple -> {
-                    List<ArticleVersionResponse> versions = tuple.getT1();
-                    Long count = tuple.getT2();
-                    return ResponseEntity.ok(Map.of(
-                            "articleId", articleId,
-                            "versions", versions,
-                            "totalVersions", count
-                    ));
-                });
-    }
-
-    @GetMapping("/latest")
-    @Operation(summary = "Get latest version", description = "Get the most recent version of an article")
-    public Mono<ResponseEntity<ArticleVersionResponse>> getLatestVersion(
-            @PathVariable Long articleId) {
-        log.debug("Fetching latest version for articleId={}", articleId);
-        return versionService.getLatestVersion(articleId)
-                .map(ResponseEntity::ok);
+        // AUD18-JM7: author-scoped — versions carry full article content drafts.
+        // Mono.defer so no version query is even assembled before the access check passes.
+        return requireArticleAccess(articleId, authentication)
+                .then(Mono.defer(() -> versionService.getVersionHistory(articleId)
+                        .collectList()
+                        .zipWith(versionService.getVersionCount(articleId))
+                        .map(tuple -> {
+                            List<ArticleVersionResponse> versions = tuple.getT1();
+                            Long count = tuple.getT2();
+                            return ResponseEntity.ok(Map.of(
+                                    // AUD19C-SNOW: stringify Snowflake id for JS clients
+                                    "articleId", String.valueOf(articleId),
+                                    "versions", versions,
+                                    "totalVersions", count
+                            ));
+                        })));
     }
 
     @GetMapping("/{versionNumber}")
     @Operation(summary = "Get specific version", description = "Get a specific version of an article")
     public Mono<ResponseEntity<ArticleVersionResponse>> getVersion(
             @PathVariable Long articleId,
-            @PathVariable Integer versionNumber) {
+            @PathVariable Integer versionNumber,
+            Authentication authentication) {
         log.debug("Fetching version {} for articleId={}", versionNumber, articleId);
-        return versionService.getVersion(articleId, versionNumber)
-                .map(ResponseEntity::ok);
+        // AUD18-JM7: author-scoped
+        return requireArticleAccess(articleId, authentication)
+                .then(Mono.defer(() -> versionService.getVersion(articleId, versionNumber)
+                        .map(ResponseEntity::ok)));
     }
 
     @PostMapping("/{versionNumber}/restore")
@@ -103,7 +102,8 @@ public class AdminArticleVersionController {
                         }))
                 .map(article -> ResponseEntity.ok(Map.of(
                         "message", "Article restored to version " + versionNumber,
-                        "articleId", articleId,
+                        // AUD19C-SNOW: stringify Snowflake id for JS clients
+                        "articleId", String.valueOf(articleId),
                         "restoredVersion", versionNumber,
                         "currentSlug", article.getSlug()
                 )));
@@ -116,9 +116,37 @@ public class AdminArticleVersionController {
             @Parameter(description = "Version number to compare from")
             @RequestParam Integer fromVersion,
             @Parameter(description = "Version number to compare to")
-            @RequestParam Integer toVersion) {
+            @RequestParam Integer toVersion,
+            Authentication authentication) {
         log.debug("Comparing versions {} and {} for articleId={}", fromVersion, toVersion, articleId);
-        return versionService.compareVersions(articleId, fromVersion, toVersion)
-                .map(ResponseEntity::ok);
+        // AUD18-JM7: author-scoped
+        return requireArticleAccess(articleId, authentication)
+                .then(Mono.defer(() -> versionService.compareVersions(articleId, fromVersion, toVersion)
+                        .map(ResponseEntity::ok)));
+    }
+
+    /**
+     * AUD18-JM7: shared author-scoping guard, mirroring the check restoreVersion already
+     * had: ADMIN may access any article's versions; DEV only articles they authored.
+     * 404 when the user or article is missing, 403 otherwise.
+     */
+    private Mono<Void> requireArticleAccess(Long articleId, Authentication authentication) {
+        return userRepository.findByEmail(PiiMasker.extractEmail(authentication))
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.user_not_found")))
+                .flatMap(user -> articleRepository.findById(articleId)
+                        .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.article_not_found")))
+                        .flatMap(article -> {
+                            boolean isAdmin = "ADMIN".equals(user.getRole());
+                            boolean isAuthor = article.getAuthorId() != null
+                                    && article.getAuthorId().equals(user.getId());
+                            if (!isAdmin && !isAuthor) {
+                                log.warn("User {} attempted to access versions of articleId={} without ownership",
+                                        PiiMasker.maskEmail(user.getEmail()), articleId);
+                                return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN,
+                                        "error.not_article_owner"));
+                            }
+                            return Mono.empty();
+                        }))
+                .then();
     }
 }

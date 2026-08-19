@@ -130,17 +130,29 @@ class ImageProcessingServiceTest {
         }
 
         @Test
-        @DisplayName("should handle invalid image data gracefully")
-        void shouldHandleInvalidImageData() {
+        @DisplayName("AUD18-JB6: should REJECT undecodable image data with 400 instead of storing raw bytes")
+        void shouldRejectInvalidImageData() {
             byte[] invalidData = new byte[]{0, 0, 0, 0};
 
             StepVerifier.create(service.processImage(invalidData, "image/jpeg"))
-                    .assertNext(variants -> {
-                        assertThat(variants).containsOnlyKeys("");
-                        // Should return raw bytes as fallback
-                        assertThat(variants.get("").data()).isEqualTo(invalidData);
-                    })
-                    .verifyComplete();
+                    .expectErrorMatches(e ->
+                            e instanceof org.springframework.web.server.ResponseStatusException rse
+                                    && rse.getStatusCode().value() == 400)
+                    .verify();
+        }
+
+        @Test
+        @DisplayName("AUD18-JB6: should REJECT garbage bytes with a valid JPEG magic prefix")
+        void shouldRejectCorruptJpegBytes() {
+            // Passes a magic-bytes check (FF D8 FF) but is not a decodable image —
+            // exactly the payload the raw-bytes fallback used to store verbatim.
+            byte[] corrupt = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 0x00, 0x11, 0x22, 0x33};
+
+            StepVerifier.create(service.processImage(corrupt, "image/jpeg"))
+                    .expectErrorMatches(e ->
+                            e instanceof org.springframework.web.server.ResponseStatusException rse
+                                    && rse.getStatusCode().value() == 400)
+                    .verify();
         }
     }
 }

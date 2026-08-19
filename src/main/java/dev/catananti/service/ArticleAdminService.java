@@ -64,6 +64,22 @@ public class ArticleAdminService {
     private static final String RSS_CACHE_KEY = "rss:feed";
     private static final String SITEMAP_CACHE_KEY = "sitemap:xml";
 
+    /**
+     * AUD19C-2: editorial review gate (style cf. AdminArticleController#maxBulkSize).
+     * When true, non-ADMIN users cannot transition an article to PUBLISHED through any
+     * path except the approve-review flow (which is ADMIN-only anyway) — they must
+     * submit for review instead. Default false keeps today's behavior.
+     */
+    @org.springframework.beans.factory.annotation.Value("${app.articles.require-review-for-publish:false}")
+    private boolean requireReviewForPublish;
+
+    /**
+     * AUD19C-1: tolerated clock skew when validating that a scheduled publication
+     * date is in the future — editors clicking "schedule for now" plus request
+     * latency must not bounce with a validation error.
+     */
+    private static final java.time.Duration SCHEDULE_PAST_SKEW = java.time.Duration.ofMinutes(1);
+
     // ==================== ADMIN CRUD ====================
 
     public Mono<PageResponse<ArticleResponse>> getAllArticles(int page, int size, String status, String sort) {
@@ -177,8 +193,12 @@ public class ArticleAdminService {
         Mono<Article> publish = articleRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", id)))
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
+                // AUD19C-2: review gate — when enabled, only ADMINs publish directly.
+                .flatMap(article -> verifyPublishAllowed(article.getStatus(), false).thenReturn(article))
                 .flatMap(article -> {
                     article.setStatus(ArticleStatus.PUBLISHED);
+                    // AUD19C-1: publishing kills any stale schedule left on the row.
+                    article.setScheduledAt(null);
                     // Preserve the original publish timestamp on republish so feed/RSS
                     // ordering is not shuffled every time an already-published article is
                     // re-published.
@@ -188,14 +208,11 @@ public class ArticleAdminService {
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
                 })
-                .doOnSuccess(a -> {
-                    log.info("Article published: {}", a.getSlug());
-                    notificationEventService.articlePublished(a.getTitle(), a.getSlug());
-                });
+                .doOnSuccess(a -> log.info("Article published: {}", a.getSlug()));
         return transactionalOperator.transactional(publish)
-                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
-                        .then(notifySubscribersAboutNewArticle(article))
-                        .thenReturn(article))
+                // AUD19C-2: shared post-commit publish side effects (SSE + caches +
+                // notified_at-gated subscriber fan-out).
+                .flatMap(this::applyPublishSideEffects)
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -207,6 +224,9 @@ public class ArticleAdminService {
                 .flatMap(article -> verifyOwnership(article).thenReturn(article))
                 .flatMap(article -> {
                     article.setStatus(ArticleStatus.DRAFT);
+                    // AUD19C-1: unpublishing must clear any schedule residue, otherwise the
+                    // scheduler could resurrect the article from a stale scheduled_at.
+                    article.setScheduledAt(null);
                     article.setUpdatedAt(LocalDateTime.now());
                     return articleRepository.save(article);
                 })
@@ -254,10 +274,24 @@ public class ArticleAdminService {
      * {@link #createArticle(ArticleRequest)} to reduce nesting (ARCH).
      */
     private Mono<ArticleResponse> buildAndSaveArticle(ArticleRequest request, Long authorId, List<Tag> tags) {
+        // AUD19C-1: create-side auto-promotion kept as-is (a scheduledAt on a
+        // non-PUBLISHED create means "schedule it"); the update path deliberately
+        // does NOT auto-promote — see updateArticle.
         ArticleStatus status = ArticleStatus.fromString(request.getStatus(), ArticleStatus.DRAFT);
 
         if (request.getScheduledAt() != null && status != ArticleStatus.PUBLISHED) {
             status = ArticleStatus.SCHEDULED;
+        }
+
+        // AUD19C-1: same schedule validation as the update path — a SCHEDULED article
+        // must carry a date, and that date must not already be in the past.
+        if (status == ArticleStatus.SCHEDULED) {
+            if (request.getScheduledAt() == null) {
+                return Mono.error(new IllegalArgumentException("error.scheduled_at_required"));
+            }
+            if (isInPast(request.getScheduledAt())) {
+                return Mono.error(new IllegalArgumentException("error.scheduled_at_past"));
+            }
         }
 
         Article article = Article.builder()
@@ -270,7 +304,9 @@ public class ArticleAdminService {
                 .coverImageUrl(request.getCoverImageUrl())
                 .authorId(authorId)
                 .status(status)
-                .scheduledAt(request.getScheduledAt())
+                // AUD19C-1: scheduled_at only carries meaning for SCHEDULED articles —
+                // never persist it alongside another status (stale-schedule residue).
+                .scheduledAt(status == ArticleStatus.SCHEDULED ? request.getScheduledAt() : null)
                 .readingTimeMinutes(calculateReadingTime(request.getContent()))
                 .seoTitle(htmlSanitizerService.stripHtml(request.getSeoTitle()))
                 .seoDescription(htmlSanitizerService.stripHtml(request.getSeoDescription()))
@@ -283,7 +319,12 @@ public class ArticleAdminService {
             article.setPublishedAt(LocalDateTime.now());
         }
 
-        return articleRepository.save(article)
+        // AUD19C-2: review gate applies to create-as-PUBLISHED as well.
+        Mono<Void> publishGate = article.getStatus() == ArticleStatus.PUBLISHED
+                ? verifyPublishAllowed(null, false)
+                : Mono.empty();
+
+        return publishGate.then(articleRepository.save(article))
                 .onErrorResume(DataIntegrityViolationException.class, ex ->
                         Mono.error(new DuplicateResourceException("Article", "slug", request.getSlug())))
                 .flatMap(saved -> {
@@ -293,15 +334,17 @@ public class ArticleAdminService {
                     return saveArticleTags(saved.getId(), tags)
                             .then(Mono.just(saved));
                 })
-                .doOnSuccess(a -> {
-                    log.info("Article created: {} (status: {})", a.getSlug(), a.getStatus());
+                .doOnSuccess(a -> log.info("Article created: {} (status: {})", a.getSlug(), a.getStatus()))
+                .flatMap(a -> {
                     if (a.getStatus() == ArticleStatus.PUBLISHED) {
-                        notificationEventService.articlePublished(a.getTitle(), a.getSlug());
-                    } else {
-                        notificationEventService.articleCreated(a.getTitle(), a.getSlug());
+                        // AUD19C-2: creating directly as PUBLISHED previously sent no
+                        // subscriber e-mail and no fan-out — route through the shared
+                        // side effects (SSE + caches + gated e-mail).
+                        return applyPublishSideEffects(a);
                     }
+                    notificationEventService.articleCreated(a.getTitle(), a.getSlug());
+                    return invalidateArticleAndFeedCaches(a.getSlug()).thenReturn(a);
                 })
-                .flatMap(a -> invalidateArticleAndFeedCaches(a.getSlug()).thenReturn(a))
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -353,14 +396,45 @@ public class ArticleAdminService {
                                         : Mono.empty());
                     }
 
+                    // When the request omits the status, keep the article's current
+                    // status instead of silently demoting a PUBLISHED article to DRAFT.
+                    // AUD19C-1 (documented choice): unlike the create path, the update
+                    // path does NOT auto-promote to SCHEDULED when a scheduledAt is
+                    // present — the editor's explicit status always wins on update.
+                    final ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), article.getStatus());
+                    final ArticleStatus oldStatus = article.getStatus();
+                    final boolean publishTransition =
+                            oldStatus != ArticleStatus.PUBLISHED && newStatus == ArticleStatus.PUBLISHED;
+
+                    // AUD19C-2: gate transitions to PUBLISHED. The hard REVIEW rule is
+                    // enforced here (a non-ADMIN must not flip REVIEW→PUBLISHED via PUT;
+                    // that transition belongs to approveReview) in addition to the
+                    // require-review-for-publish flag.
+                    Mono<Void> publishGate = publishTransition
+                            ? verifyPublishAllowed(oldStatus, true)
+                            : Mono.empty();
+
                     // Defer all entity mutations until after the slug check passes.
                     // Otherwise an error path can leave the entity in a partially-mutated
                     // state that a retry could persist.
-                    return slugCheck.then(Mono.defer(() -> {
-                        // When the request omits the status, keep the article's current
-                        // status instead of silently demoting a PUBLISHED article to DRAFT.
-                        ArticleStatus newStatus = ArticleStatus.fromString(request.getStatus(), article.getStatus());
-                        ArticleStatus oldStatus = article.getStatus();
+                    return slugCheck.then(publishGate).then(Mono.defer(() -> {
+                        // AUD19C-1: scheduledAt handling on update.
+                        if (newStatus == ArticleStatus.SCHEDULED) {
+                            LocalDateTime effectiveSchedule = request.getScheduledAt() != null
+                                    ? request.getScheduledAt()
+                                    : article.getScheduledAt();
+                            if (effectiveSchedule == null) {
+                                return Mono.error(new IllegalArgumentException("error.scheduled_at_required"));
+                            }
+                            if (isInPast(effectiveSchedule)) {
+                                return Mono.error(new IllegalArgumentException("error.scheduled_at_past"));
+                            }
+                            article.setScheduledAt(effectiveSchedule);
+                        } else {
+                            // Any non-SCHEDULED status kills a stale schedule, otherwise the
+                            // scheduler would later fire (and e-mail-blast) on a leftover date.
+                            article.setScheduledAt(null);
+                        }
 
                         article.setSlug(request.getSlug());
                         article.setTitle(htmlSanitizerService.stripHtml(request.getTitle()));
@@ -381,7 +455,9 @@ public class ArticleAdminService {
                             article.setVersion(request.getVersion());
                         }
 
-                        if (oldStatus != ArticleStatus.PUBLISHED && newStatus == ArticleStatus.PUBLISHED) {
+                        // AUD19C-2: set-if-null, mirroring publishArticle — republishing via
+                        // PUT must not shuffle feed/RSS ordering.
+                        if (publishTransition && article.getPublishedAt() == null) {
                             article.setPublishedAt(LocalDateTime.now());
                         }
 
@@ -413,6 +489,13 @@ public class ArticleAdminService {
                                                 cacheService.invalidateArticle(savedSlug));
                                 return invalidate.thenReturn(saved);
                             })
+                            // AUD19C-2: publishing via PUT previously fired NO SSE event and
+                            // NO subscriber e-mail — route through the shared side effects.
+                            // Note: updateArticle is annotation-@Transactional, so unlike
+                            // PATCH publish/approveReview these side effects run within the
+                            // update transaction; the notified_at CAS still guarantees the
+                            // fan-out happens at most once per article.
+                            .flatMap(saved -> publishTransition ? applyPublishSideEffects(saved) : Mono.just(saved))
                             .doOnSuccess(a -> log.info("Article updated: {}", a.getSlug()))
                             .flatMap(articleService::enrichArticleWithMetadata)
                             .map(articleService::mapToResponse);
@@ -428,19 +511,44 @@ public class ArticleAdminService {
             return Mono.error(new IllegalArgumentException("error.invalid_status"));
         }
 
+        // AUD19C-1: SCHEDULED is not a valid bulk target — the bulk request carries no
+        // dates, so it would either strand articles with scheduled_at NULL (never
+        // published) or re-arm a stale leftover date (surprise publish + e-mail blast).
+        if (targetStatus == ArticleStatus.SCHEDULED) {
+            return Mono.error(new IllegalArgumentException("error.bulk_scheduled_not_allowed"));
+        }
+
         // R2DBC transactions are bound to a single connection, so concurrent flatMap
         // would not be atomic. Use concatMap to serialize updates within the tx.
         return getCurrentUser()
                 .flatMap(user -> Flux.fromIterable(ids)
                         .concatMap(id -> articleRepository.findById(id)
-                                .filter(article -> isAdmin(user) || isOwner(article, user))
+                                // Bulk semantics: silently skip articles the caller may not
+                                // touch. AUD19C-2 extends the same silent filter to publish
+                                // transitions a non-ADMIN is not allowed to make (review
+                                // gate flag, and REVIEW articles which only approveReview
+                                // may publish).
+                                .filter(article -> isAdmin(user)
+                                        || (isOwner(article, user)
+                                            && isBulkTransitionAllowedForNonAdmin(article, targetStatus)))
                                 .flatMap(article -> {
+                                    boolean publishTransition = targetStatus == ArticleStatus.PUBLISHED
+                                            && article.getStatus() != ArticleStatus.PUBLISHED;
                                     article.setStatus(targetStatus);
+                                    // AUD19C-1: target is never SCHEDULED here (rejected above),
+                                    // so any leftover schedule is stale — clear it.
+                                    article.setScheduledAt(null);
                                     article.setUpdatedAt(LocalDateTime.now());
                                     if (targetStatus == ArticleStatus.PUBLISHED && article.getPublishedAt() == null) {
                                         article.setPublishedAt(LocalDateTime.now());
                                     }
-                                    return articleRepository.save(article);
+                                    return articleRepository.save(article)
+                                            // AUD19C-2: bulk publish previously fired no SSE and
+                                            // no subscriber e-mail — apply the shared side effects
+                                            // per article (the notified_at CAS keeps it once-only).
+                                            .flatMap(saved -> publishTransition
+                                                    ? applyPublishSideEffects(saved)
+                                                    : Mono.just(saved));
                                 }))
                         .count())
                 .flatMap(count -> Mono.when(invalidateFeedCaches(), cacheService.invalidateAllArticles())
@@ -501,7 +609,13 @@ public class ArticleAdminService {
                         return Mono.error(new IllegalStateException("Only articles in REVIEW status can be approved"));
                     }
                     article.setStatus(ArticleStatus.PUBLISHED);
-                    article.setPublishedAt(LocalDateTime.now());
+                    // AUD19C-2: set-if-null (was an unconditional overwrite) — re-approving
+                    // a previously published article must not shuffle feed/RSS ordering.
+                    if (article.getPublishedAt() == null) {
+                        article.setPublishedAt(LocalDateTime.now());
+                    }
+                    // AUD19C-1: publishing kills any stale schedule left on the row.
+                    article.setScheduledAt(null);
                     article.setUpdatedAt(LocalDateTime.now());
 
                     ArticleReview review = ArticleReview.builder()
@@ -516,14 +630,11 @@ public class ArticleAdminService {
                     return articleRepository.save(article)
                             .flatMap(saved -> articleReviewRepository.save(review).thenReturn(saved));
                 }))
-                .doOnSuccess(a -> {
-                    log.info("Article review approved: {}", a.getSlug());
-                    notificationEventService.articlePublished(a.getTitle(), a.getSlug());
-                });
+                .doOnSuccess(a -> log.info("Article review approved: {}", a.getSlug()));
         return transactionalOperator.transactional(approve)
-                .flatMap(article -> invalidateArticleAndFeedCaches(article.getSlug())
-                        .then(notifySubscribersAboutNewArticle(article))
-                        .thenReturn(article))
+                // AUD19C-2: shared post-commit publish side effects (SSE + caches +
+                // notified_at-gated subscriber fan-out).
+                .flatMap(this::applyPublishSideEffects)
                 .flatMap(articleService::enrichArticleWithMetadata)
                 .map(articleService::mapToResponse);
     }
@@ -562,6 +673,83 @@ public class ArticleAdminService {
 
     public Flux<ArticleReview> getReviewHistory(Long id) {
         return articleReviewRepository.findByArticleIdOrderByCreatedAtDesc(id);
+    }
+
+    // ==================== PUBLISH SIDE EFFECTS (AUD19C-2) ====================
+
+    /**
+     * Centralized side effects for every transition to PUBLISHED — SSE broadcast,
+     * article/feed cache invalidation, and the subscriber e-mail fan-out.
+     *
+     * <p>The fan-out is gated by an atomic compare-and-swap on {@code notified_at}
+     * ({@link ArticleRepository#claimSubscriberNotification}): only the caller that
+     * flips it from NULL wins (rows == 1) and sends the announcement. Republishing
+     * through any path — PATCH publish, PUT update, bulk status, re-approval, the
+     * scheduler racing a manual publish — therefore never e-mails subscribers twice.</p>
+     *
+     * <p>TX-07 style: callers that use {@code transactionalOperator} (PATCH publish,
+     * approveReview, the scheduler's claim) invoke this after commit so no pool
+     * connection is held during SMTP sends. Annotation-transactional callers
+     * (PUT update, bulk, create-as-published) invoke it inside their transaction;
+     * the CAS semantics are identical either way.</p>
+     */
+    public Mono<Article> applyPublishSideEffects(Article article) {
+        notificationEventService.articlePublished(article.getTitle(), article.getSlug());
+        return invalidateArticleAndFeedCaches(article.getSlug())
+                .then(articleRepository.claimSubscriberNotification(article.getId(), LocalDateTime.now()))
+                .defaultIfEmpty(0)
+                .flatMap(rows -> {
+                    if (rows != null && rows > 0) {
+                        return notifySubscribersAboutNewArticle(article);
+                    }
+                    log.debug("Subscribers already notified about article {} — skipping e-mail fan-out",
+                            article.getSlug());
+                    return Mono.empty();
+                })
+                .thenReturn(article);
+    }
+
+    /**
+     * AUD19C-2: gate on transitions to PUBLISHED. ADMINs always pass.
+     * For non-ADMINs:
+     * <ul>
+     *   <li>when {@code app.articles.require-review-for-publish} is true, every direct
+     *       publish is rejected (403) — the review workflow is the only way in;</li>
+     *   <li>independently of the flag, when {@code enforceReviewTransitionRule} is set
+     *       (PUT update), a REVIEW article cannot be flipped to PUBLISHED — that
+     *       transition belongs to {@link #approveReview} (ADMIN-only).</li>
+     * </ul>
+     * Mirrors {@link #verifyOwnership}: an empty current user (no auth context, e.g.
+     * internal callers) passes through.
+     */
+    private Mono<Void> verifyPublishAllowed(ArticleStatus currentStatus, boolean enforceReviewTransitionRule) {
+        return getCurrentUser().flatMap(user -> {
+            if (isAdmin(user)) {
+                return Mono.<Void>empty();
+            }
+            if (requireReviewForPublish) {
+                return Mono.error(new AccessDeniedException(
+                        "Publishing requires review approval"));
+            }
+            if (enforceReviewTransitionRule && currentStatus == ArticleStatus.REVIEW) {
+                return Mono.error(new AccessDeniedException(
+                        "Articles in review can only be published through review approval"));
+            }
+            return Mono.<Void>empty();
+        });
+    }
+
+    /** AUD19C-2: bulk variant of the publish gate — used as a silent per-article filter. */
+    private boolean isBulkTransitionAllowedForNonAdmin(Article article, ArticleStatus targetStatus) {
+        if (targetStatus != ArticleStatus.PUBLISHED) {
+            return true;
+        }
+        return !requireReviewForPublish && article.getStatus() != ArticleStatus.REVIEW;
+    }
+
+    /** AUD19C-1: schedule-date pastness check with a small tolerated clock skew. */
+    private boolean isInPast(LocalDateTime scheduledAt) {
+        return scheduledAt.isBefore(LocalDateTime.now().minus(SCHEDULE_PAST_SKEW));
     }
 
     // ==================== PRIVATE HELPERS ====================

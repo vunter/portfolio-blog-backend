@@ -75,15 +75,6 @@ public class BookmarkService {
                 });
     }
 
-    public Mono<Boolean> isBookmarked(String visitorId, String articleSlug) {
-        String hashedId = hashVisitorId(visitorId);
-        return articleRepository.findBySlug(articleSlug)
-                .flatMap(article -> bookmarkRepository.findByArticleIdAndVisitorHash(article.getId(), hashedId)
-                        .map(_ -> true)
-                        .defaultIfEmpty(false))
-                .defaultIfEmpty(false);
-    }
-
     public Mono<Boolean> addBookmark(String visitorId, String articleSlug) {
         String hashedId = hashVisitorId(visitorId);
         return articleRepository.findBySlug(articleSlug)

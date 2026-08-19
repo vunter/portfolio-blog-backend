@@ -6,7 +6,7 @@ import dev.catananti.dto.ArticleRequest;
 import dev.catananti.dto.ArticleResponse;
 import dev.catananti.dto.BulkStatusRequest;
 import dev.catananti.dto.PageResponse;
-import dev.catananti.entity.ArticleReview;
+import dev.catananti.dto.ArticleReviewResponse;
 import dev.catananti.entity.ArticleStatus;
 import dev.catananti.service.ArticleAdminService;
 import dev.catananti.service.ArticleTranslationService;
@@ -143,8 +143,11 @@ public class AdminArticleController {
     }
 
     @GetMapping("/{id}/reviews")
-    public Flux<ArticleReview> getReviews(@PathVariable Long id) {
-        return articleAdminService.getReviewHistory(id);
+    public Flux<ArticleReviewResponse> getReviews(@PathVariable Long id) {
+        // AUD19C-3: map to the String-id DTO — raw ArticleReview exposed Long snowflake
+        // ids that lose precision in JS clients.
+        return articleAdminService.getReviewHistory(id)
+                .map(ArticleReviewResponse::from);
     }
 
     // ==================== TRANSLATION ENDPOINTS ====================
@@ -175,15 +178,8 @@ public class AdminArticleController {
         return articleTranslationService.getAvailableLocales(id).collectList();
     }
 
-    @GetMapping("/{id}/translations/{locale}")
-    public Mono<ResponseEntity<ArticleI18nResponse>> getTranslation(
-            @PathVariable Long id,
-            @PathVariable String locale) {
-        return articleTranslationService.getTranslation(id, locale)
-                .map(ArticleI18nResponse::from)
-                .map(ResponseEntity::ok)
-                .defaultIfEmpty(ResponseEntity.notFound().build());
-    }
+    // AUD19C-3: GET /{id}/translations/{locale} removed — verified orphan (no frontend
+    // caller; the list endpoint above already returns the full translations).
 
     @DeleteMapping("/{id}/translations/{locale}")
     @ResponseStatus(HttpStatus.NO_CONTENT)

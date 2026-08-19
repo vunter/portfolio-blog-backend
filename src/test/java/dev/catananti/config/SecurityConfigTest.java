@@ -343,6 +343,56 @@ class SecurityConfigTest {
     }
 
     @Nested
+    @DisplayName("AUD19C-SEC: CORS origin hygiene")
+    class CorsOriginHygieneTests {
+
+        @Test
+        @DisplayName("blank cors.allowed-origins must fail fast under prod/cloud/qa profiles")
+        void blankOriginsThrowUnderStrictProfiles() {
+            ReflectionTestUtils.setField(securityConfig, "allowedOrigins", "  ");
+            when(environment.matchesProfiles("prod | cloud | qa")).thenReturn(true);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> securityConfig.corsConfigurationSource())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("cors.allowed-origins is blank");
+        }
+
+        @Test
+        @DisplayName("blank cors.allowed-origins only warns outside strict profiles")
+        void blankOriginsWarnOutsideStrictProfiles() {
+            ReflectionTestUtils.setField(securityConfig, "allowedOrigins", "");
+            when(environment.matchesProfiles("prod | cloud | qa")).thenReturn(false);
+
+            CorsConfigurationSource source = securityConfig.corsConfigurationSource();
+            org.springframework.mock.web.server.MockServerWebExchange mockExchange =
+                    org.springframework.mock.web.server.MockServerWebExchange.from(
+                            org.springframework.mock.http.server.reactive.MockServerHttpRequest
+                                    .get("/api/v1/articles").build());
+            CorsConfiguration config = source.getCorsConfiguration(mockExchange);
+
+            // No empty-string origin pattern is ever registered
+            assertThat(config.getAllowedOriginPatterns()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("blank entries from stray commas/whitespace are filtered out")
+        void blankEntriesAreFiltered() {
+            ReflectionTestUtils.setField(securityConfig, "allowedOrigins",
+                    "https://a.example, ,https://b.example,");
+
+            CorsConfigurationSource source = securityConfig.corsConfigurationSource();
+            org.springframework.mock.web.server.MockServerWebExchange mockExchange =
+                    org.springframework.mock.web.server.MockServerWebExchange.from(
+                            org.springframework.mock.http.server.reactive.MockServerHttpRequest
+                                    .get("/api/v1/articles").build());
+            CorsConfiguration config = source.getCorsConfiguration(mockExchange);
+
+            assertThat(config.getAllowedOriginPatterns())
+                    .containsExactly("https://a.example", "https://b.example");
+        }
+    }
+
+    @Nested
     @DisplayName("CSRF Configuration")
     class CsrfConfigurationTests {
 
@@ -351,6 +401,31 @@ class SecurityConfigTest {
         void shouldHaveCsrfCookieWebFilter() {
             org.springframework.web.server.WebFilter filter = securityConfig.csrfCookieWebFilter();
             assertThat(filter).isNotNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("AUD18-L8: comment-creation CSRF pattern")
+    class CommentCsrfPatternTests {
+
+        private java.util.regex.Pattern pattern() {
+            return (java.util.regex.Pattern) ReflectionTestUtils.getField(SecurityConfig.class, "COMMENT_CREATE_PATTERN");
+        }
+
+        @Test
+        @DisplayName("should match the authenticated comment-creation endpoint")
+        void shouldMatchCommentCreation() {
+            assertThat(pattern().matcher("/api/v1/articles/my-article/comments").matches()).isTrue();
+            assertThat(pattern().matcher("/api/v1/articles/my-article/comments/").matches()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should not match anonymous article endpoints that stay CSRF-exempt")
+        void shouldNotMatchAnonymousArticleEndpoints() {
+            assertThat(pattern().matcher("/api/v1/articles/my-article/view").matches()).isFalse();
+            assertThat(pattern().matcher("/api/v1/articles/my-article/like").matches()).isFalse();
+            assertThat(pattern().matcher("/api/v1/articles/my-article/comments/5/like").matches()).isFalse();
+            assertThat(pattern().matcher("/api/v1/articles/my-article/comments/like/status/batch").matches()).isFalse();
         }
     }
 

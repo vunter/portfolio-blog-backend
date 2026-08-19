@@ -2,7 +2,9 @@ package dev.catananti.controller;
 
 import dev.catananti.dto.*;
 import dev.catananti.entity.User;
+import dev.catananti.metrics.BlogMetrics;
 import dev.catananti.repository.UserRepository;
+import dev.catananti.security.AuthCookieService;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.EmailOtpService;
 import dev.catananti.service.MfaService;
@@ -24,6 +26,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.server.csrf.CsrfToken;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRepository;
 import org.springframework.security.web.reactive.result.method.annotation.AuthenticationPrincipalArgumentResolver;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.server.WebFilter;
@@ -60,6 +64,15 @@ class MfaControllerTest {
     @Mock
     private MessageSource messageSource;
 
+    @Mock
+    private ServerCsrfTokenRepository csrfTokenRepository;
+
+    @Mock
+    private BlogMetrics blogMetrics;
+
+    // AUD19C-C1B: real instance so the /verify tests assert the actual cookie contract
+    private final AuthCookieService authCookieService = new AuthCookieService(86400000L, true, "");
+
     private WebTestClient webTestClient;
     private WebTestClient unauthenticatedClient;
 
@@ -76,7 +89,8 @@ class MfaControllerTest {
     @BeforeEach
     void setUp() {
         MfaController controller = new MfaController(mfaService, emailOtpService, authService,
-                userRepository, passwordEncoder, redisTemplate, messageSource);
+                userRepository, passwordEncoder, redisTemplate, messageSource,
+                authCookieService, csrfTokenRepository, blogMetrics);
 
         var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
                 List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
@@ -101,6 +115,8 @@ class MfaControllerTest {
         ReactiveValueOperations<String, String> valueOps = mock(ReactiveValueOperations.class);
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
         lenient().when(valueOps.increment(anyString())).thenReturn(Mono.just(1L));
+        // AUD18-L7: the controller now checks-and-repairs the TTL on every pass
+        lenient().when(redisTemplate.getExpire(anyString())).thenReturn(Mono.just(java.time.Duration.ZERO));
         lenient().when(redisTemplate.expire(anyString(), any())).thenReturn(Mono.just(true));
     }
 
@@ -184,7 +200,7 @@ class MfaControllerTest {
     class VerifyLogin {
 
         @Test
-        @DisplayName("Should verify MFA login code successfully")
+        @DisplayName("AUD19C-C1B: Should establish the session — auth cookies + CSRF rotation + metric")
         void shouldVerifyMfaLoginCode() {
             TokenResponse tokenResponse = TokenResponse.builder()
                     .accessToken("access-token")
@@ -195,6 +211,8 @@ class MfaControllerTest {
                     .build();
             when(authService.completeMfaLogin(eq("mfa-token-123"), eq("123456"), eq("TOTP"), any(), any()))
                     .thenReturn(Mono.just(tokenResponse));
+            when(csrfTokenRepository.generateToken(any())).thenReturn(Mono.just(mock(CsrfToken.class)));
+            when(csrfTokenRepository.saveToken(any(), any())).thenReturn(Mono.empty());
 
             unauthenticatedClient
                     .post().uri("/api/v1/admin/mfa/verify")
@@ -202,6 +220,19 @@ class MfaControllerTest {
                     .bodyValue(Map.of("mfaToken", "mfa-token-123", "code", "123456", "method", "TOTP"))
                     .exchange()
                     .expectStatus().isOk()
+                    // AUD19C-C1B: MFA completion IS the login for MFA accounts — it must set
+                    // the same HttpOnly cookies AuthController.login sets.
+                    .expectCookie().valueEquals("access_token", "access-token")
+                    .expectCookie().httpOnly("access_token", true)
+                    .expectCookie().secure("access_token", true)
+                    .expectCookie().path("access_token", "/api")
+                    .expectCookie().sameSite("access_token", "Lax")
+                    .expectCookie().maxAge("access_token", java.time.Duration.ofMillis(86400000L))
+                    .expectCookie().valueEquals("refresh_token", "refresh-token")
+                    .expectCookie().httpOnly("refresh_token", true)
+                    .expectCookie().path("refresh_token", "/api/v1/admin/auth")
+                    // behavior note: rememberMe is fixed to false through the MFA challenge -> 24h
+                    .expectCookie().maxAge("refresh_token", java.time.Duration.ofHours(24))
                     .expectBody()
                     // SEG-1: accessToken/refreshToken are WRITE_ONLY and must NOT appear in the
                     // JSON body anymore. Assert MFA login still succeeds via the still-present
@@ -212,6 +243,31 @@ class MfaControllerTest {
                     .jsonPath("$.expiresIn").isEqualTo(3600)
                     .jsonPath("$.accessToken").doesNotExist()
                     .jsonPath("$.refreshToken").doesNotExist();
+
+            // Q4.2: CSRF rotated after auth state change; Q12.3: the completed MFA
+            // verification is the single login-success datapoint.
+            verify(csrfTokenRepository).generateToken(any());
+            verify(blogMetrics).incrementLoginSuccess();
+        }
+
+        @Test
+        @DisplayName("AUD19C-C1B: Should set no cookies and no metric when the code is wrong")
+        void shouldNotEstablishSession_WhenCodeInvalid() {
+            when(authService.completeMfaLogin(eq("mfa-token-123"), eq("999999"), eq("TOTP"), any(), any()))
+                    .thenReturn(Mono.error(new org.springframework.web.server.ResponseStatusException(
+                            org.springframework.http.HttpStatus.UNAUTHORIZED, "error.mfa_code_invalid")));
+
+            unauthenticatedClient
+                    .post().uri("/api/v1/admin/mfa/verify")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(Map.of("mfaToken", "mfa-token-123", "code", "999999", "method", "TOTP"))
+                    .exchange()
+                    .expectStatus().isUnauthorized()
+                    .expectCookie().doesNotExist("access_token")
+                    .expectCookie().doesNotExist("refresh_token");
+
+            verify(blogMetrics, never()).incrementLoginSuccess();
+            verify(csrfTokenRepository, never()).generateToken(any());
         }
     }
 
@@ -260,6 +316,38 @@ class MfaControllerTest {
                     .bodyValue(Map.of("password", "password123"))
                     .exchange()
                     .expectStatus().isNoContent();
+        }
+
+        @Test
+        @DisplayName("AUD19C-A5: Should return 400 (not 401) on wrong re-auth password")
+        void shouldReturn400_WhenPasswordWrong() {
+            User user = testUser();
+            when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(user));
+            when(passwordEncoder.matches("wrong-password", "hashed")).thenReturn(false);
+
+            webTestClient
+                    .method(HttpMethod.DELETE).uri("/api/v1/admin/mfa/disable")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(Map.of("password", "wrong-password"))
+                    .exchange()
+                    // business validation failure, NOT a broken session — 401 here made
+                    // API clients drop a perfectly valid session
+                    .expectStatus().isBadRequest();
+
+            verify(mfaService, never()).disableMfa(anyLong());
+        }
+
+        @Test
+        @DisplayName("Should return 400 when the password field is missing from the body")
+        void shouldReturn400_WhenPasswordMissing() {
+            webTestClient
+                    .method(HttpMethod.DELETE).uri("/api/v1/admin/mfa/disable")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(Map.of())
+                    .exchange()
+                    .expectStatus().isBadRequest();
+
+            verify(userRepository, never()).findByEmail(anyString());
         }
     }
 }

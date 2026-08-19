@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS articles (
     status VARCHAR(50) DEFAULT 'DRAFT',
     published_at TIMESTAMP,
     scheduled_at TIMESTAMP,
+    -- AUD19C-2 (V23): once-only subscriber notification claim
+    notified_at TIMESTAMP,
     reading_time_minutes INTEGER,
     views_count INTEGER DEFAULT 0,
     likes_count INTEGER DEFAULT 0,
@@ -177,6 +179,10 @@ ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP;
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS link_origin VARCHAR(32);
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS unlinked_at TIMESTAMP;
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS unlinked_by VARCHAR(16);
+
+-- AUD18-L6 (V22): confirmation-token issue time, split out of created_at so a
+-- re-subscribe no longer rewrites the row's creation timestamp.
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS token_issued_at TIMESTAMP;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subscribers_user_id
     ON subscribers (user_id) WHERE user_id IS NOT NULL;

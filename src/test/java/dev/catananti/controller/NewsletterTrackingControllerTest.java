@@ -30,6 +30,11 @@ class NewsletterTrackingControllerTest {
         NewsletterTrackingController controller = new NewsletterTrackingController(trackingService);
         webTestClient = WebTestClient.bindToController(controller)
                 .configureClient().build();
+        // AUD18-JM8: the redirect allowlist is fail-closed now — configure it explicitly.
+        // Must be set AFTER bindToController: its context refresh re-injects the @Value
+        // default ("") over any earlier reflection-set value.
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                controller, "allowedOrigins", "https://catananti.dev");
     }
 
     @Nested
@@ -106,6 +111,34 @@ class NewsletterTrackingControllerTest {
                     .get().uri("/api/v1/newsletter/track/click/valid-token?url=")
                     .exchange()
                     .expectStatus().isBadRequest();
+        }
+
+        @Test
+        @DisplayName("Should return 400 for a host outside the allowlist")
+        void shouldReturn400ForDisallowedHost() {
+            webTestClient
+                    .get().uri("/api/v1/newsletter/track/click/valid-token?url=https://evil.example.com/phish")
+                    .exchange()
+                    .expectStatus().isBadRequest();
+
+            verifyNoInteractions(trackingService);
+        }
+
+        @Test
+        @DisplayName("AUD18-JM8: blank allowlist fails CLOSED — every redirect rejected")
+        void blankAllowlist_ShouldRejectAllRedirects() {
+            NewsletterTrackingController blankController = new NewsletterTrackingController(trackingService);
+            WebTestClient blankClient = WebTestClient.bindToController(blankController)
+                    .configureClient().build();
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    blankController, "allowedOrigins", "");
+
+            blankClient
+                    .get().uri("/api/v1/newsletter/track/click/valid-token?url=https://catananti.dev/blog/post")
+                    .exchange()
+                    .expectStatus().isBadRequest();
+
+            verifyNoInteractions(trackingService);
         }
     }
 }

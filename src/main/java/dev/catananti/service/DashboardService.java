@@ -108,7 +108,8 @@ public class DashboardService {
         String title = article.getTitle();
         String createdAt = (article.getUpdatedAt() != null ? article.getUpdatedAt() : article.getCreatedAt()).toString();
         return Map.of(
-                "id", article.getId(),
+                // AUD19C-SNOW: stringify Snowflake id — Longs above 2^53 get mangled by JS
+                "id", String.valueOf(article.getId()),
                 "type", "article",
                 "action", action,
                 "title", title,

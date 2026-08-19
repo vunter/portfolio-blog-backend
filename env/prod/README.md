@@ -7,7 +7,7 @@ Deploy target: Droplet `prod` 146.190.67.249 (`catananti.dev`), hostname `portfo
 Dois composes com lifecycles independentes:
 
 - **`docker-compose.infra.yml`** (project `blog-infra`) — Postgres + Redis. Long-lived; raramente reiniciado.
-- **`docker-compose.cloud.yml`** (project `blog-cloud`) — app + frontend + nginx + datadog-agent. Reiniciado a cada deploy.
+- **`docker-compose.cloud.yml`** (project `cloud` — o deploy.yml exporta `COMPOSE_PROJECT_NAME=cloud`; use o mesmo nome em comandos manuais) — app + frontend + nginx + datadog-agent. Reiniciado a cada deploy.
 
 Rede `blog-infra` é compartilhada entre os dois (declarada como `external: true` em `cloud`).
 
@@ -31,7 +31,7 @@ doppler run --config prd -- docker compose \
 
 # 2. Sobe app stack
 doppler run --config prd -- docker compose \
-  -p blog-cloud -f docker-compose.cloud.yml up -d
+  -p cloud -f docker-compose.cloud.yml up -d
 ```
 
 ## Redeploy do app
@@ -39,9 +39,9 @@ doppler run --config prd -- docker compose \
 ```bash
 cd env/prod
 doppler run --config prd -- docker compose \
-  -p blog-cloud -f docker-compose.cloud.yml pull
+  -p cloud -f docker-compose.cloud.yml pull
 doppler run --config prd -- docker compose \
-  -p blog-cloud -f docker-compose.cloud.yml up -d
+  -p cloud -f docker-compose.cloud.yml up -d
 ```
 
 ## Rollback
@@ -80,4 +80,4 @@ Esta estrutura substitui `/home/vunter/portfolio-blog/deploy/cloud/` no Droplet.
 1. Push da branch `feat/env-folders` → CI builda imagens.
 2. No Droplet: `git pull` (ou rsync) do novo conteúdo.
 3. Comparar: `diff docker-compose.cloud.yml /home/vunter/portfolio-blog/deploy/cloud/docker-compose.cloud.yml` — diferenças esperadas: sem `prometheus`, mount de nginx consolidado (`./nginx.conf` em vez de `../../nginx/nginx.conf` + `./nginx-cloud.conf`), `./.htpasswd` local em vez de `../../nginx/.htpasswd`.
-4. Deploy controlado: `doppler run --config prd -- docker compose -p blog-cloud -f docker-compose.cloud.yml up -d` (mantém `rollback.sh` à mão).
+4. Deploy controlado: `doppler run --config prd -- docker compose -p cloud -f docker-compose.cloud.yml up -d` (mantém `rollback.sh` à mão).

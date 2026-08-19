@@ -81,16 +81,6 @@ public class ArticleVersionService {
     }
 
     /**
-     * Get the latest version of an article.
-     */
-    public Mono<ArticleVersionResponse> getLatestVersion(Long articleId) {
-        return versionRepository.findLatestByArticleId(articleId)
-                .map(ArticleVersionResponse::fromEntity)
-                .switchIfEmpty(Mono.error(new ResourceNotFoundException(
-                        "No versions found for article: " + articleId)));
-    }
-
-    /**
      * Restore an article to a previous version.
      */
     @Transactional
@@ -150,7 +140,7 @@ public class ArticleVersionService {
             ArticleVersion to = tuple.getT2();
             
             return new VersionDiff(
-                    articleId,
+                    String.valueOf(articleId),
                     fromVersion,
                     toVersion,
                     !java.util.Objects.equals(from.getTitle(), to.getTitle()),
@@ -195,7 +185,8 @@ public class ArticleVersionService {
      * Record representing differences between two versions.
      */
     public record VersionDiff(
-            Long articleId,
+            // AUD19C-SNOW: String, not Long — Snowflake ids exceed JS Number.MAX_SAFE_INTEGER (2^53)
+            String articleId,
             Integer fromVersion,
             Integer toVersion,
             boolean titleChanged,

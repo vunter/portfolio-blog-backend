@@ -180,6 +180,22 @@ public interface ArticleRepository extends ReactiveCrudRepository<Article, Long>
            "WHERE id = :id AND status = 'SCHEDULED'")
     Mono<Integer> markPublishedIfScheduled(Long id, LocalDateTime now);
 
+    /**
+     * AUD19C-2: atomically claim the once-only subscriber e-mail fan-out for an article
+     * (compare-and-swap, modelled on {@link #markPublishedIfScheduled}).
+     *
+     * <p>The {@code WHERE notified_at IS NULL} predicate guarantees that across every
+     * publish path (PATCH publish, PUT update, bulk status, create-as-published,
+     * review approval, scheduler) and across replicas, exactly one caller ever wins
+     * the claim for a given article; all later publishes/republishes get 0 rows and
+     * must skip the fan-out.</p>
+     *
+     * @return number of rows updated: 1 if this caller claimed the notification, 0 otherwise.
+     */
+    @Modifying
+    @Query("UPDATE articles SET notified_at = :now WHERE id = :id AND notified_at IS NULL")
+    Mono<Integer> claimSubscriberNotification(Long id, LocalDateTime now);
+
     // Count scheduled articles
     @Query("SELECT COUNT(*) FROM articles WHERE status = 'SCHEDULED'")
     Mono<Long> countScheduled();

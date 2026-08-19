@@ -2,17 +2,12 @@ package dev.catananti.scheduler;
 
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleStatus;
-import dev.catananti.config.PaginationConfig;
 import dev.catananti.repository.ArticleRepository;
-import dev.catananti.repository.SubscriberRepository;
-import dev.catananti.service.CacheService;
-import dev.catananti.service.EmailService;
-import dev.catananti.util.PiiMasker;
+import dev.catananti.service.ArticleAdminService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
@@ -30,11 +25,8 @@ public class ArticlePublishScheduler {
     private static final Duration LOCK_TTL = Duration.ofSeconds(55);
 
     private final ArticleRepository articleRepository;
-    private final CacheService cacheService;
-    private final SubscriberRepository subscriberRepository;
-    private final EmailService emailService;
+    private final ArticleAdminService articleAdminService;
     private final SchedulerLock schedulerLock;
-    private final PaginationConfig paginationConfig;
 
     public Mono<Void> publishScheduledArticles() {
         return schedulerLock.executeWithLock("article-publish", LOCK_TTL,
@@ -58,25 +50,24 @@ public class ArticlePublishScheduler {
         return articleRepository.findScheduledArticlesToPublish(now)
                 // concatMap (not flatMap) so the atomic claim of each candidate is
                 // observed sequentially; only articles this instance actually won the
-                // race for are emitted downstream and notified.
+                // race for are emitted downstream.
                 .concatMap(article -> claimForPublication(article, now))
-                .flatMap(article -> notifySubscribers(article).thenReturn(article))
+                // AUD19C-2: the scheduler's private notifySubscribers duplicate is gone —
+                // post-publish side effects (SSE broadcast, article/feed cache
+                // invalidation, notified_at-gated subscriber e-mail fan-out) are shared
+                // with every other publish path via ArticleAdminService. The claim above
+                // (status CAS) decides WHO publishes; the notified_at CAS inside the
+                // shared method decides WHO e-mails — both are once-only.
+                .concatMap(article -> articleAdminService.applyPublishSideEffects(article))
                 .doOnNext(article -> log.info("Auto-published scheduled article: {} (scheduled for: {})",
                         article.getSlug(), article.getScheduledAt()))
-                .collectList()
-                .flatMap(published -> {
-                    if (published.isEmpty()) {
-                        return Mono.empty();
+                .count()
+                .doOnNext(count -> {
+                    if (count > 0) {
+                        log.info("Published {} scheduled article(s)", count);
                     }
-                    log.info("Published {} scheduled article(s), invalidating cache", published.size());
-                    // Invalidate both the article read-through caches AND the RSS/sitemap
-                    // feed caches, otherwise a scheduler-published article is missing from
-                    // the feeds for up to their TTL (15m/30m).
-                    return Mono.when(
-                            cacheService.invalidateAllArticles(),
-                            cacheService.invalidateFeedCache()
-                    );
                 })
+                .then()
                 .doOnError(e -> log.error("Error publishing scheduled articles: {}", e.getMessage(), e))
                 .onErrorResume(e -> Mono.empty());
     }
@@ -85,8 +76,8 @@ public class ArticlePublishScheduler {
      * Atomically transitions a single article from SCHEDULED to PUBLISHED.
      *
      * <p>Returns the article only when this instance won the compare-and-swap
-     * ({@code rows == 1}); a 0-row result means another replica already published it,
-     * so we emit nothing and never notify subscribers twice.</p>
+     * ({@code rows == 1}); a 0-row result means another replica (or a manual publish)
+     * already published it, so we emit nothing and apply no side effects.</p>
      */
     private Mono<Article> claimForPublication(Article article, LocalDateTime now) {
         return articleRepository.markPublishedIfScheduled(article.getId(), now)
@@ -103,25 +94,5 @@ public class ArticlePublishScheduler {
                     article.setNewRecord(false);
                     return Mono.just(article);
                 });
-    }
-
-    private Mono<Void> notifySubscribers(Article article) {
-        return subscriberRepository.findAllConfirmed(paginationConfig.getBulkQueryMax())
-                .buffer(50)
-                .concatMap(batch -> Flux.fromIterable(batch)
-                        .flatMap(subscriber -> emailService.sendNewArticleNotification(
-                                subscriber.getEmail(),
-                                subscriber.getName(),
-                                article.getTitle(),
-                                article.getSlug(),
-                                article.getExcerpt(),
-                                subscriber.getUnsubscribeToken()
-                        ).onErrorResume(e -> {
-                            log.warn("Failed to send article notification to {}: {}",
-                                    PiiMasker.maskEmail(subscriber.getEmail()), e.getMessage());
-                            return Mono.empty();
-                        }), 5))
-                .then()
-                .doOnSuccess(v -> log.info("Notified subscribers about scheduled article: {}", article.getSlug()));
     }
 }

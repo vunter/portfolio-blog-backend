@@ -1,11 +1,11 @@
 package dev.catananti.service;
 
-import dev.catananti.dto.AuthResponse;
 import dev.catananti.dto.LoginRequest;
 import dev.catananti.dto.RegisterRequest;
 import dev.catananti.dto.TokenResponse;
 import dev.catananti.entity.RefreshToken;
 import dev.catananti.entity.User;
+import dev.catananti.exception.AccountDeactivatedException;
 import dev.catananti.exception.AccountLockedException;
 import dev.catananti.exception.DuplicateResourceException;
 import dev.catananti.repository.UserRepository;
@@ -31,7 +31,6 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -51,6 +50,7 @@ public class AuthService {
     private final TokenBlacklistService tokenBlacklistService;
     private final EmailService emailService;
     private final EmailVerificationService emailVerificationService;
+    private final AuditService auditService;
     private final Optional<MfaService> mfaService;
     private final Optional<EmailOtpService> emailOtpService;
     private final ReactiveStringRedisTemplate redisTemplate;
@@ -79,6 +79,7 @@ public class AuthService {
                        TokenBlacklistService tokenBlacklistService,
                        EmailService emailService,
                        EmailVerificationService emailVerificationService,
+                       AuditService auditService,
                        ReactiveStringRedisTemplate redisTemplate,
                        org.springframework.transaction.reactive.TransactionalOperator transactionalOperator,
                        @Autowired(required = false) LoginAttemptService loginAttemptService,
@@ -94,6 +95,7 @@ public class AuthService {
         this.tokenBlacklistService = tokenBlacklistService;
         this.emailService = emailService;
         this.emailVerificationService = emailVerificationService;
+        this.auditService = auditService;
         this.redisTemplate = redisTemplate;
         this.transactionalOperator = transactionalOperator;
         this.loginAttemptService = Optional.ofNullable(loginAttemptService);
@@ -121,19 +123,10 @@ public class AuthService {
         return loginAttemptService.map(svc -> svc.clearFailedAttempts(key)).orElse(Mono.empty());
     }
 
-    public Mono<AuthResponse> login(LoginRequest request, String clientIp) {
-        String loginKey = request.getEmail().toLowerCase();
-
-        // Check if account is locked
-        return isBlocked(loginKey)
-                .flatMap(blocked -> {
-                    if (blocked) {
-                        return getRemainingLockoutTime(loginKey)
-                                .flatMap(remaining -> Mono.error(new AccountLockedException(remaining / 60 + 1)));
-                    }
-                    return performLogin(request, loginKey, clientIp);
-                });
-    }
+    // AUD18-M7: the old login()/performLogin() pair was removed. No controller called it
+    // (Q7.14 unified the endpoints on loginWithRefreshToken), and it minted a full JWT
+    // WITHOUT the MFA challenge — a latent MFA bypass if it were ever wired back up.
+    // The AuthResponse DTO it returned was deleted with it.
 
     /**
      * Verify user credentials: password check, failed-attempt tracking, and lockout.
@@ -147,15 +140,21 @@ public class AuthService {
                             .subscribeOn(Schedulers.boundedElastic())
                             .flatMap(matches -> {
                                 if (!matches) {
+                                    // AUD19C-DEACT: the localized remaining-attempts message that used
+                                    // to be built here was dead weight — GlobalExceptionHandler
+                                    // deliberately masks BadCredentialsException as a generic
+                                    // "invalid credentials" (SEC: never expose attempt counts to the
+                                    // client), so the resolved text never reached anyone. Keep the
+                                    // observability in a server-side log and throw the plain key.
                                     return recordFailedAttempt(loginKey, clientIp)
                                             .flatMap(_ -> getRemainingAttempts(loginKey)
                                                     .flatMap(remaining -> {
-                                                        String msgKey = remaining > 0
-                                                                ? "error.invalid_credentials_remaining"
-                                                                : "error.account_locked_attempts";
-                                                        Object[] args = remaining > 0 ? new Object[]{remaining} : null;
-                                                        String message = messageSource.getMessage(msgKey, args, Locale.ENGLISH);
-                                                        return Mono.<User>error(new BadCredentialsException(message));
+                                                        log.warn("Failed login for {}: {} attempts remaining",
+                                                                PiiMasker.maskEmail(loginKey), remaining);
+                                                        return Mono.<User>error(new BadCredentialsException(
+                                                                remaining > 0
+                                                                        ? "error.invalid_credentials"
+                                                                        : "error.account_locked_attempts"));
                                                     }));
                                 }
                                 // SEC: Reject deactivated users at credential-verification time so a fresh
@@ -163,8 +162,12 @@ public class AuthService {
                                 // already-issued tokens; without this check, a deactivated user can simply
                                 // log in again to bypass the cache eviction.
                                 if (!Boolean.TRUE.equals(user.getActive())) {
+                                    // AUD19C-DEACT: dedicated exception -> 403 error.account_deactivated.
+                                    // BadCredentialsException here got masked as "invalid credentials",
+                                    // gaslighting the holder about a correct password; the MFA and
+                                    // refresh paths already reveal deactivation.
                                     log.warn("Login denied — account is deactivated: {}", PiiMasker.maskEmail(user.getEmail()));
-                                    return Mono.<User>error(new BadCredentialsException("error.account_deactivated"));
+                                    return Mono.<User>error(new AccountDeactivatedException());
                                 }
                                 return clearFailedAttempts(loginKey).thenReturn(user);
                             }))
@@ -176,16 +179,6 @@ public class AuthService {
                                 .then(recordFailedAttempt(loginKey, clientIp))
                                 .then(Mono.error(new BadCredentialsException("error.invalid_credentials")))
                 ));
-    }
-
-    private Mono<AuthResponse> performLogin(LoginRequest request, String loginKey, String clientIp) {
-        return verifyCredentials(loginKey, request.getPassword(), clientIp)
-                .map(user -> {
-                    String token = tokenProvider.generateToken(user.getId(), user.getRole());
-                    log.debug("User logged in: {} from IP: {}", PiiMasker.maskEmail(user.getEmail()), clientIp);
-                    return AuthResponse.bearer(token, jwtExpirationMs / 1000,
-                            user.getEmail(), user.getName(), user.getRole());
-                });
     }
 
     public Mono<TokenResponse> loginWithRefreshToken(LoginRequest request, String clientIp, String userAgent) {
@@ -224,7 +217,20 @@ public class AuthService {
                             .email(user.getEmail())
                             .name(user.getName())
                             .build();
-                });
+                })
+                // AUD19-LOGIN: this is the single funnel where a real session is minted for
+                // BOTH password logins (performLoginWithRefreshToken, non-MFA branch) and MFA
+                // completions (completeMfaLogin after OTP/TOTP/backup verification) — the
+                // OAuth2 MFA challenge also completes here via /admin/mfa/verify. Logging
+                // here (and NOT at issueMfaChallenge) records exactly one LOGIN row per
+                // successful login. Fire-and-forget by design: the detached .subscribe() is
+                // the intentional exception to the "no .subscribe() inside operators" rule
+                // (see register()) because the audit row is best-effort and must never fail
+                // or delay token delivery; logAction already swallows persistence errors,
+                // the error consumer below only guards future regressions.
+                .doOnNext(response -> auditService.logLoginSuccess(user.getId(), user.getEmail(), clientIp)
+                        .subscribe(null, e -> log.warn("AUD19-LOGIN: failed to record LOGIN audit for {}: {}",
+                                PiiMasker.maskEmail(user.getEmail()), e.getMessage())));
     }
 
     /**
@@ -232,8 +238,12 @@ public class AuthService {
      * The client must call /api/v1/admin/mfa/verify with this token + OTP code.
      * SEC: The MFA token is hashed before use as a Redis key so a Redis compromise
      * does not reveal tokens that could be used to complete MFA login.
+     *
+     * <p>AUD18-A10: public so {@link OAuth2Service} can issue the SAME challenge —
+     * OAuth2 logins previously minted full tokens without ever consulting
+     * {@code user.getMfaEnabled()}, silently bypassing MFA for social logins.
      */
-    private Mono<TokenResponse> issueMfaChallenge(User user) {
+    public Mono<TokenResponse> issueMfaChallenge(User user) {
         String mfaToken = UUID.randomUUID().toString();
         String redisKey = MFA_TOKEN_PREFIX + hashMfaToken(mfaToken);
         // Store userId in Redis with short TTL; plain UUID returned to client
@@ -243,6 +253,8 @@ public class AuthService {
                 .thenReturn(TokenResponse.builder()
                         .mfaRequired(true)
                         .mfaToken(mfaToken)
+                        // AUD19C-MFAMETHOD: tell the FE which form to land on (TOTP vs EMAIL)
+                        .mfaMethod(user.getMfaPreferredMethod())
                         .email(user.getEmail())
                         .name(user.getName())
                         .build());
@@ -279,10 +291,13 @@ public class AuthService {
                         })
                         .flatMap(attempts -> {
                             if (attempts > maxMfaAttempts) {
+                                // AUD19C-MFA429: i18n key instead of hardcoded English — the reason is
+                                // resolved (or passed through) by GlobalExceptionHandler.msg() exactly
+                                // like the sibling error.mfa_token_invalid / error.mfa_code_invalid keys.
                                 return redisTemplate.delete(redisKey)
                                         .then(redisTemplate.delete(attemptsKey))
                                         .then(Mono.error(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
-                                                "Too many attempts. Please login again.")));
+                                                "error.mfa_too_many_attempts")));
                             }
                             Long userId = Long.valueOf(userIdStr);
                             Mono<Boolean> verifyMono = switch (method) {
@@ -303,7 +318,18 @@ public class AuthService {
                                         .then(redisTemplate.delete(attemptsKey))
                                         .then(userRepository.findById(userId))
                                         .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "error.user_not_found")))
-                                        .flatMap(user -> issueFullTokens(user, clientIp, userAgent));
+                                        .flatMap(user -> {
+                                            // AUD18-L9: re-check active before minting — the account may
+                                            // have been deactivated between the password step and the
+                                            // OTP step, and this path must not resurrect it.
+                                            if (!Boolean.TRUE.equals(user.getActive())) {
+                                                log.warn("MFA login denied — account is deactivated: {}",
+                                                        PiiMasker.maskEmail(user.getEmail()));
+                                                return Mono.error(new ResponseStatusException(
+                                                        HttpStatus.UNAUTHORIZED, "error.account_deactivated"));
+                                            }
+                                            return issueFullTokens(user, clientIp, userAgent);
+                                        });
                             });
                         }));
     }
@@ -334,19 +360,28 @@ public class AuthService {
         return refreshTokenService.verifyAndRotate(refreshToken, clientIp, userAgent)
                 .flatMap(newRefreshToken -> userRepository.findById(newRefreshToken.getUserId())
                         .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
-                        .map(user -> {
+                        .flatMap(user -> {
+                            // AUD18-L9: a deactivated account must not keep its session alive
+                            // through rotation. The rotated token is revoked along with every
+                            // other token for the user before the request is rejected.
+                            if (!Boolean.TRUE.equals(user.getActive())) {
+                                log.warn("Refresh denied — account is deactivated: {}",
+                                        PiiMasker.maskEmail(user.getEmail()));
+                                return refreshTokenService.revokeAllUserTokens(user.getId())
+                                        .then(Mono.error(new SecurityException("error.account_deactivated")));
+                            }
                             String accessToken = tokenProvider.generateToken(user.getId(), user.getRole());
 
                             log.debug("Access token refreshed for user: {}", PiiMasker.maskEmail(user.getEmail()));
-                            
-                            return TokenResponse.builder()
+
+                            return Mono.just(TokenResponse.builder()
                                     .accessToken(accessToken)
                                     .refreshToken(newRefreshToken.getToken())
                                     .tokenType("Bearer")
                                     .expiresIn(jwtExpirationMs / 1000)
                                     .email(user.getEmail())
                                     .name(user.getName())
-                                    .build();
+                                    .build());
                         }));
     }
 

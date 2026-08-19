@@ -102,7 +102,24 @@ public class IdempotencyKeyFilter implements WebFilter {
                     if (Boolean.TRUE.equals(wasSet)) {
                         return chain.filter(exchange)
                                 .then(Mono.defer(() -> {
+                                    // AUD18-M4: only promote the key to the full 24h TTL on success.
+                                    // GlobalExceptionHandler converts handler exceptions into normal
+                                    // error responses, so the onErrorResume branch below never fires
+                                    // for them — a failed request was stored as "done:<4xx/5xx>" and
+                                    // every legitimate retry got 409'd. For status >= 400 delete the
+                                    // key so the client can retry immediately.
                                     HttpStatus status = (HttpStatus) exchange.getResponse().getStatusCode();
+                                    if (status != null && status.value() >= 400) {
+                                        log.debug("Idempotency key {} released after {} response",
+                                                idempotencyKey, status.value());
+                                        return redisTemplate.delete(redisKey)
+                                                .onErrorResume(e -> {
+                                                    log.warn("Failed to release idempotency key {}: {}",
+                                                            idempotencyKey, e.getMessage());
+                                                    return Mono.empty();
+                                                })
+                                                .then();
+                                    }
                                     String value = "done:" + (status != null ? status.value() : 200);
                                     return redisTemplate.opsForValue()
                                             .set(redisKey, value, ttl)

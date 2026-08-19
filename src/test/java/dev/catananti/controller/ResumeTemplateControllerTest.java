@@ -120,27 +120,6 @@ class ResumeTemplateControllerTest {
     }
 
     @Nested
-    @DisplayName("GET /api/v1/resume/templates/slug/{slug}")
-    class GetTemplateBySlug {
-
-        @Test
-        @DisplayName("Should return template by slug")
-        void shouldReturnTemplateBySlug() {
-            Authentication auth = mockAuth();
-            mockUserLookup();
-            ResumeTemplateResponse template = buildTemplate(1L, "My Template");
-            when(templateService.getTemplateBySlug("template-1")).thenReturn(Mono.just(template));
-
-            StepVerifier.create(controller.getTemplateBySlug("template-1", auth))
-                    .assertNext(result -> {
-                        assertThat(result.getSlug()).isEqualTo("template-1");
-                        assertThat(result.getName()).isEqualTo("My Template");
-                    })
-                    .verifyComplete();
-        }
-    }
-
-    @Nested
     @DisplayName("PUT /api/v1/resume/templates/{id}")
     class UpdateTemplate {
 
@@ -231,6 +210,25 @@ class ResumeTemplateControllerTest {
                     })
                     .verifyComplete();
         }
+
+        @Test
+        @DisplayName("AUD18-JM19: Should FORBID duplicating another user's template")
+        void shouldForbidDuplicatingForeignTemplate() {
+            Authentication auth = mockAuth();
+            mockUserLookup();
+
+            ResumeTemplateResponse foreign = buildTemplate(1L, "Someone else's");
+            foreign.setOwnerId("999"); // not user 1
+
+            when(templateService.getTemplateById(1L)).thenReturn(Mono.just(foreign));
+
+            StepVerifier.create(controller.duplicateTemplate(1L, auth))
+                    .expectErrorMatches(e -> e instanceof org.springframework.web.server.ResponseStatusException rse
+                            && rse.getStatusCode().value() == 403)
+                    .verify();
+
+            verify(templateService, never()).createTemplate(anyLong(), any(ResumeTemplateRequest.class));
+        }
     }
 
     @Nested
@@ -275,26 +273,6 @@ class ResumeTemplateControllerTest {
     // ==================== PDF Generation ====================
 
     @Nested
-    @DisplayName("POST /api/v1/resume/templates/slug/{slug}/pdf")
-    class GeneratePdfFromSlug {
-
-        @Test
-        @DisplayName("Should generate PDF from slug")
-        void shouldGeneratePdfFromSlug() {
-            byte[] pdfBytes = new byte[]{4, 5, 6};
-            when(templateService.generatePdfFromSlug(eq("my-template"), any()))
-                    .thenReturn(Mono.just(pdfBytes));
-
-            StepVerifier.create(controller.generatePdfFromSlug("my-template", null))
-                    .assertNext(response -> {
-                        assertThat(response.getStatusCode().value()).isEqualTo(200);
-                        assertThat(response.getHeaders().getFirst("Content-Disposition")).contains("my-template");
-                    })
-                    .verifyComplete();
-        }
-    }
-
-    @Nested
     @DisplayName("POST /api/v1/resume/pdf/generate")
     class GeneratePdfFromHtml {
 
@@ -309,7 +287,8 @@ class ResumeTemplateControllerTest {
             byte[] pdfBytes = new byte[]{7, 8, 9};
             when(templateService.generatePdfFromHtml(request)).thenReturn(Mono.just(pdfBytes));
 
-            StepVerifier.create(controller.generatePdfFromHtml(request))
+            // inline-HTML path needs no ownership lookup — authentication is untouched
+            StepVerifier.create(controller.generatePdfFromHtml(request, null))
                     .assertNext(response -> {
                         assertThat(response.getStatusCode().value()).isEqualTo(200);
                         assertThat(response.getHeaders().getFirst("Content-Disposition")).contains("my-resume.pdf");
@@ -328,11 +307,33 @@ class ResumeTemplateControllerTest {
             byte[] pdfBytes = new byte[]{1, 2};
             when(templateService.generatePdfFromHtml(request)).thenReturn(Mono.just(pdfBytes));
 
-            StepVerifier.create(controller.generatePdfFromHtml(request))
+            StepVerifier.create(controller.generatePdfFromHtml(request, null))
                     .assertNext(response -> {
                         assertThat(response.getHeaders().getFirst("Content-Disposition")).contains("resume-");
                     })
                     .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("AUD18-JM19: Should FORBID referencing a stored foreign template by slug")
+        void shouldForbidForeignStoredTemplateReference() {
+            Authentication auth = mockAuth();
+            mockUserLookup();
+
+            PdfGenerationRequest request = PdfGenerationRequest.builder()
+                    .templateSlug("their-template")
+                    .build();
+
+            ResumeTemplateResponse foreign = buildTemplate(1L, "Someone else's");
+            foreign.setOwnerId("999");
+            when(templateService.getTemplateBySlug("their-template")).thenReturn(Mono.just(foreign));
+
+            StepVerifier.create(controller.generatePdfFromHtml(request, auth))
+                    .expectErrorMatches(e -> e instanceof org.springframework.web.server.ResponseStatusException rse
+                            && rse.getStatusCode().value() == 403)
+                    .verify();
+
+            verify(templateService, never()).generatePdfFromHtml(any(PdfGenerationRequest.class));
         }
     }
 

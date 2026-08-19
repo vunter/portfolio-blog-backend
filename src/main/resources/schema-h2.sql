@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS articles (
     status VARCHAR(50) DEFAULT 'DRAFT',
     published_at TIMESTAMP,
     scheduled_at TIMESTAMP,
+    -- AUD19C-2 (V23): once-only subscriber notification claim
+    notified_at TIMESTAMP,
     reading_time_minutes INTEGER,
     views_count INTEGER DEFAULT 0,
     likes_count INTEGER DEFAULT 0,
@@ -158,6 +160,9 @@ CREATE TABLE IF NOT EXISTS subscribers (
     link_origin VARCHAR(32),
     unlinked_at TIMESTAMP,
     unlinked_by VARCHAR(16),
+    -- AUD18-L6 (V22): confirmation-token issue time, split out of created_at so a
+    -- re-subscribe no longer rewrites the row's creation timestamp.
+    token_issued_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

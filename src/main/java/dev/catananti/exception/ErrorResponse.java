@@ -30,7 +30,14 @@ public record ErrorResponse(
         String type,
         String title,
         String detail,
-        String instance
+        String instance,
+        /**
+         * AUD19C-CODE: machine-readable error key (e.g. {@code error.account_deactivated})
+         * so clients can branch/i18n on the code instead of parsing the localized message.
+         * Additive and nullable — absent (NON_NULL) whenever no {@code error.*} key applies,
+         * which is exactly the pre-existing response shape.
+         */
+        String code
 ) {
 
     public static Builder builder() {
@@ -50,6 +57,7 @@ public record ErrorResponse(
         private String title;
         private String detail;
         private String instance;
+        private String code;
 
         public Builder timestamp(LocalDateTime v) { this.timestamp = v; return this; }
         public Builder status(int v) { this.status = v; return this; }
@@ -62,10 +70,11 @@ public record ErrorResponse(
         public Builder title(String v) { this.title = v; return this; }
         public Builder detail(String v) { this.detail = v; return this; }
         public Builder instance(String v) { this.instance = v; return this; }
+        public Builder code(String v) { this.code = v; return this; }
 
         public ErrorResponse build() {
             return new ErrorResponse(timestamp, status, error, message, path, requestId,
-                    validationErrors, type, title, detail, instance);
+                    validationErrors, type, title, detail, instance, code);
         }
     }
 }

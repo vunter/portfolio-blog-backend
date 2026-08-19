@@ -1,13 +1,9 @@
 package dev.catananti.scheduler;
 
-import dev.catananti.config.PaginationConfig;
 import dev.catananti.entity.Article;
 import dev.catananti.entity.ArticleStatus;
-import dev.catananti.entity.Subscriber;
 import dev.catananti.repository.ArticleRepository;
-import dev.catananti.repository.SubscriberRepository;
-import dev.catananti.service.CacheService;
-import dev.catananti.service.EmailService;
+import dev.catananti.service.ArticleAdminService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -34,19 +30,10 @@ class ArticlePublishSchedulerTest {
     private ArticleRepository articleRepository;
 
     @Mock
-    private CacheService cacheService;
-
-    @Mock
-    private SubscriberRepository subscriberRepository;
-
-    @Mock
-    private EmailService emailService;
+    private ArticleAdminService articleAdminService;
 
     @Mock
     private SchedulerLock schedulerLock;
-
-    @Mock
-    private PaginationConfig paginationConfig;
 
     private ArticlePublishScheduler scheduler;
 
@@ -56,8 +43,18 @@ class ArticlePublishSchedulerTest {
         // pass-through so the scheduler's reactive pipeline still runs.
         lenient().when(schedulerLock.executeWithLock(anyString(), any(Duration.class), any(Mono.class)))
                 .thenAnswer(inv -> inv.getArgument(2));
-        lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
-        scheduler = new ArticlePublishScheduler(articleRepository, cacheService, subscriberRepository, emailService, schedulerLock, paginationConfig);
+        scheduler = new ArticlePublishScheduler(articleRepository, articleAdminService, schedulerLock);
+    }
+
+    private Article scheduledArticle(String slug) {
+        return Article.builder()
+                .id(1L)
+                .slug(slug)
+                .title("Test Article")
+                .excerpt("Test excerpt")
+                .status(ArticleStatus.SCHEDULED)
+                .scheduledAt(LocalDateTime.now().minusMinutes(5))
+                .build();
     }
 
     @Nested
@@ -65,30 +62,21 @@ class ArticlePublishSchedulerTest {
     class PublishScheduledArticles {
 
         @Test
-        @DisplayName("should find and publish scheduled articles")
-        void shouldFindAndPublishScheduledArticles() throws InterruptedException {
-            Article article = Article.builder()
-                    .id(1L)
-                    .slug("test-article")
-                    .title("Test Article")
-                    .excerpt("Test excerpt")
-                    .status(ArticleStatus.SCHEDULED)
-                    .scheduledAt(LocalDateTime.now().minusMinutes(5))
-                    .build();
+        @DisplayName("should claim scheduled articles and apply the shared publish side effects")
+        void shouldPublishAndApplySharedSideEffects() {
+            Article article = scheduledArticle("test-article");
 
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.just(article));
             when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(1));
-            when(subscriberRepository.findAllConfirmed(anyInt()))
-                    .thenReturn(Flux.empty());
-            when(cacheService.invalidateAllArticles())
-                    .thenReturn(Mono.empty());
+            // AUD19C-2: SSE + cache invalidation + notified_at-gated e-mail fan-out are
+            // delegated to the shared ArticleAdminService method — the scheduler no
+            // longer owns a private subscriber-notification duplicate.
+            when(articleAdminService.applyPublishSideEffects(any(Article.class)))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
             scheduler.publishScheduledArticles().block();
-
-            // Allow async subscribe to complete
-            Thread.sleep(200);
 
             verify(articleRepository).findScheduledArticlesToPublish(any(LocalDateTime.class));
 
@@ -96,6 +84,9 @@ class ArticlePublishSchedulerTest {
             ArgumentCaptor<Long> idCaptor = ArgumentCaptor.forClass(Long.class);
             verify(articleRepository).markPublishedIfScheduled(idCaptor.capture(), any(LocalDateTime.class));
             assertThat(idCaptor.getValue()).isEqualTo(1L);
+
+            verify(articleAdminService).applyPublishSideEffects(article);
+
             // The in-memory copy handed downstream reflects the persisted PUBLISHED state.
             assertThat(article.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
             assertThat(article.getPublishedAt()).isNotNull();
@@ -103,178 +94,68 @@ class ArticlePublishSchedulerTest {
         }
 
         @Test
-        @DisplayName("should notify subscribers for published articles")
-        void shouldNotifySubscribers() throws InterruptedException {
-            Article article = Article.builder()
-                    .id(1L)
-                    .slug("notify-test")
-                    .title("Notify Article")
-                    .excerpt("Notify excerpt")
-                    .status(ArticleStatus.SCHEDULED)
-                    .scheduledAt(LocalDateTime.now().minusMinutes(1))
-                    .build();
-
-            Subscriber subscriber = Subscriber.builder()
-                    .id(10L)
-                    .email("test@example.com")
-                    .name("Test User")
-                    .unsubscribeToken("token-123")
-                    .build();
+        @DisplayName("should NOT apply side effects when another publisher already claimed the article (CAS)")
+        void shouldNotApplySideEffectsWhenClaimLost() {
+            // Models the PATCH-publish → scheduler overlap: a manual publish (or another
+            // replica) flipped the status first, so the scheduler's status CAS gets 0 rows
+            // and the shared side effects — including the subscriber e-mail — never run
+            // a second time.
+            Article article = scheduledArticle("race-test");
 
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.just(article));
             when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
-                    .thenReturn(Mono.just(1));
-            when(subscriberRepository.findAllConfirmed(anyInt()))
-                    .thenReturn(Flux.just(subscriber));
-            when(emailService.sendNewArticleNotification(
-                    anyString(), anyString(), anyString(), anyString(), any(), anyString()))
-                    .thenReturn(Mono.empty());
-            when(cacheService.invalidateAllArticles())
-                    .thenReturn(Mono.empty());
+                    .thenReturn(Mono.just(0));
 
             scheduler.publishScheduledArticles().block();
 
-            Thread.sleep(200);
-
-            verify(emailService).sendNewArticleNotification(
-                    eq("test@example.com"),
-                    eq("Test User"),
-                    eq("Notify Article"),
-                    eq("notify-test"),
-                    eq("Notify excerpt"),
-                    eq("token-123")
-            );
-        }
-
-        @Test
-        @DisplayName("should invalidate cache after publishing")
-        void shouldInvalidateCache() throws InterruptedException {
-            Article article = Article.builder()
-                    .id(1L)
-                    .slug("cache-test")
-                    .title("Cache Article")
-                    .excerpt("excerpt")
-                    .status(ArticleStatus.SCHEDULED)
-                    .scheduledAt(LocalDateTime.now().minusMinutes(1))
-                    .build();
-
-            when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
-                    .thenReturn(Flux.just(article));
-            when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
-                    .thenReturn(Mono.just(1));
-            when(subscriberRepository.findAllConfirmed(anyInt()))
-                    .thenReturn(Flux.empty());
-            when(cacheService.invalidateAllArticles())
-                    .thenReturn(Mono.empty());
-
-            scheduler.publishScheduledArticles().block();
-
-            Thread.sleep(200);
-
-            verify(cacheService).invalidateAllArticles();
+            verify(articleRepository).markPublishedIfScheduled(eq(1L), any(LocalDateTime.class));
+            verify(articleAdminService, never()).applyPublishSideEffects(any(Article.class));
         }
 
         @Test
         @DisplayName("should handle errors without crashing")
-        void shouldHandleErrors() throws InterruptedException {
+        void shouldHandleErrors() {
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.error(new RuntimeException("DB connection lost")));
 
             // Should not throw
             scheduler.publishScheduledArticles().block();
 
-            Thread.sleep(200);
-
             verify(articleRepository).findScheduledArticlesToPublish(any(LocalDateTime.class));
             verify(articleRepository, never()).markPublishedIfScheduled(anyLong(), any());
+            verify(articleAdminService, never()).applyPublishSideEffects(any(Article.class));
         }
 
         @Test
         @DisplayName("should do nothing when no scheduled articles found")
-        void shouldDoNothingWhenNoArticles() throws InterruptedException {
+        void shouldDoNothingWhenNoArticles() {
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.empty());
 
             scheduler.publishScheduledArticles().block();
 
-            Thread.sleep(200);
-
             verify(articleRepository).findScheduledArticlesToPublish(any(LocalDateTime.class));
             verify(articleRepository, never()).markPublishedIfScheduled(anyLong(), any());
-            verify(emailService, never()).sendNewArticleNotification(
-                    anyString(), anyString(), anyString(), anyString(), any(), anyString());
+            verify(articleAdminService, never()).applyPublishSideEffects(any(Article.class));
         }
 
         @Test
-        @DisplayName("should handle email notification failure gracefully")
-        void shouldHandleEmailFailureGracefully() throws InterruptedException {
-            Article article = Article.builder()
-                    .id(1L)
-                    .slug("email-fail-test")
-                    .title("Email Fail Article")
-                    .excerpt("excerpt")
-                    .status(ArticleStatus.SCHEDULED)
-                    .scheduledAt(LocalDateTime.now().minusMinutes(1))
-                    .build();
-
-            Subscriber subscriber = Subscriber.builder()
-                    .id(10L)
-                    .email("fail@example.com")
-                    .name("Failing User")
-                    .unsubscribeToken("token-fail")
-                    .build();
+        @DisplayName("should survive a side-effect failure without crashing the run")
+        void shouldSurviveSideEffectFailure() {
+            Article article = scheduledArticle("email-fail-test");
 
             when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
                     .thenReturn(Flux.just(article));
             when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(1));
-            when(subscriberRepository.findAllConfirmed(anyInt()))
-                    .thenReturn(Flux.just(subscriber));
-            when(emailService.sendNewArticleNotification(
-                    anyString(), anyString(), anyString(), anyString(), any(), anyString()))
+            when(articleAdminService.applyPublishSideEffects(any(Article.class)))
                     .thenReturn(Mono.error(new RuntimeException("SMTP error")));
-            when(cacheService.invalidateAllArticles())
-                    .thenReturn(Mono.empty());
 
-            // Should not throw even when email fails
+            // Should not throw — the article was still published (atomic claim).
             scheduler.publishScheduledArticles().block();
 
-            Thread.sleep(200);
-
-            // Article was still published (atomic claim) despite the e-mail failure
             verify(articleRepository).markPublishedIfScheduled(anyLong(), any(LocalDateTime.class));
-            verify(cacheService).invalidateAllArticles();
-        }
-
-        @Test
-        @DisplayName("should NOT notify subscribers when another instance already published the article")
-        void shouldNotNotifyWhenClaimLost() throws InterruptedException {
-            Article article = Article.builder()
-                    .id(1L)
-                    .slug("race-test")
-                    .title("Race Article")
-                    .excerpt("excerpt")
-                    .status(ArticleStatus.SCHEDULED)
-                    .scheduledAt(LocalDateTime.now().minusMinutes(1))
-                    .build();
-
-            when(articleRepository.findScheduledArticlesToPublish(any(LocalDateTime.class)))
-                    .thenReturn(Flux.just(article));
-            // 0 rows updated => another replica won the compare-and-swap.
-            when(articleRepository.markPublishedIfScheduled(anyLong(), any(LocalDateTime.class)))
-                    .thenReturn(Mono.just(0));
-
-            scheduler.publishScheduledArticles().block();
-
-            Thread.sleep(200);
-
-            verify(articleRepository).markPublishedIfScheduled(eq(1L), any(LocalDateTime.class));
-            // No duplicate e-mail blast and no redundant cache invalidation.
-            verify(emailService, never()).sendNewArticleNotification(
-                    anyString(), anyString(), anyString(), anyString(), any(), anyString());
-            verify(subscriberRepository, never()).findAllConfirmed(anyInt());
-            verify(cacheService, never()).invalidateAllArticles();
         }
     }
 }

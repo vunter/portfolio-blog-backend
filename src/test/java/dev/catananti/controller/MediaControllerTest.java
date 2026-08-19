@@ -15,7 +15,6 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.codec.multipart.FilePart;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -66,13 +65,10 @@ class MediaControllerTest {
     class UploadMedia {
 
         @Test
-        @DisplayName("Should upload media and return response")
+        @DisplayName("AUD18-H1: Should resolve uploaderId from the String (email) principal")
         void shouldUploadMedia() {
             FilePart filePart = mock(FilePart.class);
             when(filePart.filename()).thenReturn("photo.jpg");
-
-            UserDetails userDetails = mock(UserDetails.class);
-            when(userDetails.getUsername()).thenReturn("admin@test.com");
 
             User user = new User();
             user.setId(42L);
@@ -80,20 +76,24 @@ class MediaControllerTest {
             when(mediaService.upload(eq(filePart), eq("GENERAL"), eq("A photo"), eq(42L)))
                     .thenReturn(Mono.just(sampleAsset));
 
-            StepVerifier.create(controller.uploadMedia(filePart, "GENERAL", "A photo", userDetails))
+            StepVerifier.create(controller.uploadMedia(filePart, "GENERAL", "A photo", "admin@test.com"))
                     .assertNext(response -> {
-                        assertThat(response.id()).isEqualTo(1L);
+                        // AUD19C-SNOW: id serialized as String
+                        assertThat(response.id()).isEqualTo("1");
                         assertThat(response.originalFilename()).isEqualTo("photo.jpg");
                         assertThat(response.contentType()).isEqualTo("image/jpeg");
                         assertThat(response.purpose()).isEqualTo("GENERAL");
                         assertThat(response.url()).isEqualTo("https://cdn.example.com/images/2026/03/uuid.jpg");
                     })
                     .verifyComplete();
+
+            // AUD18-H1: the uploader must actually be recorded (was always null before)
+            verify(mediaService).upload(eq(filePart), eq("GENERAL"), eq("A photo"), eq(42L));
         }
 
         @Test
-        @DisplayName("Should upload media when user details is null")
-        void shouldUploadMediaWithNullUserDetails() {
+        @DisplayName("Should upload media when principal is null")
+        void shouldUploadMediaWithNullPrincipal() {
             FilePart filePart = mock(FilePart.class);
             when(filePart.filename()).thenReturn("photo.jpg");
 
@@ -102,7 +102,7 @@ class MediaControllerTest {
 
             StepVerifier.create(controller.uploadMedia(filePart, "GENERAL", null, null))
                     .assertNext(response -> {
-                        assertThat(response.id()).isEqualTo(1L);
+                        assertThat(response.id()).isEqualTo("1");
                         assertThat(response.originalFilename()).isEqualTo("photo.jpg");
                     })
                     .verifyComplete();
@@ -160,7 +160,7 @@ class MediaControllerTest {
 
             StepVerifier.create(controller.getMedia(1L))
                     .assertNext(response -> {
-                        assertThat(response.id()).isEqualTo(1L);
+                        assertThat(response.id()).isEqualTo("1");
                         assertThat(response.originalFilename()).isEqualTo("photo.jpg");
                         assertThat(response.altText()).isEqualTo("A photo");
                     })

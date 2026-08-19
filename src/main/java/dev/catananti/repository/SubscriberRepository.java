@@ -59,15 +59,19 @@ public interface SubscriberRepository extends ReactiveCrudRepository<Subscriber,
 
     /**
      * Delete expired pending subscriptions.
+     * AUD18-L6: expiry is anchored on token_issued_at (created_at is no longer rewritten
+     * on re-subscribe, so it would purge freshly re-subscribed PENDING rows). COALESCE
+     * keeps pre-V22 rows covered.
      */
     @Modifying
-    @Query("DELETE FROM subscribers WHERE status = 'PENDING' AND created_at < :expirationDate")
+    @Query("DELETE FROM subscribers WHERE status = 'PENDING' AND COALESCE(token_issued_at, created_at) < :expirationDate")
     Mono<Integer> deleteExpiredPendingSubscriptions(LocalDateTime expirationDate);
 
     /**
      * Count expired pending subscriptions.
+     * AUD18-L6: see {@link #deleteExpiredPendingSubscriptions}.
      */
-    @Query("SELECT COUNT(*) FROM subscribers WHERE status = 'PENDING' AND created_at < :expirationDate")
+    @Query("SELECT COUNT(*) FROM subscribers WHERE status = 'PENDING' AND COALESCE(token_issued_at, created_at) < :expirationDate")
     Mono<Long> countExpiredPendingSubscriptions(LocalDateTime expirationDate);
 
     /**

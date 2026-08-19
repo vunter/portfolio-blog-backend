@@ -80,6 +80,35 @@ public interface CommentRepository extends ReactiveCrudRepository<Comment, Long>
     @Query("SELECT COUNT(c.*) FROM comments c JOIN articles a ON c.article_id = a.id WHERE a.author_id = :authorId")
     Mono<Long> countByArticleAuthorId(Long authorId);
 
+    // ==================== ADMIN SEARCH (AUD19C-2) ====================
+    // Case-insensitive substring match on comment content OR author name.
+    // Callers must escape LIKE wildcards (DigestUtils.escapeLikePattern, F-291);
+    // ESCAPE '\' makes the escape character explicit on both PostgreSQL and H2.
+
+    @Query("SELECT * FROM comments WHERE (LOWER(content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\') ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Comment> findAllBySearch(String search, int limit, int offset);
+
+    @Query("SELECT COUNT(*) FROM comments WHERE (LOWER(content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\')")
+    Mono<Long> countAllBySearch(String search);
+
+    @Query("SELECT * FROM comments WHERE status = :status AND (LOWER(content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\') ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Comment> findByStatusAndSearch(String status, String search, int limit, int offset);
+
+    @Query("SELECT COUNT(*) FROM comments WHERE status = :status AND (LOWER(content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\')")
+    Mono<Long> countByStatusAndSearch(String status, String search);
+
+    @Query("SELECT c.* FROM comments c JOIN articles a ON c.article_id = a.id WHERE a.author_id = :authorId AND (LOWER(c.content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(c.author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\') ORDER BY c.created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Comment> findByArticleAuthorIdAndSearch(Long authorId, String search, int limit, int offset);
+
+    @Query("SELECT COUNT(c.*) FROM comments c JOIN articles a ON c.article_id = a.id WHERE a.author_id = :authorId AND (LOWER(c.content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(c.author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\')")
+    Mono<Long> countByArticleAuthorIdAndSearch(Long authorId, String search);
+
+    @Query("SELECT c.* FROM comments c JOIN articles a ON c.article_id = a.id WHERE a.author_id = :authorId AND c.status = :status AND (LOWER(c.content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(c.author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\') ORDER BY c.created_at DESC LIMIT :limit OFFSET :offset")
+    Flux<Comment> findByArticleAuthorIdAndStatusAndSearch(Long authorId, String status, String search, int limit, int offset);
+
+    @Query("SELECT COUNT(c.*) FROM comments c JOIN articles a ON c.article_id = a.id WHERE a.author_id = :authorId AND c.status = :status AND (LOWER(c.content) LIKE LOWER('%' || :search || '%') ESCAPE '\\' OR LOWER(c.author_name) LIKE LOWER('%' || :search || '%') ESCAPE '\\')")
+    Mono<Long> countByArticleAuthorIdAndStatusAndSearch(Long authorId, String status, String search);
+
     // ==================== ACCOUNT DELETION (V21) ====================
 
     @Query("SELECT COUNT(*) FROM comments WHERE user_id = :userId")

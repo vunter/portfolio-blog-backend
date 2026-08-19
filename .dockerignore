@@ -47,5 +47,11 @@ docs/
 # Local config
 .env
 .env.*
-application-local.properties
-application-dev.properties
+# NOTE: patterns must be **/-prefixed to match inside src/main/resources —
+# root-anchored names only matched at the context root, where these files
+# don't exist. Defense in depth only: the authoritative exclusion of dev
+# resources from the release JAR is the `release-jar` Maven profile in pom.xml.
+**/application-local.properties
+**/application-dev.properties
+**/application-e2e.properties
+**/application-nitro.properties

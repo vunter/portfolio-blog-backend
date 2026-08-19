@@ -90,6 +90,21 @@ public class CommentService {
                 .flatMap(article -> commentRepository.countApprovedByArticleId(article.getId()));
     }
 
+    /**
+     * AUD18-L2: Resolve an APPROVED comment that belongs to the slug's article.
+     * Errors with {@link ResourceNotFoundException} (404) when the article does not
+     * exist, the comment does not exist, is not APPROVED, or belongs to a different
+     * article — so like operations can no longer target arbitrary/foreign ids.
+     */
+    public Mono<Comment> getApprovedCommentForArticle(String slug, Long commentId) {
+        return articleRepository.findBySlug(slug)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
+                .flatMap(article -> commentRepository.findById(commentId)
+                        .filter(comment -> comment.getArticleId().equals(article.getId())
+                                && comment.getStatus() == CommentStatus.APPROVED)
+                        .switchIfEmpty(Mono.error(new ResourceNotFoundException("Comment", "id", commentId))));
+    }
+
     public Mono<Integer> likeCommentAndReturnCount(Long commentId) {
         return commentRepository.incrementLikes(commentId)
                 .then(commentRepository.getLikesCount(commentId))
@@ -274,21 +289,33 @@ public class CommentService {
     public Flux<CommentResponse> bulkApprove(List<Long> ids) {
         // R2DBC transactions are bound to a single connection, so concurrent flatMap
         // would not be atomic. Use concatMap to serialize updates within the tx.
-        return Flux.fromIterable(ids).concatMap(this::approveComment);
+        // AUD18-JA11: the bulk path skipped the ownership check the single-comment
+        // admin* endpoints enforce — a DEV could bulk-moderate any comment by id.
+        // Resolve the user once, then verify ownership per comment (ADMIN unrestricted,
+        // DEV limited to comments on their own articles).
+        return getCurrentUser().flatMapMany(user ->
+                Flux.fromIterable(ids).concatMap(id ->
+                        verifyCommentOwnership(user, id).then(approveComment(id))));
     }
 
     @Transactional
     public Flux<CommentResponse> bulkReject(List<Long> ids) {
         // R2DBC transactions are bound to a single connection, so concurrent flatMap
         // would not be atomic. Use concatMap to serialize updates within the tx.
-        return Flux.fromIterable(ids).concatMap(this::rejectComment);
+        // AUD18-JA11: ownership-scoped — see bulkApprove.
+        return getCurrentUser().flatMapMany(user ->
+                Flux.fromIterable(ids).concatMap(id ->
+                        verifyCommentOwnership(user, id).then(rejectComment(id))));
     }
 
     @Transactional
     public Flux<CommentResponse> bulkMarkAsSpam(List<Long> ids) {
         // R2DBC transactions are bound to a single connection, so concurrent flatMap
         // would not be atomic. Use concatMap to serialize updates within the tx.
-        return Flux.fromIterable(ids).concatMap(this::markAsSpam);
+        // AUD18-JA11: ownership-scoped — see bulkApprove.
+        return getCurrentUser().flatMapMany(user ->
+                Flux.fromIterable(ids).concatMap(id ->
+                        verifyCommentOwnership(user, id).then(markAsSpam(id))));
     }
 
     @Transactional
@@ -308,56 +335,83 @@ public class CommentService {
     /**
      * Get comments by status, scoped by ownership.
      * ADMIN sees all comments; DEV see only comments on their own articles.
+     * AUD19C-2: optional {@code search} filters by comment content or author name
+     * (case-insensitive substring; LIKE wildcards escaped, F-291 style).
      */
-    public Mono<PageResponse<CommentResponse>> getAdminCommentsByStatus(String status, int page, int size) {
+    public Mono<PageResponse<CommentResponse>> getAdminCommentsByStatus(String status, String search, int page, int size) {
         int offset = page * size;
+        String term = (search == null || search.isBlank())
+                ? null
+                : dev.catananti.util.DigestUtils.escapeLikePattern(search.trim());
         return getCurrentUser().flatMap(user -> {
+            Flux<Comment> commentsFlux;
+            Mono<Long> countMono;
             if (UserRole.ADMIN.matches(user.getRole())) {
-                // ADMIN: existing behavior
-                if ("ALL".equalsIgnoreCase(status)) {
-                    return getAllCommentsPaginated(page, size);
+                if (term == null) {
+                    // ADMIN: existing behavior
+                    if ("ALL".equalsIgnoreCase(status)) {
+                        return getAllCommentsPaginated(page, size);
+                    }
+                    return getCommentsByStatus(status, page, size);
                 }
-                return getCommentsByStatus(status, page, size);
+                if ("ALL".equalsIgnoreCase(status)) {
+                    commentsFlux = commentRepository.findAllBySearch(term, size, offset);
+                    countMono = commentRepository.countAllBySearch(term);
+                } else {
+                    commentsFlux = commentRepository.findByStatusAndSearch(status.toUpperCase(), term, size, offset);
+                    countMono = commentRepository.countByStatusAndSearch(status.toUpperCase(), term);
+                }
             } else {
                 // DEV: only comments on own articles
                 Long userId = user.getId();
-                Flux<Comment> commentsFlux;
-                Mono<Long> countMono;
                 if ("ALL".equalsIgnoreCase(status)) {
-                    commentsFlux = commentRepository.findByArticleAuthorId(userId, size, offset);
-                    countMono = commentRepository.countByArticleAuthorId(userId);
-                } else {
+                    if (term == null) {
+                        commentsFlux = commentRepository.findByArticleAuthorId(userId, size, offset);
+                        countMono = commentRepository.countByArticleAuthorId(userId);
+                    } else {
+                        commentsFlux = commentRepository.findByArticleAuthorIdAndSearch(userId, term, size, offset);
+                        countMono = commentRepository.countByArticleAuthorIdAndSearch(userId, term);
+                    }
+                } else if (term == null) {
                     commentsFlux = commentRepository.findByArticleAuthorIdAndStatus(userId, status.toUpperCase(), size, offset);
                     countMono = commentRepository.countByArticleAuthorIdAndStatus(userId, status.toUpperCase());
+                } else {
+                    commentsFlux = commentRepository.findByArticleAuthorIdAndStatusAndSearch(userId, status.toUpperCase(), term, size, offset);
+                    countMono = commentRepository.countByArticleAuthorIdAndStatusAndSearch(userId, status.toUpperCase(), term);
                 }
-                return commentsFlux
-                        .map(this::toResponse)
-                        .collectList()
-                        .zipWith(countMono)
-                        .flatMap(tuple -> enrichCommentsWithArticleInfo(tuple.getT1(), page, size, tuple.getT2()));
             }
+            return commentsFlux
+                    .map(this::toResponse)
+                    .collectList()
+                    .zipWith(countMono)
+                    .flatMap(tuple -> enrichCommentsWithArticleInfo(tuple.getT1(), page, size, tuple.getT2()));
         });
     }
 
     /**
      * Get comments by article, scoped by ownership.
      * ADMIN sees all; DEV only see comments on articles they authored.
+     * AUD19C-3: the article is resolved once for BOTH roles — it enriches every
+     * response with articleSlug/articleTitle (the frontend was rendering
+     * /blog/undefined links) and gives ADMIN a 404 on an unknown article id
+     * (previously a silent empty list).
      */
     public Flux<CommentResponse> getAdminCommentsByArticleId(Long articleId) {
-        return getCurrentUser().flatMapMany(user -> {
-            if (UserRole.ADMIN.matches(user.getRole())) {
-                return getAllCommentsByArticleId(articleId);
-            }
-            // Verify the article belongs to this user
-            return articleRepository.findById(articleId)
-                    .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", articleId)))
-                    .flatMapMany(article -> {
-                        if (!user.getId().equals(article.getAuthorId())) {
-                            return Flux.error(new AccessDeniedException("You can only view comments on your own articles"));
-                        }
-                        return getAllCommentsByArticleId(articleId);
-                    });
-        });
+        return getCurrentUser().flatMapMany(user ->
+                articleRepository.findById(articleId)
+                        .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "id", articleId)))
+                        .flatMapMany(article -> {
+                            if (!UserRole.ADMIN.matches(user.getRole())
+                                    && !user.getId().equals(article.getAuthorId())) {
+                                return Flux.error(new AccessDeniedException("You can only view comments on your own articles"));
+                            }
+                            return getAllCommentsByArticleId(articleId)
+                                    .map(response -> {
+                                        response.setArticleSlug(article.getSlug());
+                                        response.setArticleTitle(article.getTitle());
+                                        return response;
+                                    });
+                        }));
     }
 
     @Transactional
@@ -509,20 +563,26 @@ public class CommentService {
      * ADMIN can moderate any comment; DEV can only moderate comments on their own articles.
      */
     private Mono<Void> verifyCommentOwnership(Long commentId) {
-        return getCurrentUser().flatMap(user -> {
-            if (UserRole.ADMIN.matches(user.getRole())) {
-                return Mono.empty(); // ADMIN: always allowed
-            }
-            return commentRepository.findById(commentId)
-                    .switchIfEmpty(Mono.error(new ResourceNotFoundException("Comment", "id", commentId)))
-                    .flatMap(comment -> articleRepository.findById(comment.getArticleId())
-                            .flatMap(article -> {
-                                if (user.getId().equals(article.getAuthorId())) {
-                                    return Mono.empty(); // Own article's comment
-                                }
-                                return Mono.error(new AccessDeniedException(
-                                        "You can only moderate comments on your own articles"));
-                            }));
-        });
+        return getCurrentUser().flatMap(user -> verifyCommentOwnership(user, commentId));
+    }
+
+    /**
+     * AUD18-JA11: overload with a pre-resolved user so bulk operations verify each
+     * comment without re-fetching the current user per id.
+     */
+    private Mono<Void> verifyCommentOwnership(dev.catananti.entity.User user, Long commentId) {
+        if (UserRole.ADMIN.matches(user.getRole())) {
+            return Mono.empty(); // ADMIN: always allowed
+        }
+        return commentRepository.findById(commentId)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Comment", "id", commentId)))
+                .flatMap(comment -> articleRepository.findById(comment.getArticleId())
+                        .flatMap(article -> {
+                            if (user.getId().equals(article.getAuthorId())) {
+                                return Mono.<Void>empty(); // Own article's comment
+                            }
+                            return Mono.<Void>error(new AccessDeniedException(
+                                    "You can only moderate comments on your own articles"));
+                        }));
     }
 }

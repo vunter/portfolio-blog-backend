@@ -159,34 +159,7 @@ class TagServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("getTagById")
-    class GetTagById {
-
-        @Test
-        @DisplayName("Should return tag by ID")
-        void shouldReturnTag() {
-            when(tagRepository.findById(101L)).thenReturn(Mono.just(javaTag));
-            when(tagRepository.countPublishedArticlesByTagId(101L)).thenReturn(Mono.just(15L));
-
-            StepVerifier.create(tagService.getTagById(101L))
-                    .assertNext(tag -> {
-                        assertThat(tag.getId()).isEqualTo("101");
-                        assertThat(tag.getName()).isEqualTo("Java");
-                    })
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("Should throw ResourceNotFoundException for unknown ID")
-        void shouldThrowForUnknownId() {
-            when(tagRepository.findById(999L)).thenReturn(Mono.empty());
-
-            StepVerifier.create(tagService.getTagById(999L))
-                    .expectError(ResourceNotFoundException.class)
-                    .verify();
-        }
-    }
+    // AUD19C-5: getTagById tests removed with the orphan endpoint/service method.
 
     @Nested
     @DisplayName("createTag")

@@ -80,13 +80,16 @@ class EmailOtpServiceTest {
                 .thenAnswer(inv -> inv.getArgument(0));
 
         // SEG-5: brute-force attempt counter. verifyOtp (and verifySetup, which calls it)
-        // increments a per-user counter, sets a TTL on first increment, and on success
-        // deletes both the OTP key and the attempt-counter key. Stub these leniently so the
-        // happy-path (attempts == 1, under the threshold of 5) and negative paths all work.
+        // increments a per-user counter, asserts its TTL, and on success deletes both the
+        // OTP key and the attempt-counter key. Stub these leniently so the happy-path
+        // (attempts == 1, under the threshold of 5) and negative paths all work.
         lenient().when(valueOperations.increment("mfa:otp-attempts:100")).thenReturn(Mono.just(1L));
         lenient().when(redisTemplate.expire(eq("mfa:otp-attempts:100"), any(Duration.class)))
                 .thenReturn(Mono.just(true));
         lenient().when(redisTemplate.delete("mfa:otp-attempts:100")).thenReturn(Mono.just(1L));
+        // AUD18-L7: incrementWithTtl checks the current TTL on every pass and repairs a
+        // missing one — Duration.ZERO means "no TTL", so the repair path is exercised.
+        lenient().when(redisTemplate.getExpire(anyString())).thenReturn(Mono.just(Duration.ZERO));
     }
 
     // ==================== verifyOtp ====================
@@ -185,6 +188,9 @@ class EmailOtpServiceTest {
     void sendOtp_ShouldThrow_WhenRateLimitExceeded() {
         when(userRepository.findById(100L)).thenReturn(Mono.just(testUser));
         when(valueOperations.increment("mfa:otp:email:user@example.com")).thenReturn(Mono.just(4L));
+        // Rate key already carries a TTL — no repair needed on this pass
+        when(redisTemplate.getExpire("mfa:otp:email:user@example.com"))
+                .thenReturn(Mono.just(Duration.ofMinutes(10)));
 
         StepVerifier.create(emailOtpService.sendOtp(100L))
                 .expectErrorSatisfies(err -> {
@@ -196,10 +202,12 @@ class EmailOtpServiceTest {
     }
 
     @Test
-    @DisplayName("sendOtp should set expire on rate key for first request only")
-    void sendOtp_ShouldSetExpire_OnFirstRequestOnly() {
+    @DisplayName("AUD18-L7: sendOtp should not re-set the TTL when the rate key already has one")
+    void sendOtp_ShouldNotResetTtl_WhenTtlPresent() {
         when(userRepository.findById(100L)).thenReturn(Mono.just(testUser));
         when(valueOperations.increment("mfa:otp:email:user@example.com")).thenReturn(Mono.just(2L));
+        when(redisTemplate.getExpire("mfa:otp:email:user@example.com"))
+                .thenReturn(Mono.just(Duration.ofMinutes(10)));
         when(valueOperations.get("mfa:email-otp:100")).thenReturn(Mono.empty());
         when(valueOperations.set(eq("mfa:email-otp:100"), anyString(), eq(Duration.ofMinutes(10))))
                 .thenReturn(Mono.just(true));
@@ -209,8 +217,70 @@ class EmailOtpServiceTest {
         StepVerifier.create(emailOtpService.sendOtp(100L))
                 .verifyComplete();
 
-        // Count > 1 so expire should NOT be called
-        verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
+        // TTL present — no expire call needed for the rate key
+        verify(redisTemplate, never()).expire(eq("mfa:otp:email:user@example.com"), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("AUD18-L7: sendOtp should repair a missing TTL even when count > 1")
+    void sendOtp_ShouldRepairMissingTtl_WhenCountAboveOne() {
+        when(userRepository.findById(100L)).thenReturn(Mono.just(testUser));
+        when(valueOperations.increment("mfa:otp:email:user@example.com")).thenReturn(Mono.just(2L));
+        // Key exists without a TTL (the original EXPIRE failed) — must be repaired,
+        // otherwise the rate limit would be a permanent lockout
+        when(redisTemplate.getExpire("mfa:otp:email:user@example.com"))
+                .thenReturn(Mono.just(Duration.ZERO));
+        when(redisTemplate.expire(eq("mfa:otp:email:user@example.com"), any(Duration.class)))
+                .thenReturn(Mono.just(true));
+        when(valueOperations.get("mfa:email-otp:100")).thenReturn(Mono.empty());
+        when(valueOperations.set(eq("mfa:email-otp:100"), anyString(), eq(Duration.ofMinutes(10))))
+                .thenReturn(Mono.just(true));
+        when(emailService.sendOtpVerification(eq("user@example.com"), eq("Test User"), anyString(), eq(10)))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(emailOtpService.sendOtp(100L))
+                .verifyComplete();
+
+        verify(redisTemplate).expire(eq("mfa:otp:email:user@example.com"), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("AUD18-M9: generating a NEW OTP resets the previous code's failed-attempt counter")
+    void sendOtp_NewOtp_ResetsAttemptCounter() {
+        when(userRepository.findById(100L)).thenReturn(Mono.just(testUser));
+        when(valueOperations.increment("mfa:otp:email:user@example.com")).thenReturn(Mono.just(1L));
+        when(redisTemplate.expire(eq("mfa:otp:email:user@example.com"), any(Duration.class)))
+                .thenReturn(Mono.just(true));
+        // No OTP in Redis — e.g. the previous one was invalidated by the brute-force lockout
+        when(valueOperations.get("mfa:email-otp:100")).thenReturn(Mono.empty());
+        when(valueOperations.set(eq("mfa:email-otp:100"), anyString(), eq(Duration.ofMinutes(10))))
+                .thenReturn(Mono.just(true));
+        when(emailService.sendOtpVerification(eq("user@example.com"), eq("Test User"), anyString(), eq(10)))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(emailOtpService.sendOtp(100L))
+                .verifyComplete();
+
+        // new code = new guess budget: the stale counter must not lock the fresh OTP out
+        verify(redisTemplate).delete("mfa:otp-attempts:100");
+    }
+
+    @Test
+    @DisplayName("AUD18-M9: resending the SAME OTP keeps the failed-attempt counter")
+    void sendOtp_Reuse_KeepsAttemptCounter() {
+        when(userRepository.findById(100L)).thenReturn(Mono.just(testUser));
+        when(valueOperations.increment("mfa:otp:email:user@example.com")).thenReturn(Mono.just(1L));
+        when(redisTemplate.expire(eq("mfa:otp:email:user@example.com"), any(Duration.class)))
+                .thenReturn(Mono.just(true));
+        when(valueOperations.get("mfa:email-otp:100")).thenReturn(Mono.just("654321"));
+        when(emailService.sendOtpVerification("user@example.com", "Test User", "654321", 10))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(emailOtpService.sendOtp(100L))
+                .verifyComplete();
+
+        // same code — resetting the counter here would let an attacker extend the budget by resending
+        verify(redisTemplate, never()).delete("mfa:otp-attempts:100");
     }
 
     // ==================== initSetup ====================

@@ -41,9 +41,12 @@ groups:
           summary: "High login failure rate"
           description: "More than 10 failed login attempts in the last 5 minutes — possible brute-force."
 
-      # Q12.4: Database circuit breaker open
+      # Q12.4: Database circuit breaker open.
+      # resilience4j exports one gauge PER STATE (closed/open/half_open/...),
+      # value 1 for the current state — without the state label this matched
+      # the closed==1 series and fired permanently.
       - alert: DatabaseCircuitBreakerOpen
-        expr: resilience4j_circuitbreaker_state{name="database"} == 1
+        expr: resilience4j_circuitbreaker_state{name="database", state="open"} == 1
         for: 1m
         labels:
           severity: critical

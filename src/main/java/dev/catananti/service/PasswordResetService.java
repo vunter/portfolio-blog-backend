@@ -140,27 +140,39 @@ public class PasswordResetService {
     private Mono<Boolean> checkEmailRateLimit(String email) {
         if (redisTemplate == null) return Mono.just(true);
         String key = RATE_LIMIT_PREFIX + email;
-        return redisTemplate.opsForValue().increment(key)
-                .flatMap(count -> {
-                    if (count == 1) {
-                        return redisTemplate.expire(key, Duration.ofHours(1)).thenReturn(count);
-                    }
-                    return Mono.just(count);
-                })
+        return incrementWithTtl(key, Duration.ofHours(1))
                 .map(count -> count <= maxTokensPerHour)
                 .onErrorReturn(true);
     }
 
     /**
+     * AUD18-L7: INCR-then-EXPIRE hardening. The TTL used to be set only when the
+     * counter was first created (count==1); if that single EXPIRE call failed, the key
+     * lived forever and the rate limit became a permanent lockout. Check-and-repair
+     * instead: after every INCR, (re)apply the TTL whenever the key has none — this
+     * also covers a racing INCR re-creating the key right after expiry.
+     */
+    private Mono<Long> incrementWithTtl(String key, Duration ttl) {
+        return redisTemplate.opsForValue().increment(key)
+                .flatMap(count -> redisTemplate.getExpire(key)
+                        .defaultIfEmpty(Duration.ZERO)
+                        .flatMap(current -> current.isZero() || current.isNegative()
+                                ? redisTemplate.expire(key, ttl).thenReturn(count)
+                                : Mono.just(count)));
+    }
+
+    /**
      * Validate a password reset token.
      * SEC: Artificial random delay prevents timing-based token enumeration.
+     * AUD18-L1: the delay sits AFTER defaultIfEmpty so BOTH outcomes are delayed —
+     * previously only the found-token path was, which itself leaked existence.
      */
     public Mono<Boolean> validateToken(String token) {
         // SEC-05: Hash the incoming token before lookup
         return tokenRepository.findByTokenAndUsedFalse(hashToken(token))
                 .map(PasswordResetToken::isValid)
-                .delayElement(Duration.ofMillis(50 + SECURE_RANDOM.nextInt(100)))
-                .defaultIfEmpty(false);
+                .defaultIfEmpty(false)
+                .delayElement(Duration.ofMillis(50 + SECURE_RANDOM.nextInt(100)));
     }
 
     /**
@@ -183,11 +195,18 @@ public class PasswordResetService {
             return Mono.error(new IllegalArgumentException("error.password_too_weak"));
         }
         // SEC-05: Hash the incoming token before lookup
-        // SEC: Artificial random delay prevents timing-based token enumeration
+        // SEC: Artificial random delay prevents timing-based token enumeration.
+        // AUD18-L1: singleOptional turns the not-found/invalid case into an emitted
+        // Optional.empty, so the SAME delay applies to both outcomes — the old
+        // filter→delay→switchIfEmpty ordering delayed only valid tokens, letting the
+        // response time reveal whether a token exists.
         return tokenRepository.findByTokenAndUsedFalse(hashToken(token))
                 .filter(PasswordResetToken::isValid)
+                .singleOptional()
                 .delayElement(Duration.ofMillis(50 + SECURE_RANDOM.nextInt(100)))
-                .switchIfEmpty(Mono.error(new SecurityException("error.invalid_reset_token")))
+                .flatMap(maybeToken -> maybeToken
+                        .map(Mono::just)
+                        .orElseGet(() -> Mono.error(new SecurityException("error.invalid_reset_token"))))
                 .flatMap(resetToken -> userRepository.findById(resetToken.getUserId())
                         .switchIfEmpty(Mono.error(new SecurityException("error.user_not_found")))
                         .flatMap(user ->

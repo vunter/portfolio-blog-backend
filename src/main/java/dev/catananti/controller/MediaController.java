@@ -14,7 +14,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
@@ -36,24 +35,33 @@ public class MediaController {
 
     /**
      * Upload a media file.
-     * 
+     *
      * @param file    the file to upload (JPEG, PNG, GIF, WebP)
      * @param purpose the intended use: AVATAR, BLOG_COVER, BLOG_CONTENT, COMMENT, PROJECT, TESTIMONIAL, GENERAL
      * @param altText optional alt text for accessibility
      */
+    // AUD18-M3: SecurityConfig deliberately relaxes /api/v1/admin/media/upload to
+    // authenticated() because VIEWERs upload their own avatar (viewer-profile page,
+    // adminApi.uploadMedia(file, 'AVATAR')). This method-level rule overrides the
+    // class-level ADMIN/DEV @PreAuthorize so the two layers agree, while enforcing
+    // server-side that non-ADMIN/DEV users may ONLY upload purpose=AVATAR.
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('ADMIN', 'DEV') or (isAuthenticated() and #purpose != null and #purpose.equalsIgnoreCase('AVATAR'))")
     @Operation(summary = "Upload media file", description = "Upload an image file and track it as a reusable media asset")
     public Mono<MediaAssetResponse> uploadMedia(
             @RequestPart("file") FilePart file,
             @RequestParam(value = "purpose", defaultValue = "GENERAL") String purpose,
             @RequestParam(value = "altText", required = false) String altText,
-            @AuthenticationPrincipal UserDetails userDetails) {
+            @AuthenticationPrincipal String email) {
 
+        // AUD18-H1: JwtAuthenticationFilter sets a String principal (email), never a
+        // UserDetails — the old @AuthenticationPrincipal UserDetails was always null,
+        // so every upload was stored with uploaderId=null.
         log.info("Media upload request: filename={}, purpose={}, user={}",
-                file.filename(), purpose, userDetails != null ? userDetails.getUsername() : "unknown");
+                file.filename(), purpose, email != null ? email : "unknown");
 
-        return resolveUploaderId(userDetails)
+        return resolveUploaderId(email)
                 .flatMap(uploaderId -> mediaService.upload(file, purpose, altText, uploaderId))
                 .switchIfEmpty(Mono.defer(() -> mediaService.upload(file, purpose, altText, null)))
                 .map(MediaAssetResponse::from);
@@ -127,7 +135,8 @@ public class MediaController {
     // ============================
 
     public record MediaAssetResponse(
-            Long id,
+            // AUD19C-SNOW: String, not Long — Snowflake ids exceed JS Number.MAX_SAFE_INTEGER (2^53)
+            String id,
             String originalFilename,
             String contentType,
             Long fileSize,
@@ -139,7 +148,7 @@ public class MediaController {
     ) {
         static MediaAssetResponse from(MediaAsset asset) {
             return new MediaAssetResponse(
-                    asset.getId(),
+                    String.valueOf(asset.getId()),
                     asset.getOriginalFilename(),
                     asset.getContentType(),
                     asset.getFileSize(),
@@ -164,9 +173,11 @@ public class MediaController {
     // Helpers
     // ============================
 
-    private Mono<Long> resolveUploaderId(UserDetails userDetails) {
-        if (userDetails == null) return Mono.empty();
-        return userRepository.findByEmail(userDetails.getUsername())
+    // AUD18-H1: resolves the uploader from the String (email) principal set by
+    // JwtAuthenticationFilter — see uploadMedia.
+    private Mono<Long> resolveUploaderId(String email) {
+        if (email == null || email.isBlank()) return Mono.empty();
+        return userRepository.findByEmail(email)
                 .map(user -> user.getId());
     }
 }

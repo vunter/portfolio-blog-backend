@@ -30,4 +30,11 @@ public class TokenResponse {
 
     /** Temporary token used to complete the MFA challenge (only set when mfaRequired=true). */
     private String mfaToken;
+
+    /**
+     * AUD19C-MFAMETHOD: the user's preferred MFA method ("TOTP" / "EMAIL"), only set when
+     * mfaRequired=true, so the FE can land on the right verification form. Deliberately
+     * NOT WRITE_ONLY — unlike the tokens it must serialize in the challenge response.
+     */
+    private String mfaMethod;
 }

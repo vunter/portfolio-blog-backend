@@ -34,7 +34,9 @@ services:
       - RECAPTCHA_SITE_KEY=${RECAPTCHA_SITE_KEY:?RECAPTCHA_SITE_KEY is required}
       - RECAPTCHA_SECRET_KEY=${RECAPTCHA_SECRET_KEY:?RECAPTCHA_SECRET_KEY is required}
       - RECAPTCHA_SCORE_THRESHOLD=${RECAPTCHA_SCORE_THRESHOLD:-0.5}
-      - VAULT_ADDR=${VAULT_ADDR:-http://192.168.1.193:30820}
+      # L-7: cluster Vault runs on rpi5 K3s at .235 (NodePort 30820) — keep in
+      # sync with application-local.properties.
+      - VAULT_ADDR=${VAULT_ADDR:-http://192.168.1.235:30820}
       - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}
       - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}
       - DD_AGENT_ENABLED=${DD_AGENT_ENABLED:-true}
@@ -223,8 +225,8 @@ services:
       - '--storage.path=/alertmanager'
       - '--web.external-url=/alertmanager'
       - '--web.route-prefix=/alertmanager'
-    environment:
-      - ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL:-http://localhost:5001/}
+    # NOTE: no environment block — Alertmanager cannot expand env vars in its
+    # config; the webhook URL is a literal in alertmanager.yml (see comment there).
     logging:
       driver: json-file
       options:
@@ -270,7 +272,9 @@ services:
       - /tmp:size=64M
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required - set a strong password (generate with: openssl rand -base64 32)}
+      # Generate a strong password with `openssl rand -base64 32`.
+      # (Error text must not contain ": " — YAML would parse the entry as a map.)
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required - set a strong password}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true

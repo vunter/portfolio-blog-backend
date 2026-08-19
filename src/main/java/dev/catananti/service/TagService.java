@@ -77,11 +77,7 @@ public class TagService {
                 .flatMap(tag -> toResponseWithCount(tag, locale));
     }
 
-    public Mono<TagResponse> getTagById(Long id) {
-        return tagRepository.findById(id)
-                .switchIfEmpty(Mono.error(new ResourceNotFoundException("Tag", "id", id)))
-                .flatMap(tag -> toResponseWithCount(tag, null));
-    }
+    // AUD19C-5: getTagById removed — sole caller was AdminTagController's orphan GET /{id}.
 
     @Transactional
     public Mono<TagResponse> createTag(TagRequest request) {

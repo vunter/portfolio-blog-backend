@@ -103,8 +103,8 @@ public class ArticleTranslationService {
         if (locale == null) {
             return;
         }
-        // getTranslation() caches under the raw locale; applyTranslation() under the
-        // lower-cased locale — evict both spellings.
+        // applyTranslation() caches under the lower-cased locale; evict the raw
+        // spelling too in case the caller passed a mixed-case locale.
         translationCache.invalidate(articleId + ":" + locale);
         translationCache.invalidate(articleId + ":" + locale.toLowerCase());
     }
@@ -116,19 +116,8 @@ public class ArticleTranslationService {
         return articleI18nRepository.findLocalesByArticleId(articleId);
     }
 
-    /**
-     * Get a specific translation for an article.
-     * Uses Caffeine cache with key=articleId+locale, TTL=1 hour.
-     */
-    public Mono<ArticleI18n> getTranslation(Long articleId, String locale) {
-        String cacheKey = articleId + ":" + locale;
-        ArticleI18n cached = translationCache.getIfPresent(cacheKey);
-        if (cached != null) {
-            return Mono.just(cached);
-        }
-        return articleI18nRepository.findByArticleIdAndLocale(articleId, locale)
-                .doOnNext(i18n -> translationCache.put(cacheKey, i18n));
-    }
+    // AUD19C-3: getTranslation(articleId, locale) removed — its sole caller was the
+    // orphaned GET /admin/articles/{id}/translations/{locale} endpoint.
 
     /**
      * Get all translations for an article.

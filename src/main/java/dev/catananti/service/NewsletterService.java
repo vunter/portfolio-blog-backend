@@ -56,10 +56,12 @@ public class NewsletterService {
                 .flatMap(existing -> {
                     if (existing.getStatus() == SubscriberStatus.UNSUBSCRIBED) {
                         // Re-subscribe
+                        // AUD18-L6: do NOT touch createdAt — it is the original signup date.
+                        // The token lifecycle lives on tokenIssuedAt now.
                         existing.setStatus(SubscriberStatus.PENDING);
                         existing.setConfirmationToken(UUID.randomUUID().toString());
+                        existing.setTokenIssuedAt(LocalDateTime.now());
                         existing.setUnsubscribedAt(null);
-                        existing.setCreatedAt(LocalDateTime.now());
                         existing.setAnalyticsConsent(Boolean.TRUE.equals(request.getAnalyticsConsent()));
                         return subscriberRepository.save(existing)
                                 .map(s -> createConfirmationResponse(s));
@@ -69,7 +71,8 @@ public class NewsletterService {
                         // Still pending - check if expired, then regenerate token
                         if (isTokenExpired(existing)) {
                             existing.setConfirmationToken(UUID.randomUUID().toString());
-                            existing.setCreatedAt(LocalDateTime.now());
+                            // AUD18-L6: stamp the reissue on tokenIssuedAt, not createdAt
+                            existing.setTokenIssuedAt(LocalDateTime.now());
                             return subscriberRepository.save(existing)
                                     .map(this::createConfirmationResponse);
                         }
@@ -94,10 +97,15 @@ public class NewsletterService {
     }
 
     private boolean isTokenExpired(Subscriber subscriber) {
-        if (subscriber.getCreatedAt() == null) {
+        // AUD18-L6: expiry is anchored on tokenIssuedAt; createdAt only remains as a
+        // fallback for rows written before V22 backfilled the new column.
+        LocalDateTime issuedAt = subscriber.getTokenIssuedAt() != null
+                ? subscriber.getTokenIssuedAt()
+                : subscriber.getCreatedAt();
+        if (issuedAt == null) {
             return true;
         }
-        return subscriber.getCreatedAt()
+        return issuedAt
                 .plusHours(confirmationExpirationHours)
                 .isBefore(LocalDateTime.now());
     }
@@ -111,6 +119,7 @@ public class NewsletterService {
                 .confirmationToken(UUID.randomUUID().toString())
                 .unsubscribeToken(UUID.randomUUID().toString())
                 .createdAt(LocalDateTime.now())
+                .tokenIssuedAt(LocalDateTime.now())
                 .analyticsConsent(Boolean.TRUE.equals(request.getAnalyticsConsent()))
                 .build();
 

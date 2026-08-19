@@ -318,6 +318,39 @@ class AdminArticleControllerTest {
     }
 
     @Nested
+    @DisplayName("GET /api/v1/admin/articles/{id}/reviews")
+    class GetReviews {
+
+        @Test
+        @DisplayName("AUD19C-3: Should map review history to String-id DTOs")
+        void shouldMapReviewsToStringIdDto() {
+            // Snowflake ids above Number.MAX_SAFE_INTEGER — the raw entity lost
+            // precision in JS clients; the DTO must carry them as strings.
+            dev.catananti.entity.ArticleReview review = dev.catananti.entity.ArticleReview.builder()
+                    .id(1234567890123456789L)
+                    .articleId(9007199254740993L)
+                    .reviewerId(42L)
+                    .status(dev.catananti.entity.ArticleReviewStatus.APPROVED)
+                    .feedback("LGTM")
+                    .createdAt(LocalDateTime.now())
+                    .updatedAt(LocalDateTime.now())
+                    .build();
+
+            when(articleAdminService.getReviewHistory(1001L)).thenReturn(Flux.just(review));
+
+            StepVerifier.create(controller.getReviews(1001L))
+                    .assertNext(dto -> {
+                        assertThat(dto.id()).isEqualTo("1234567890123456789");
+                        assertThat(dto.articleId()).isEqualTo("9007199254740993");
+                        assertThat(dto.reviewerId()).isEqualTo("42");
+                        assertThat(dto.status()).isEqualTo("APPROVED");
+                        assertThat(dto.feedback()).isEqualTo("LGTM");
+                    })
+                    .verifyComplete();
+        }
+    }
+
+    @Nested
     @DisplayName("Translation Endpoints")
     class TranslationEndpoints {
 

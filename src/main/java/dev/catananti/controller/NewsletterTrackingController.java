@@ -83,6 +83,10 @@ public class NewsletterTrackingController {
                         .<Void>build()));
     }
 
+    // AUD18-JM8: log the misconfiguration once, not on every rejected click
+    private final java.util.concurrent.atomic.AtomicBoolean emptyAllowlistWarned =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     private boolean isValidRedirectUrl(String url) {
         if (url == null || url.isBlank()) return false;
         try {
@@ -93,18 +97,26 @@ public class NewsletterTrackingController {
             if (host == null || host.isBlank()) return false;
             // Reject URLs with embedded credentials (phishing vector)
             if (uri.getUserInfo() != null) return false;
-            // Validate against allowed origins to prevent open redirect
-            if (allowedOrigins != null && !allowedOrigins.isBlank()) {
-                Set<String> allowedHosts = Set.of(allowedOrigins.split(",")).stream()
-                        .map(origin -> {
-                            try { return URI.create(origin.trim()).getHost(); }
-                            catch (Exception e) { return null; }
-                        })
-                        .filter(h -> h != null)
-                        .collect(Collectors.toSet());
-                return allowedHosts.contains(host);
+            // AUD18-JM8: fail CLOSED — a blank allowlist used to allow ANY host, turning a
+            // missing cors.allowed-origins into a silent open redirect. Now it rejects and
+            // makes the misconfig visible in the logs.
+            if (allowedOrigins == null || allowedOrigins.isBlank()) {
+                if (emptyAllowlistWarned.compareAndSet(false, true)) {
+                    log.warn("Newsletter click-tracking redirect rejected: cors.allowed-origins is "
+                            + "blank, so no redirect host is allowed. Configure it to re-enable "
+                            + "click-through redirects.");
+                }
+                return false;
             }
-            return true;
+            // Validate against allowed origins to prevent open redirect
+            Set<String> allowedHosts = Set.of(allowedOrigins.split(",")).stream()
+                    .map(origin -> {
+                        try { return URI.create(origin.trim()).getHost(); }
+                        catch (Exception e) { return null; }
+                    })
+                    .filter(h -> h != null)
+                    .collect(Collectors.toSet());
+            return allowedHosts.contains(host);
         } catch (Exception e) {
             return false;
         }

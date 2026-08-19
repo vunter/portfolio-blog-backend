@@ -33,6 +33,8 @@ public class EmailChangeService {
     private final EmailService emailService;
     private final IdService idService;
     private final AuditService auditService;
+    private final RefreshTokenService refreshTokenService;
+    private final UserCacheService userCacheService;
 
     private static final Duration REVERT_TOKEN_VALIDITY = Duration.ofHours(48);
     private static final int TOKEN_LENGTH = 32;
@@ -54,12 +56,16 @@ public class EmailChangeService {
                                UserRepository userRepository,
                                EmailService emailService,
                                IdService idService,
-                               AuditService auditService) {
+                               AuditService auditService,
+                               RefreshTokenService refreshTokenService,
+                               UserCacheService userCacheService) {
         this.tokenRepository = tokenRepository;
         this.userRepository = userRepository;
         this.emailService = emailService;
         this.idService = idService;
         this.auditService = auditService;
+        this.refreshTokenService = refreshTokenService;
+        this.userCacheService = userCacheService;
     }
 
     /**
@@ -194,18 +200,36 @@ public class EmailChangeService {
                             String revertedFromEmail = user.getEmail();
                             String restoredEmail = token.getNewEmail();
 
-                            user.setEmail(restoredEmail);
-                            user.setUpdatedAt(LocalDateTime.now());
+                            // AUD18-L5: the restored address may have been taken by another
+                            // account during the 48h revert window — without this check the
+                            // save blew up on the unique constraint instead of returning the
+                            // same meaningful 409 the verify path uses.
+                            return userRepository.existsByEmail(restoredEmail)
+                                    .flatMap(exists -> {
+                                        if (exists) {
+                                            return Mono.error(new ResponseStatusException(HttpStatus.CONFLICT,
+                                                    "error.email_in_use"));
+                                        }
 
-                            return userRepository.save(user)
-                                    .then(tokenRepository.markAsUsed(token.getId(), LocalDateTime.now()))
-                                    .then(auditService.logEmailRevert(user.getId(), revertedFromEmail, restoredEmail))
-                                    .then(emailService.sendEmailRevertedNotification(revertedFromEmail, user.getName(), restoredEmail)
-                                            .onErrorResume(e -> {
-                                                log.warn("Failed to send email reverted notification for userId={}: {}", user.getId(), e.getMessage(), e);
-                                                return Mono.empty();
-                                            }))
-                                    .thenReturn(restoredEmail);
+                                        user.setEmail(restoredEmail);
+                                        user.setUpdatedAt(LocalDateTime.now());
+
+                                        return userRepository.save(user)
+                                                .then(tokenRepository.markAsUsed(token.getId(), LocalDateTime.now()))
+                                                // AUD18-L5: a revert is triggered when the change may have been
+                                                // hostile — kill every live session and drop the cached auth
+                                                // snapshot (F-046) so whoever holds tokens for the reverted-from
+                                                // address is locked out immediately.
+                                                .then(refreshTokenService.revokeAllUserTokens(user.getId()))
+                                                .then(Mono.fromRunnable(() -> userCacheService.evict(user.getId())))
+                                                .then(auditService.logEmailRevert(user.getId(), revertedFromEmail, restoredEmail))
+                                                .then(emailService.sendEmailRevertedNotification(revertedFromEmail, user.getName(), restoredEmail)
+                                                        .onErrorResume(e -> {
+                                                            log.warn("Failed to send email reverted notification for userId={}: {}", user.getId(), e.getMessage(), e);
+                                                            return Mono.empty();
+                                                        }))
+                                                .thenReturn(restoredEmail);
+                                    });
                         }));
     }
 }

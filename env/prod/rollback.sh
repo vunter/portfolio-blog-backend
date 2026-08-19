@@ -1,14 +1,24 @@
 #!/bin/bash
 # Rollback to a previous deploy by commit SHA.
-# Usage: ./rollback.sh <commit-sha>
+# Usage: ./rollback.sh <commit-sha> [--no-verify]
 # Images must exist in GHCR (any previous successful deploy).
 # Config bundle is downloaded from Nexus if available; the tarball must verify
 # against a cosign signature attached during the original publish — refuse to
 # extract otherwise. (Mirrors the verification flow in deploy.yml.)
+# --no-verify: explicit escape hatch that skips bundle signature verification
+#              (e.g. COSIGN_PUBLIC_KEY genuinely unavailable during an incident).
 # Run from anywhere — the script resolves its own location.
 set -euo pipefail
 
-SHA=${1:?"Usage: ./rollback.sh <commit-sha>"}
+NO_VERIFY=false
+POSITIONAL=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-verify) NO_VERIFY=true ;;
+        *) POSITIONAL+=("$arg") ;;
+    esac
+done
+SHA=${POSITIONAL[0]:?"Usage: ./rollback.sh <commit-sha> [--no-verify]"}
 # shellcheck disable=SC1090
 source ~/.doppler_token
 
@@ -48,8 +58,9 @@ trap cleanup EXIT
 
 HTTP_CODE=$(curl -s -o "${BUNDLE_FILE}" -w "%{http_code}" "${BUNDLE_URL}" || echo "000")
 if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
-    # Optional cosign verification — only enforced when COSIGN_PUBLIC_KEY is set
-    # so the path mirrors what the deploy workflow uses.
+    # Bundle signature verification is MANDATORY by default. If it cannot run
+    # (COSIGN_PUBLIC_KEY unset), fail loudly instead of silently extracting an
+    # unverified bundle — the operator must pass --no-verify to accept the risk.
     if [ -n "${COSIGN_PUBLIC_KEY:-}" ]; then
         SIG_URL="${BUNDLE_URL}.sig"
         if ! curl -sf -o "${BUNDLE_SIG_FILE}" "${SIG_URL}"; then
@@ -62,8 +73,13 @@ if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
             exit 1
         fi
         echo "cosign signature verified"
+    elif [ "${NO_VERIFY}" = "true" ]; then
+        echo "WARNING: --no-verify passed; bundle extracted WITHOUT signature check"
     else
-        echo "WARNING: COSIGN_PUBLIC_KEY not set; bundle extracted without signature check"
+        echo "ERROR: COSIGN_PUBLIC_KEY not set - cannot verify the config bundle signature."
+        echo "       Set COSIGN_PUBLIC_KEY to the bundle signing public key, or re-run"
+        echo "       with --no-verify to explicitly accept an unverified bundle."
+        exit 1
     fi
 
     echo "Restoring config bundle from Nexus for SHA ${SHA}"
@@ -81,16 +97,34 @@ if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
         esac
     done < <(cd "${BUNDLE_STAGE}" && find . -mindepth 1 -printf '%P\n')
 
-    # Copy verified contents into the repo. Using rsync rather than tar
-    # --overwrite so we have a record of what changed.
-    rsync -a --delete-after "${BUNDLE_STAGE}/" "${REPO_ROOT}/"
+    # Copy verified contents into the repo. Sync each of the bundle's
+    # top-level entries individually so --delete-after only prunes inside
+    # directories the bundle actually ships (deleting at REPO_ROOT level would
+    # wipe every file not present in the bundle). Runtime-provisioned files
+    # that live inside shipped directories but are NOT part of the bundle are
+    # excluded from both copy and deletion:
+    #   .htpasswd        — manually provisioned, mounted by docker-compose.cloud.yml
+    #   .last-deploy-sha — written by deploy.yml and this script
+    #   playwright/      — sidecar build context, built by CI, not in the bundle
+    RSYNC_PROTECT=(
+        --exclude='.htpasswd'
+        --exclude='.last-deploy-sha'
+        --exclude='playwright/'
+    )
+    while IFS= read -r entry; do
+        rsync -a --delete-after "${RSYNC_PROTECT[@]}" \
+            "${BUNDLE_STAGE}/${entry}" "${REPO_ROOT}/"
+    done < <(cd "${BUNDLE_STAGE}" && find . -mindepth 1 -maxdepth 1 -printf '%P\n')
 else
     echo "No config bundle in Nexus for SHA ${SHA} - using current config"
 fi
 
-# Recreate containers with the rolled-back images
+# Recreate containers with the rolled-back images.
+# Project name MUST match the deploy workflow (deploy.yml exports
+# COMPOSE_PROJECT_NAME=cloud) so we adopt the running stack and its
+# cloud_* volumes instead of spinning up a parallel "blog-cloud" project.
 cd "${SCRIPT_DIR}"
-doppler run -- docker compose -p blog-cloud -f docker-compose.cloud.yml up -d \
+doppler run -- docker compose -p cloud -f docker-compose.cloud.yml up -d \
     --force-recreate --remove-orphans
 
 # Health check

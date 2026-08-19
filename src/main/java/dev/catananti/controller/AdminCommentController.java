@@ -30,11 +30,14 @@ public class AdminCommentController {
     @GetMapping
     public Mono<PageResponse<CommentResponse>> getCommentsByStatus(
             @RequestParam(defaultValue = "ALL") @Pattern(regexp = "^(ALL|PENDING|APPROVED|REJECTED|SPAM)$", message = "Invalid status. Must be ALL, PENDING, APPROVED, REJECTED, or SPAM") String status,
+            // AUD19C-2: the frontend already sends `search`; it was silently dropped here.
+            @RequestParam(required = false) @jakarta.validation.constraints.Size(max = 100) String search,
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) int size) {
         size = paginationConfig.clampPageSize(size);
-        log.debug("Fetching comments: status={}, page={}, size={}", status, page, size);
-        return commentService.getAdminCommentsByStatus(status, page, size);
+        log.debug("Fetching comments: status={}, search={}, page={}, size={}",
+                status, search != null && !search.isBlank(), page, size);
+        return commentService.getAdminCommentsByStatus(status, search, page, size);
     }
 
     @GetMapping("/article/{articleId}")

@@ -144,6 +144,10 @@ public class RoleUpgradeRequestService {
 
                             // CC-08: claim the request atomically — a concurrent review that
                             // already processed it makes the conditional UPDATE affect 0 rows.
+                            // AUD18-M8: only the DB half of the role update joins this transaction
+                            // (updateUserRoleDbOnly); the Cloudflare HTTP call + promotion email run
+                            // AFTER commit via applyRoleChangeSideEffects, so external I/O never
+                            // holds a pool connection inside the tx (TX-08).
                             return transactionalOperator.transactional(
                                             roleUpgradeRequestRepository.transitionFromPending(
                                                             requestId, RoleUpgradeRequestStatus.APPROVED.name(),
@@ -159,11 +163,16 @@ public class RoleUpgradeRequestService {
                                                         request.setNewRecord(false);
                                                         return Mono.just(rows);
                                                     })
-                                                    .then(Mono.defer(() -> userService.updateUserRoleSafe(
+                                                    .then(Mono.defer(() -> userService.updateUserRoleDbOnly(
                                                             request.getUserId(), roleUpdate, adminEmail))))
-                                    .then(Mono.defer(() -> userRepository.findById(request.getUserId())))
-                                    .map(user -> RoleUpgradeRequestResponse.fromEntityWithUser(
-                                            request, user.getName(), user.getEmail(), user.getRole()))
+                                    // AUD19C-4: thread the RoleChange through — its oldRole() is the
+                                    // role the user actually held before the promotion. Re-fetching the
+                                    // user here yielded the NEW role, so the approval email announced
+                                    // e.g. "DEV → DEV" instead of "VIEWER → DEV".
+                                    .flatMap(change -> userService.applyRoleChangeSideEffects(change)
+                                            .thenReturn(change))
+                                    .map(change -> RoleUpgradeRequestResponse.fromEntityWithUser(
+                                            request, change.user().getName(), change.user().getEmail(), change.oldRole()))
                                     .doOnSuccess(resp ->
                                             log.info(
                                                     "Role upgrade request {} approved by {} — user {} promoted to {}",

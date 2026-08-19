@@ -138,6 +138,100 @@ class NewsletterServiceTest {
                     })
                     .verifyComplete();
         }
+
+        @Test
+        @DisplayName("AUD18-L6: re-subscribe preserves createdAt and stamps tokenIssuedAt")
+        void resubscribe_ShouldPreserveCreatedAt() {
+            LocalDateTime originalSignup = LocalDateTime.now().minusDays(200);
+            Subscriber unsubscribed = Subscriber.builder()
+                    .id(4002L)
+                    .email("unsub@example.com")
+                    .status(SubscriberStatus.UNSUBSCRIBED)
+                    .createdAt(originalSignup)
+                    .unsubscribedAt(LocalDateTime.now().minusDays(10))
+                    .build();
+
+            when(subscriberRepository.findByEmail("unsub@example.com"))
+                    .thenReturn(Mono.just(unsubscribed));
+            when(subscriberRepository.save(any(Subscriber.class)))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(emailService.sendNewsletterConfirmation(anyString(), anyString(), anyString()))
+                    .thenReturn(Mono.empty());
+
+            SubscribeRequest request = SubscribeRequest.builder()
+                    .email("unsub@example.com")
+                    .name("Re-subscriber")
+                    .build();
+
+            StepVerifier.create(newsletterService.subscribe(request))
+                    .assertNext(response ->
+                            assertThat(response.get("message")).isEqualTo("success.newsletter_confirm_email"))
+                    .verifyComplete();
+
+            verify(subscriberRepository).save(argThat(s ->
+                    originalSignup.equals(s.getCreatedAt())
+                            && s.getTokenIssuedAt() != null
+                            && s.getTokenIssuedAt().isAfter(LocalDateTime.now().minusMinutes(1))));
+        }
+
+        @Test
+        @DisplayName("AUD18-L6: new subscriber gets tokenIssuedAt stamped")
+        void newSubscriber_ShouldStampTokenIssuedAt() {
+            SubscribeRequest request = SubscribeRequest.builder()
+                    .email("novo@example.com")
+                    .name("Novo")
+                    .build();
+
+            when(subscriberRepository.findByEmail("novo@example.com")).thenReturn(Mono.empty());
+            when(idService.nextId()).thenReturn(4003L);
+            when(subscriberRepository.save(any(Subscriber.class)))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+            when(emailService.sendNewsletterConfirmation(anyString(), anyString(), anyString()))
+                    .thenReturn(Mono.empty());
+
+            StepVerifier.create(newsletterService.subscribe(request))
+                    .assertNext(response ->
+                            assertThat(response.get("message")).isEqualTo("success.newsletter_confirm_email"))
+                    .verifyComplete();
+
+            verify(subscriberRepository).save(argThat(s -> s.getTokenIssuedAt() != null));
+        }
+
+        @Test
+        @DisplayName("AUD18-L6: pending subscriber with fresh tokenIssuedAt but old createdAt is NOT expired")
+        void pendingWithFreshTokenIssuedAt_ShouldNotRegenerate() {
+            Subscriber pending = Subscriber.builder()
+                    .id(4004L)
+                    .email("pending@example.com")
+                    .status(SubscriberStatus.PENDING)
+                    .confirmationToken("still-valid-token")
+                    .createdAt(LocalDateTime.now().minusDays(100)) // ancient signup
+                    .tokenIssuedAt(LocalDateTime.now().minusHours(1)) // fresh token
+                    .build();
+
+            when(subscriberRepository.findByEmail("pending@example.com"))
+                    .thenReturn(Mono.just(pending));
+            when(emailService.sendNewsletterConfirmation(anyString(), any(), anyString()))
+                    .thenReturn(Mono.empty());
+            // Safety mock: switchIfEmpty eagerly evaluates createNewSubscriber which calls save
+            when(idService.nextId()).thenReturn(9999L);
+            when(subscriberRepository.save(any(Subscriber.class)))
+                    .thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+            SubscribeRequest request = SubscribeRequest.builder()
+                    .email("pending@example.com")
+                    .build();
+
+            StepVerifier.create(newsletterService.subscribe(request))
+                    .assertNext(response ->
+                            assertThat(response.get("message")).isEqualTo("success.newsletter_confirm_email"))
+                    .verifyComplete();
+
+            // Token still valid per tokenIssuedAt → the ORIGINAL token is re-sent,
+            // not a regenerated one (createdAt alone would have flagged it expired)
+            verify(emailService).sendNewsletterConfirmation(eq("pending@example.com"), any(), eq("still-valid-token"));
+            assertThat(pending.getConfirmationToken()).isEqualTo("still-valid-token");
+        }
     }
 
     @Nested

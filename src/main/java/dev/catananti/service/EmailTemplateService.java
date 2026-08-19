@@ -174,13 +174,14 @@ public class EmailTemplateService {
 
     // ==================== Custom Variables CRUD ====================
 
-    public record CustomVar(long id, String key, String value, String description, String templateId, String locale) {}
+    // AUD19C-SNOW: id is String, not long — Snowflake ids exceed JS Number.MAX_SAFE_INTEGER (2^53)
+    public record CustomVar(String id, String key, String value, String description, String templateId, String locale) {}
 
     /** Load all custom variables into cache. Called at startup and after mutations. */
     public Mono<Void> refreshCustomVarsCache() {
         return db.sql("SELECT id, var_key, var_value, description, template_id, locale FROM email_custom_variables ORDER BY id")
                 .map(row -> new CustomVar(
-                        row.get("id", Long.class),
+                        String.valueOf(row.get("id", Long.class)),
                         row.get("var_key", String.class),
                         row.get("var_value", String.class),
                         row.get("description", String.class),
@@ -268,7 +269,7 @@ public class EmailTemplateService {
 
     private CustomVar mapCustomVar(io.r2dbc.spi.Readable row) {
         return new CustomVar(
-                row.get("id", Long.class),
+                String.valueOf(row.get("id", Long.class)),
                 row.get("var_key", String.class),
                 row.get("var_value", String.class),
                 row.get("description", String.class),

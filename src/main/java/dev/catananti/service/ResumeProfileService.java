@@ -129,12 +129,27 @@ public class ResumeProfileService {
      * @param lang language/locale code (e.g., "en", "pt", "pt-br"). Defaults to "en".
      */
     public Mono<String> generateResumeHtml(Long ownerId, String lang) {
+        return generateResumeHtml(ownerId, lang, true);
+    }
+
+    /**
+     * AUD18-JA8: variant with a contact toggle. Public username-fallback rendering (no
+     * published template = no opt-in to public display) passes {@code includeContact=false}
+     * so email/phone are omitted; the renderer already skips blank contact fields.
+     */
+    public Mono<String> generateResumeHtml(Long ownerId, String lang, boolean includeContact) {
         String resolvedLang = normalizeLocale(lang);
         // For section headers, use the base language ("pt" for "pt-br", "en" for "en", etc.)
         String headerLang = resolvedLang.contains("-") ? resolvedLang.split("-")[0] : resolvedLang;
-        log.info("Generating resume HTML for ownerId={}, lang='{}'", ownerId, resolvedLang);
+        log.info("Generating resume HTML for ownerId={}, lang='{}', includeContact={}", ownerId, resolvedLang, includeContact);
         return getProfileByOwnerIdWithFallback(ownerId, resolvedLang)
-                .map(profile -> htmlRenderer.renderHtml(profile, headerLang));
+                .map(profile -> {
+                    if (!includeContact) {
+                        profile.setEmail(null);
+                        profile.setPhone(null);
+                    }
+                    return htmlRenderer.renderHtml(profile, headerLang);
+                });
     }
 
     /**

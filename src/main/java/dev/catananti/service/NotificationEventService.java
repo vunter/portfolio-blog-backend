@@ -57,7 +57,8 @@ public class NotificationEventService {
     }
 
     public void commentApproved(Long commentId) {
-        publish(NotificationType.COMMENT.value(), "approved", "Comment approved", Map.of("commentId", commentId));
+        // AUD19C-SNOW: stringify Snowflake id — Longs above 2^53 get mangled by JS
+        publish(NotificationType.COMMENT.value(), "approved", "Comment approved", Map.of("commentId", String.valueOf(commentId)));
     }
 
     public void subscriberJoined(String email) {

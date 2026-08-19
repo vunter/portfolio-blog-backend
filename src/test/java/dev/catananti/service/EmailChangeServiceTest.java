@@ -45,6 +45,12 @@ class EmailChangeServiceTest {
     @Mock
     private AuditService auditService;
 
+    @Mock
+    private RefreshTokenService refreshTokenService;
+
+    @Mock
+    private UserCacheService userCacheService;
+
     @InjectMocks
     private EmailChangeService service;
 
@@ -244,8 +250,11 @@ class EmailChangeServiceTest {
 
         when(tokenRepository.findByTokenAndUsedFalse(hashedToken)).thenReturn(Mono.just(token));
         when(userRepository.findById(testUserId)).thenReturn(Mono.just(testUser));
+        // AUD18-L5: the restored address must still be free
+        when(userRepository.existsByEmail("old@example.com")).thenReturn(Mono.just(false));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
         when(tokenRepository.markAsUsed(eq(400L), any(LocalDateTime.class))).thenReturn(Mono.empty());
+        when(refreshTokenService.revokeAllUserTokens(testUserId)).thenReturn(Mono.empty());
         when(auditService.logEmailRevert(eq(testUserId), eq("new@example.com"), eq("old@example.com")))
                 .thenReturn(Mono.empty());
         when(emailService.sendEmailRevertedNotification(eq("new@example.com"), eq("Test User"), eq("old@example.com")))
@@ -254,6 +263,44 @@ class EmailChangeServiceTest {
         StepVerifier.create(service.revertEmailChange(plainToken))
                 .assertNext(result -> assertThat(result).isEqualTo("old@example.com"))
                 .verifyComplete();
+
+        // AUD18-L5: a revert (possibly hostile change) kills live sessions + cached auth
+        org.mockito.Mockito.verify(refreshTokenService).revokeAllUserTokens(testUserId);
+        org.mockito.Mockito.verify(userCacheService).evict(testUserId);
+    }
+
+    @Test
+    @DisplayName("AUD18-L5: Should return conflict when the restored email was taken meanwhile")
+    void shouldRejectRevertWhenRestoredEmailTaken() {
+        String plainToken = "revert-token-conflict";
+        String hashedToken = DigestUtils.sha256Hex(plainToken);
+
+        EmailChangeToken token = EmailChangeToken.builder()
+                .id(401L)
+                .userId(testUserId)
+                .newEmail("old@example.com")
+                .oldEmail("new@example.com")
+                .token(hashedToken)
+                .expiresAt(LocalDateTime.now().plusHours(48))
+                .used(false)
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        testUser.setEmail("new@example.com");
+
+        when(tokenRepository.findByTokenAndUsedFalse(hashedToken)).thenReturn(Mono.just(token));
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(testUser));
+        // Another account registered the old address during the 48h revert window
+        when(userRepository.existsByEmail("old@example.com")).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.revertEmailChange(plainToken))
+                .expectErrorMatches(e -> e instanceof ResponseStatusException
+                        && ((ResponseStatusException) e).getStatusCode() == HttpStatus.CONFLICT)
+                .verify();
+
+        // No partial state: user not saved, token not consumed, sessions untouched
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).save(any(User.class));
+        org.mockito.Mockito.verify(tokenRepository, org.mockito.Mockito.never()).markAsUsed(anyLong(), any(LocalDateTime.class));
     }
 
     @Test

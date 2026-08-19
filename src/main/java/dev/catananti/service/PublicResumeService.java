@@ -118,12 +118,26 @@ public class PublicResumeService {
                     }
                     return enrichWithAvatar(ownerId, validLang);
                 })
-                // Fallback: resolve by username if no template alias/slug matches
+                // Fallback: resolve by username if no template alias/slug matches.
+                // AUD18-JA8: this path resolves users who never published an ACTIVE template —
+                // publishing one (the primary path above) is the explicit opt-in to public
+                // display, so without it contact fields must not leave a public endpoint.
                 .switchIfEmpty(Mono.defer(() ->
                     userRepository.findByUsername(normalizedAlias)
                         .flatMap(user -> enrichWithAvatar(user.getId(), validLang))
+                        .map(this::stripContactFields)
                 ))
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Resume not found for alias: " + alias)));
+    }
+
+    /**
+     * AUD18-JA8: omit direct contact channels (email/phone) from profiles served through
+     * the username fallback. Social/profile links stay — they are public by nature.
+     */
+    private ResumeProfileResponse stripContactFields(ResumeProfileResponse profile) {
+        profile.setEmail(null);
+        profile.setPhone(null);
+        return profile;
     }
 
     private Mono<ResumeProfileResponse> enrichWithAvatar(Long ownerId, String lang) {
@@ -199,10 +213,12 @@ public class PublicResumeService {
                                 return Mono.empty();
                             });
                 })
-                // Fallback: resolve by username if no template alias/slug matches
+                // Fallback: resolve by username if no template alias/slug matches.
+                // AUD18-JA8: no published template = no opt-in to public contact display,
+                // so the fallback renders without email/phone.
                 .switchIfEmpty(Mono.defer(() ->
                     userRepository.findByUsername(normalizedAlias)
-                        .flatMap(user -> resumeProfileService.generateResumeHtml(user.getId(), lang))
+                        .flatMap(user -> resumeProfileService.generateResumeHtml(user.getId(), lang, false))
                 ))
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Resume not found for alias: " + alias)));
     }

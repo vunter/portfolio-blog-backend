@@ -1,6 +1,8 @@
 package dev.catananti.controller;
 
 import dev.catananti.dto.*;
+import dev.catananti.metrics.BlogMetrics;
+import dev.catananti.security.AuthCookieService;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.EmailOtpService;
 import dev.catananti.service.MfaService;
@@ -16,10 +18,13 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRepository;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
@@ -43,6 +48,12 @@ public class MfaController {
     private final PasswordEncoder passwordEncoder;
     private final ReactiveStringRedisTemplate redisTemplate;
     private final MessageSource messageSource;
+    // AUD19C-C1B: MFA completion is the moment the session actually starts for
+    // MFA-enabled accounts, so this controller needs the same cookie/CSRF/metric
+    // plumbing AuthController.login has.
+    private final AuthCookieService authCookieService;
+    private final ServerCsrfTokenRepository csrfTokenRepository;
+    private final BlogMetrics blogMetrics;
 
     private String msg(Locale locale, String key) {
         return messageSource.getMessage(key, null, key, locale);
@@ -79,14 +90,24 @@ public class MfaController {
      */
     private Mono<Boolean> checkMfaRateLimit(String email) {
         String key = MFA_RATE_PREFIX + email;
-        return redisTemplate.opsForValue().increment(key)
-                .flatMap(count -> {
-                    if (count == 1) {
-                        return redisTemplate.expire(key, Duration.ofMinutes(mfaRateWindowMinutes)).thenReturn(count);
-                    }
-                    return Mono.just(count);
-                })
+        return incrementWithTtl(key, Duration.ofMinutes(mfaRateWindowMinutes))
                 .map(count -> count <= maxMfaOpsPerWindow);
+    }
+
+    /**
+     * AUD18-L7: INCR-then-EXPIRE hardening. The TTL used to be set only when the
+     * counter was first created (count==1); if that single EXPIRE call failed, the key
+     * lived forever and the rate limit became a permanent lockout. Check-and-repair
+     * instead: after every INCR, (re)apply the TTL whenever the key has none — this
+     * also covers a racing INCR re-creating the key right after expiry.
+     */
+    private Mono<Long> incrementWithTtl(String key, Duration ttl) {
+        return redisTemplate.opsForValue().increment(key)
+                .flatMap(count -> redisTemplate.getExpire(key)
+                        .defaultIfEmpty(Duration.ZERO)
+                        .flatMap(current -> current.isZero() || current.isNegative()
+                                ? redisTemplate.expire(key, ttl).thenReturn(count)
+                                : Mono.just(count)));
     }
 
     private <T> Mono<ResponseEntity<T>> rateLimitExceeded() {
@@ -166,15 +187,47 @@ public class MfaController {
 
     /**
      * Verify MFA code during login flow (no authentication required — uses mfaToken).
+     *
+     * <p>AUD19C-C1B: this endpoint completes the login for MFA-enabled accounts, so it
+     * must establish the session exactly like {@code AuthController.login}: HttpOnly
+     * auth cookies (SEG-1: tokens never travel in the JSON body), CSRF rotation (Q4.2)
+     * and the login-success metric (Q12.3). Before this fix it returned a body with
+     * WRITE_ONLY tokens and set nothing — the "successful" MFA login produced no
+     * usable session at all.
+     *
+     * <p>Behavior note: rememberMe is fixed to {@code false} (24h refresh cookie).
+     * The rememberMe choice from the password step is not carried through the MFA
+     * challenge (the Redis entry stores only the userId), so the conservative
+     * lifetime is used.
      */
     @PostMapping("/verify")
     public Mono<TokenResponse> verifyLogin(@Valid @RequestBody MfaLoginVerifyRequest request,
-                                            ServerHttpRequest httpRequest) {
+                                            ServerHttpRequest httpRequest,
+                                            ServerHttpResponse httpResponse,
+                                            ServerWebExchange exchange) {
         log.info("MFA login verification with method={}", request.getMethod());
         String clientIp = IpAddressExtractor.extractClientIp(httpRequest);
         String userAgent = httpRequest.getHeaders().getFirst("User-Agent");
         return authService.completeMfaLogin(request.getMfaToken(), request.getCode(), request.getMethod(),
-                clientIp, userAgent);
+                        clientIp, userAgent)
+                .flatMap(response -> {
+                    authCookieService.addAccessTokenCookie(httpResponse, response.getAccessToken());
+                    authCookieService.addRefreshTokenCookie(httpResponse, response.getRefreshToken(), false);
+                    // Q12.3: the challenge step deliberately does not count (AUD19C-C1C);
+                    // the completed MFA verification is the single login success.
+                    blogMetrics.incrementLoginSuccess();
+                    // Q4.2: rotate CSRF after auth state change, mirroring AuthController
+                    return rotateCsrfToken(exchange).thenReturn(response);
+                });
+    }
+
+    /**
+     * Q4.2: Rotate the CSRF token after the auth state change (same contract as
+     * {@code AuthController.rotateCsrfToken}) to prevent token fixation.
+     */
+    private Mono<Void> rotateCsrfToken(ServerWebExchange exchange) {
+        return csrfTokenRepository.generateToken(exchange)
+                .flatMap(token -> csrfTokenRepository.saveToken(exchange, token));
     }
 
     /**
@@ -193,13 +246,8 @@ public class MfaController {
         // SEC: hash the MFA token before using it as a Redis key, mirroring AuthService.
         // Storing the raw token would let a Redis read leak in-flight, usable tokens.
         String sendsKey = OTP_SENDS_PREFIX + hashMfaToken(mfaToken);
-        return redisTemplate.opsForValue().increment(sendsKey)
-                .flatMap(sends -> {
-                    if (sends == 1) {
-                        return redisTemplate.expire(sendsKey, Duration.ofMinutes(5)).thenReturn(sends);
-                    }
-                    return Mono.just(sends);
-                })
+        // AUD18-L7: TTL asserted on every pass via incrementWithTtl (see helper).
+        return incrementWithTtl(sendsKey, Duration.ofMinutes(5))
                 .flatMap(sends -> {
                     if (sends > maxOtpSends) {
                         return Mono.deferContextual(ctx -> {
@@ -240,7 +288,11 @@ public class MfaController {
                         .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
                         .flatMap(matches -> {
                             if (!matches) {
-                                return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "error.password_invalid"));
+                                // AUD19C-A5: a wrong re-auth password on an already-authenticated
+                                // request is a business validation failure (400), not a missing/
+                                // invalid session (401) — a 401 makes API clients drop the session.
+                                // Mirrors UserService's wrong-current-password convention.
+                                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "error.password_invalid"));
                             }
                             return mfaService.disableMfa(user.getId());
                         })

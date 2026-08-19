@@ -6,6 +6,10 @@ import dev.catananti.dto.UserRequest;
 import dev.catananti.dto.UserResponse;
 import dev.catananti.entity.User;
 import dev.catananti.exception.ResourceNotFoundException;
+import dev.catananti.repository.ArticleRepository;
+import dev.catananti.repository.AuditLogRepository;
+import dev.catananti.repository.CommentRepository;
+import dev.catananti.repository.RefreshTokenRepository;
 import dev.catananti.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,6 +32,8 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -63,6 +69,22 @@ class UserServiceTest {
     @Mock
     private dev.catananti.config.PaginationConfig paginationConfig;
 
+    @Mock
+    private org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
+
+    // AUD19-F140: activity-summary sources
+    @Mock
+    private ArticleRepository articleRepository;
+
+    @Mock
+    private CommentRepository commentRepository;
+
+    @Mock
+    private AuditLogRepository auditLogRepository;
+
+    @Mock
+    private RefreshTokenRepository refreshTokenRepository;
+
     @InjectMocks
     private UserService userService;
 
@@ -73,6 +95,10 @@ class UserServiceTest {
     void setUp() {
         lenient().when(htmlSanitizerService.stripHtml(anyString())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(paginationConfig.getBulkQueryMax()).thenReturn(1000);
+        // AUD18-M8: pass-through operator — the role update now commits its DB half
+        // explicitly before running Cloudflare/email side effects
+        lenient().when(transactionalOperator.transactional(any(Mono.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
 
         testUserId = 1234567890123456789L;
         testUser = User.builder()
@@ -81,6 +107,8 @@ class UserServiceTest {
                 .name("Test User")
                 .passwordHash("hashedPassword")
                 .role("ADMIN")
+                // AUD19: verification state is read through to UserResponse
+                .emailVerified(true)
                 .createdAt(LocalDateTime.now())
                 .updatedAt(LocalDateTime.now())
                 .build();
@@ -111,6 +139,84 @@ class UserServiceTest {
                 .verify();
     }
 
+    // ==================== USER ACTIVITY (AUD19-F140) ====================
+
+    @Test
+    @DisplayName("Should build activity summary and pick the newest lastLogin source")
+    void shouldGetUserActivityWithNewestLastLogin() {
+        LocalDateTime auditLogin = LocalDateTime.now().minusDays(5);
+        LocalDateTime tokenIssued = LocalDateTime.now().minusHours(1); // newer → must win
+
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(testUser));
+        when(articleRepository.countByAuthorId(testUserId)).thenReturn(Mono.just(3L));
+        when(commentRepository.countByUserId(testUserId)).thenReturn(Mono.just(8L));
+        when(auditLogRepository.findLastActionAt(testUserId, AuditEventType.LOGIN.action()))
+                .thenReturn(Mono.just(auditLogin));
+        when(refreshTokenRepository.findLatestCreatedAtByUserId(testUserId))
+                .thenReturn(Mono.just(tokenIssued));
+
+        StepVerifier.create(userService.getUserActivity(testUserId))
+                .assertNext(activity -> {
+                    assertThat(activity.lastLogin()).isEqualTo(tokenIssued);
+                    assertThat(activity.accountCreated()).isEqualTo(testUser.getCreatedAt());
+                    assertThat(activity.articlesCreated()).isEqualTo(3L);
+                    assertThat(activity.commentsPosted()).isEqualTo(8L);
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("Should return null lastLogin when neither audit nor refresh tokens have data")
+    void shouldGetUserActivityWithNullLastLogin() {
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(testUser));
+        when(articleRepository.countByAuthorId(testUserId)).thenReturn(Mono.just(0L));
+        when(commentRepository.countByUserId(testUserId)).thenReturn(Mono.just(0L));
+        when(auditLogRepository.findLastActionAt(testUserId, AuditEventType.LOGIN.action()))
+                .thenReturn(Mono.empty());
+        when(refreshTokenRepository.findLatestCreatedAtByUserId(testUserId))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(userService.getUserActivity(testUserId))
+                .assertNext(activity -> {
+                    assertThat(activity.lastLogin()).isNull();
+                    assertThat(activity.accountCreated()).isEqualTo(testUser.getCreatedAt());
+                    assertThat(activity.articlesCreated()).isZero();
+                    assertThat(activity.commentsPosted()).isZero();
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("Should use audit LOGIN timestamp when refresh tokens were purged")
+    void shouldGetUserActivityFromAuditWhenTokensGone() {
+        LocalDateTime auditLogin = LocalDateTime.now().minusDays(40);
+
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(testUser));
+        when(articleRepository.countByAuthorId(testUserId)).thenReturn(Mono.just(1L));
+        when(commentRepository.countByUserId(testUserId)).thenReturn(Mono.just(2L));
+        when(auditLogRepository.findLastActionAt(testUserId, AuditEventType.LOGIN.action()))
+                .thenReturn(Mono.just(auditLogin));
+        when(refreshTokenRepository.findLatestCreatedAtByUserId(testUserId))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(userService.getUserActivity(testUserId))
+                .assertNext(activity -> assertThat(activity.lastLogin()).isEqualTo(auditLogin))
+                .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException for activity of unknown user")
+    void shouldThrowNotFoundForActivityOfUnknownUser() {
+        when(userRepository.findById(999L)).thenReturn(Mono.empty());
+
+        StepVerifier.create(userService.getUserActivity(999L))
+                .expectError(ResourceNotFoundException.class)
+                .verify();
+
+        verify(articleRepository, never()).countByAuthorId(anyLong());
+        verify(commentRepository, never()).countByUserId(anyLong());
+    }
+
     @Test
     @DisplayName("Should get user by email")
     void shouldGetUserByEmail() {
@@ -119,6 +225,9 @@ class UserServiceTest {
         StepVerifier.create(userService.getUserByEmail("test@example.com"))
                 .assertNext(response -> {
                     assertThat(response.getEmail()).isEqualTo("test@example.com");
+                    // AUD19: /admin/users/me consumers rely on this flag to decide
+                    // whether to show the "resend verification" affordance
+                    assertThat(response.getEmailVerified()).isTrue();
                 })
                 .verifyComplete();
     }
@@ -296,10 +405,36 @@ class UserServiceTest {
         when(userRepository.findById(testUserId)).thenReturn(Mono.just(testUser));
         when(passwordEncoder.encode("newpass")).thenReturn("encodedNew");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        // AUD18-M5: an admin password change revokes the target's sessions
+        when(refreshTokenService.revokeAllUserTokens(testUserId)).thenReturn(Mono.empty());
 
         StepVerifier.create(userService.updateUser(testUserId, request))
                 .assertNext(r -> assertThat(r.getName()).isEqualTo("Updated Name"))
                 .verifyComplete();
+
+        verify(refreshTokenService).revokeAllUserTokens(testUserId);
+        verify(userCacheService).evict(testUserId);
+    }
+
+    @Test
+    @DisplayName("AUD18-M5: Should evict auth cache on admin email change, without revoking sessions")
+    void shouldEvictCacheOnAdminEmailChange() {
+        UserRequest request = UserRequest.builder()
+                .name("Test User")
+                .email("changed@example.com")
+                .password(null)
+                .build();
+
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(testUser));
+        when(userRepository.existsByEmail("changed@example.com")).thenReturn(Mono.just(false));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+        StepVerifier.create(userService.updateUser(testUserId, request))
+                .assertNext(r -> assertThat(r.getEmail()).isEqualTo("changed@example.com"))
+                .verifyComplete();
+
+        verify(userCacheService).evict(testUserId);
+        verify(refreshTokenService, never()).revokeAllUserTokens(anyLong());
     }
 
     @Test
@@ -655,6 +790,81 @@ class UserServiceTest {
         StepVerifier.create(userService.updateProfile("ghost@example.com", request))
                 .expectError(org.springframework.web.server.ResponseStatusException.class)
                 .verify();
+    }
+
+    // ==================== AUD18-M8: role update side effects after commit ====================
+
+    @Test
+    @DisplayName("AUD18-M8: promotion creates the Cloudflare rule after commit and persists its id")
+    void promotionCreatesCfRuleAfterCommit() {
+        User target = User.builder()
+                .id(testUserId).email("viewer@example.com").name("Viewer")
+                .username("viewer").role("VIEWER").build();
+        User callerAdmin = User.builder().id(999L).email("admin@example.com").role("ADMIN").build();
+
+        when(userRepository.findByEmail("admin@example.com")).thenReturn(Mono.just(callerAdmin));
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(cfEmailRoutingService.createForwardingRule("viewer", "viewer@example.com"))
+                .thenReturn(Mono.just("cf-rule-1"));
+        when(userRepository.updateCfEmailRuleId(eq(testUserId), eq("cf-rule-1"), any()))
+                .thenReturn(Mono.just(1L));
+        when(emailService.sendDevPromotionNotification(anyString(), anyString(), anyString()))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(userService.updateUserRoleSafe(testUserId, new RoleUpdateRequest("DEV"), "admin@example.com"))
+                .assertNext(r -> assertThat(r.getRole()).isEqualTo("DEV"))
+                .verifyComplete();
+
+        // rule id persisted via partial UPDATE after the transactional save
+        verify(userRepository).updateCfEmailRuleId(eq(testUserId), eq("cf-rule-1"), any());
+        verify(userCacheService).evict(testUserId);
+    }
+
+    @Test
+    @DisplayName("AUD18-M8: Cloudflare failure is logged, never rolls back the committed role change")
+    void cfFailureDoesNotFailRoleChange() {
+        User target = User.builder()
+                .id(testUserId).email("viewer@example.com").name("Viewer")
+                .username("viewer").role("VIEWER").build();
+        User callerAdmin = User.builder().id(999L).email("admin@example.com").role("ADMIN").build();
+
+        when(userRepository.findByEmail("admin@example.com")).thenReturn(Mono.just(callerAdmin));
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(cfEmailRoutingService.createForwardingRule("viewer", "viewer@example.com"))
+                .thenReturn(Mono.error(new RuntimeException("cloudflare down")));
+        when(emailService.sendDevPromotionNotification(anyString(), anyString(), anyString()))
+                .thenReturn(Mono.empty());
+
+        StepVerifier.create(userService.updateUserRoleSafe(testUserId, new RoleUpdateRequest("DEV"), "admin@example.com"))
+                .assertNext(r -> assertThat(r.getRole()).isEqualTo("DEV"))
+                .verifyComplete();
+
+        verify(userRepository, never()).updateCfEmailRuleId(anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("AUD18-M8: demotion clears the rule id in the tx and deletes the rule after commit")
+    void demotionDeletesCfRuleAfterCommit() {
+        User target = User.builder()
+                .id(testUserId).email("dev@example.com").name("Dev")
+                .username("dev").role("DEV").cfEmailRuleId("cf-rule-9").build();
+        User callerAdmin = User.builder().id(999L).email("admin@example.com").role("ADMIN").build();
+
+        when(userRepository.findByEmail("admin@example.com")).thenReturn(Mono.just(callerAdmin));
+        when(userRepository.findById(testUserId)).thenReturn(Mono.just(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(cfEmailRoutingService.deleteForwardingRule("cf-rule-9")).thenReturn(Mono.empty());
+
+        StepVerifier.create(userService.updateUserRoleSafe(testUserId, new RoleUpdateRequest("VIEWER"), "admin@example.com"))
+                .assertNext(r -> assertThat(r.getRole()).isEqualTo("VIEWER"))
+                .verifyComplete();
+
+        verify(cfEmailRoutingService).deleteForwardingRule("cf-rule-9");
+        // the row no longer references the rule (cleared inside the transaction)
+        assertThat(target.getCfEmailRuleId()).isNull();
+        verify(userCacheService).evict(testUserId);
     }
 
     @Test

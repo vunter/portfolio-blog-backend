@@ -102,9 +102,12 @@ public class ArticleController {
     public Mono<List<ArticleResponse>> getRelatedArticles(
             @PathVariable @Size(min = 1, max = 255) @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
             @Parameter(description = "Maximum number of related articles to return")
-            @RequestParam(defaultValue = "4") @Min(1) @Max(20) int limit) {
-        log.debug("Fetching related articles for slug='{}'", slug);
-        return articleService.getRelatedArticles(slug, limit).collectList();
+            @RequestParam(defaultValue = "4") @Min(1) @Max(20) int limit,
+            @RequestParam(required = false) String locale) {
+        // AUD18-C8: the frontend already sends locale here; localize like the other listings
+        validateLocale(locale);
+        log.debug("Fetching related articles for slug='{}', locale={}", slug, locale);
+        return articleService.getRelatedArticles(slug, limit, locale).collectList();
     }
 
     @PostMapping("/{slug}/view")

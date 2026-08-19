@@ -377,7 +377,9 @@ jobs:
             sed -i "s|__NEXUS_HOST__|${{ secrets.NEXUS_HOST }}|g" .mvn/nexus-settings.xml
             MAVEN_SETTINGS="-s .mvn/nexus-settings.xml"
           fi
-          ./mvnw clean package -Dmaven.test.skip=true -B $MAVEN_SETTINGS
+          # -Prelease-jar: the published JAR must not ship dev-only resources
+          # (committed dev credentials / seed data) — same as the Docker build.
+          ./mvnw clean package -Dmaven.test.skip=true -B -Prelease-jar $MAVEN_SETTINGS
 
       - name: Upload JAR to Nexus
         run: |

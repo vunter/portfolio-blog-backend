@@ -1,10 +1,10 @@
 package dev.catananti.controller;
 
-import dev.catananti.dto.AuthResponse;
 import dev.catananti.dto.LoginRequest;
 import dev.catananti.dto.RegisterRequest;
 import dev.catananti.dto.TokenResponse;
 import dev.catananti.metrics.BlogMetrics;
+import dev.catananti.security.AuthCookieService;
 import dev.catananti.service.AuthService;
 import dev.catananti.service.RecaptchaService;
 import dev.catananti.service.RefreshTokenService;
@@ -17,10 +17,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
@@ -33,7 +31,6 @@ import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -51,18 +48,12 @@ public class AuthController {
     private final RefreshTokenService refreshTokenService;
     private final ServerCsrfTokenRepository csrfTokenRepository;
     private final BlogMetrics blogMetrics;
+    // AUD19C-C1B: cookie contract extracted to AuthCookieService so the MFA login
+    // completion (MfaController) and the OAuth2 callback emit identical cookies.
+    private final AuthCookieService authCookieService;
 
-    @Value("${jwt.expiration:86400000}")
-    private long jwtExpirationMs;
-
-    @Value("${jwt.cookie.secure:true}")
-    private boolean cookieSecure;
-
-    @Value("${jwt.cookie.domain:}")
-    private String cookieDomain;
-
-    private static final String ACCESS_TOKEN_COOKIE = "access_token";
-    private static final String REFRESH_TOKEN_COOKIE = "refresh_token";
+    private static final String ACCESS_TOKEN_COOKIE = AuthCookieService.ACCESS_TOKEN_COOKIE;
+    private static final String REFRESH_TOKEN_COOKIE = AuthCookieService.REFRESH_TOKEN_COOKIE;
 
     // F-076: Rate-limited via nginx login zone (5r/m)
     // F-077: Password complexity enforced via @Pattern annotation on RegisterRequest DTO
@@ -78,8 +69,17 @@ public class AuthController {
         return recaptchaService.verify(request.getRecaptchaToken(), "login")
                 .then(authService.loginWithRefreshToken(request, clientIp, userAgent))
                 .flatMap(response -> {
-                    addAccessTokenCookie(httpResponse, response.getAccessToken());
-                    addRefreshTokenCookie(httpResponse, response.getRefreshToken(), Boolean.TRUE.equals(request.getRememberMe()));
+                    // AUD19C-C1C: an MFA challenge is NOT a session. The response carries only
+                    // the short-lived mfaToken — setting auth cookies here would clobber any
+                    // existing session with blanks, and counting it as a login success would
+                    // double-count every MFA login (the real success is recorded when
+                    // /admin/mfa/verify completes). CSRF is still rotated: the auth state
+                    // transitioned (anonymous -> challenged) and fixation protection applies.
+                    if (Boolean.TRUE.equals(response.getMfaRequired())) {
+                        return rotateCsrfToken(exchange).thenReturn(response);
+                    }
+                    authCookieService.addAccessTokenCookie(httpResponse, response.getAccessToken());
+                    authCookieService.addRefreshTokenCookie(httpResponse, response.getRefreshToken(), Boolean.TRUE.equals(request.getRememberMe()));
                     // Q12.3: Track login success
                     blogMetrics.incrementLoginSuccess();
                     // Q4.2: Rotate CSRF token after auth state change to prevent token fixation
@@ -100,8 +100,8 @@ public class AuthController {
         return recaptchaService.verify(request.recaptchaToken(), "register")
                 .then(authService.register(request, clientIp))
                 .flatMap(tokenResponse -> {
-                    addAccessTokenCookie(httpResponse, tokenResponse.getAccessToken());
-                    addRefreshTokenCookie(httpResponse, tokenResponse.getRefreshToken(), false);
+                    authCookieService.addAccessTokenCookie(httpResponse, tokenResponse.getAccessToken());
+                    authCookieService.addRefreshTokenCookie(httpResponse, tokenResponse.getRefreshToken(), false);
                     // Q4.2: Rotate CSRF token after auth state change
                     return rotateCsrfToken(exchange)
                             .thenReturn(ResponseEntity.status(HttpStatus.CREATED).body(tokenResponse));
@@ -137,17 +137,23 @@ public class AuthController {
             return Mono.error(new IllegalArgumentException("error.refresh_token_required"));
         }
 
-        // Try each token; on failure, fall through to the next
+        // Try each token; on failure, fall through to the next.
+        // AUD18-L4: remember the FIRST failure so the all-failed case can rethrow it —
+        // the previous code re-invoked refreshAccessToken just to reproduce the error,
+        // which ran verifyAndRotate (and its theft detection) a second time per token.
+        java.util.concurrent.atomic.AtomicReference<Throwable> firstError =
+                new java.util.concurrent.atomic.AtomicReference<>();
         Mono<TokenResponse> result = Mono.empty();
         for (String token : tokenValues) {
             final String currentToken = token;
             result = result.switchIfEmpty(
                 authService.refreshAccessToken(currentToken, clientIp, userAgent)
                     .doOnNext(response -> {
-                        addAccessTokenCookie(httpResponse, response.getAccessToken());
-                        addRefreshTokenCookie(httpResponse, response.getRefreshToken(), true);
+                        authCookieService.addAccessTokenCookie(httpResponse, response.getAccessToken());
+                        authCookieService.addRefreshTokenCookie(httpResponse, response.getRefreshToken(), true);
                     })
                     .onErrorResume(e -> {
+                        firstError.compareAndSet(null, e);
                         if (tokenValues.size() > 1) {
                             log.warn("Refresh failed for one of {} cookies, trying next: {}",
                                     tokenValues.size(), e.getMessage());
@@ -157,13 +163,13 @@ public class AuthController {
             );
         }
 
+        // AUD18-L4: all cookies failed — rethrow the captured first error instead of
+        // re-running the refresh (which would double-trigger token-theft detection).
         return result.switchIfEmpty(Mono.defer(() -> {
-            // All cookies failed — re-throw with the first token to get proper error handling
-            return authService.refreshAccessToken(tokenValues.get(0), clientIp, userAgent)
-                    .doOnNext(response -> {
-                        addAccessTokenCookie(httpResponse, response.getAccessToken());
-                        addRefreshTokenCookie(httpResponse, response.getRefreshToken(), true);
-                    });
+            Throwable captured = firstError.get();
+            return Mono.error(captured != null
+                    ? captured
+                    : new IllegalArgumentException("error.refresh_token_required"));
         }));
     }
 
@@ -188,29 +194,33 @@ public class AuthController {
             logoutMono = authService.logout(null, accessToken);
         }
         return logoutMono
-                .then(Mono.fromRunnable(() -> clearAuthCookies(httpResponse)))
+                .then(Mono.fromRunnable(() -> authCookieService.clearAuthCookies(httpResponse)))
                 // Q4.2: Rotate CSRF token after auth state change
                 .then(rotateCsrfToken(exchange))
                 .onErrorResume(e -> {
                     log.warn("Logout blacklisting failed, clearing cookies anyway: {}", e.getMessage());
-                    clearAuthCookies(httpResponse);
+                    authCookieService.clearAuthCookies(httpResponse);
                     return rotateCsrfToken(exchange);
                 });
     }
 
     // F-075: Explicitly require authentication (also enforced by SecurityConfig /api/v1/admin/auth/** rule)
+    // AUD18-H1: JwtAuthenticationFilter sets a String principal (the email), never a
+    // UserDetails — the old @AuthenticationPrincipal UserDetails parameter was always
+    // null, so this endpoint answered valid:false for every authenticated call. Bind
+    // the full Authentication instead: principal for the username, authorities for roles.
     @GetMapping("/verify")
     @org.springframework.security.access.prepost.PreAuthorize("isAuthenticated()")
-    public Mono<Map<String, Object>> verifyToken(@AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+    public Mono<Map<String, Object>> verifyToken(org.springframework.security.core.Authentication authentication) {
         log.debug("Token verification requested");
         // FEAT-08: Return user info confirming token is valid
-        if (userDetails == null) {
+        if (authentication == null || authentication.getPrincipal() == null) {
             return Mono.just(Map.of("valid", false));
         }
         return Mono.just(Map.of(
             "valid", true,
-            "username", userDetails.getUsername(),
-            "roles", userDetails.getAuthorities().stream()
+            "username", String.valueOf(authentication.getPrincipal()),
+            "roles", authentication.getAuthorities().stream()
                 .map(a -> a.getAuthority()).toList()
         ));
     }
@@ -228,68 +238,9 @@ public class AuthController {
     }
 
     // ===== Cookie Helpers =====
-
-    // BUG-04: All auth cookies MUST use SameSite=Lax to match OAuth2Controller.
-    // Using Strict here while OAuth uses Lax can cause browsers to maintain duplicate
-    // cookies (one Lax from OAuth, one Strict from refresh), and getFirst() reads the
-    // stale one — causing "revoked token reuse" failures after every rotation.
-    // Lax is safe: it prevents cross-site POST/fetch from sending cookies (CSRF protection)
-    // while allowing same-site AJAX and top-level navigations.
-    private static final String COOKIE_SAME_SITE = "Lax";
-
-    private void addAccessTokenCookie(ServerHttpResponse response, String token) {
-        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(ACCESS_TOKEN_COOKIE, token)
-                .httpOnly(true)
-                .secure(cookieSecure)
-                .path("/api")
-                .maxAge(Duration.ofMillis(jwtExpirationMs))
-                .sameSite(COOKIE_SAME_SITE);
-        if (cookieDomain != null && !cookieDomain.isBlank()) {
-            builder.domain(cookieDomain);
-        }
-        response.addCookie(builder.build());
-    }
-
-    private void addRefreshTokenCookie(ServerHttpResponse response, String token, boolean rememberMe) {
-        ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(REFRESH_TOKEN_COOKIE, token)
-                .httpOnly(true)
-                .secure(cookieSecure)
-                .path("/api/v1/admin/auth")
-                // BUG-03: rememberMe=true: persistent cookie (7 days); false: 24-hour persistent cookie
-                // Using Duration.ofHours(24) instead of session cookie to ensure the refresh token
-                // survives page reloads and is consistently sent across user agents
-                .maxAge(rememberMe ? Duration.ofDays(7) : Duration.ofHours(24))
-                .sameSite(COOKIE_SAME_SITE);
-        if (cookieDomain != null && !cookieDomain.isBlank()) {
-            builder.domain(cookieDomain);
-        }
-        response.addCookie(builder.build());
-    }
-
-    private void clearAuthCookies(ServerHttpResponse response) {
-        // BUG-04: Clear cookies with BOTH Lax and Strict SameSite to ensure any stale
-        // Strict cookies from before this fix are also cleared from the browser
-        for (String sameSite : new String[]{COOKIE_SAME_SITE, "Strict"}) {
-            ResponseCookie.ResponseCookieBuilder accessBuilder = ResponseCookie.from(ACCESS_TOKEN_COOKIE, "")
-                    .httpOnly(true)
-                    .secure(cookieSecure)
-                    .path("/api")
-                    .maxAge(0)
-                    .sameSite(sameSite);
-            ResponseCookie.ResponseCookieBuilder refreshBuilder = ResponseCookie.from(REFRESH_TOKEN_COOKIE, "")
-                    .httpOnly(true)
-                    .secure(cookieSecure)
-                    .path("/api/v1/admin/auth")
-                    .maxAge(0)
-                    .sameSite(sameSite);
-            if (cookieDomain != null && !cookieDomain.isBlank()) {
-                accessBuilder.domain(cookieDomain);
-                refreshBuilder.domain(cookieDomain);
-            }
-            response.addCookie(accessBuilder.build());
-            response.addCookie(refreshBuilder.build());
-        }
-    }
+    // AUD19C-C1B: add/clear cookie builders moved to security.AuthCookieService
+    // (with their BUG-03/BUG-04 rationale) so MfaController and OAuth2Controller
+    // share the exact same cookie attributes. Only the request-side readers remain.
 
     private List<String> extractRefreshTokensFromCookies(ServerHttpRequest request) {
         return request.getCookies()
@@ -355,7 +306,11 @@ public class AuthController {
                 .flatMapMany(refreshTokenService::getActiveSessions)
                 .map(session -> {
                     Map<String, Object> dto = new java.util.LinkedHashMap<>();
-                    dto.put("id", session.getId());
+                    // AUD19C-SESSID: session ids are Snowflakes (> 2^53) — serialize as a
+                    // string so JS clients don't silently round them and revoke the wrong
+                    // session. DELETE /sessions/{id} keeps @PathVariable Long: Spring parses
+                    // the string path segment back to the exact long.
+                    dto.put("id", String.valueOf(session.getId()));
                     dto.put("deviceName", session.getDeviceName());
                     dto.put("ipAddress", IpAddressExtractor.anonymizeIp(session.getIpAddress()));
                     dto.put("createdAt", session.getCreatedAt());

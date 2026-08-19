@@ -17,11 +17,15 @@ receivers:
   # fire and are visible in the AlertManager UI; they just don't notify out.
   - name: 'null'
 
-  # Webhook receiver. ALERTMANAGER_WEBHOOK_URL points at Discord/Slack/etc.
+  # Webhook receiver — point the URL at Discord/Slack/etc.
   # (Discord requires the ?wait=true query string in the URL.)
+  # NOTE: Alertmanager does NOT expand environment variables in its config
+  # file, so this must be a literal URL. To override: edit this file and
+  # `docker compose restart alertmanager` (or bind-mount a rendered copy over
+  # /etc/alertmanager/alertmanager.yml in a compose override file).
   - name: 'webhook'
     webhook_configs:
-      - url: '${ALERTMANAGER_WEBHOOK_URL:-http://localhost:5001/}'
+      - url: 'http://localhost:5001/'
         send_resolved: true
 
 inhibit_rules:

@@ -56,6 +56,13 @@ public class GlobalExceptionHandler {
     private ErrorResponse buildErrorResponse(HttpStatus status, String error, String message,
                                               ServerWebExchange exchange,
                                               Map<String, String> validationErrors) {
+        return buildErrorResponse(status, error, message, exchange, validationErrors, null);
+    }
+
+    private ErrorResponse buildErrorResponse(HttpStatus status, String error, String message,
+                                              ServerWebExchange exchange,
+                                              Map<String, String> validationErrors,
+                                              String code) {
         String requestId = exchange.getRequest().getHeaders().getFirst("X-Correlation-Id");
         if (requestId == null || requestId.isBlank()) {
             requestId = UUID.randomUUID().toString();
@@ -74,6 +81,8 @@ public class GlobalExceptionHandler {
                 .title(error)
                 .detail(message)
                 .instance(path)
+                // AUD19C-CODE: nullable machine-readable error.* key (additive)
+                .code(code)
                 .build();
     }
 
@@ -96,6 +105,24 @@ public class GlobalExceptionHandler {
         return Mono.just(buildErrorResponse(HttpStatus.TOO_MANY_REQUESTS,
                 msg(locale, "error.unauthorized"),
                 msg(locale, "error.account_locked", ex.getRemainingMinutes()), exchange));
+    }
+
+    /**
+     * AUD19C-DEACT: valid password, deactivated account. Unlike BadCredentialsException
+     * (masked below as generic invalid credentials), this is honest with the account
+     * holder: 403 + error.account_deactivated, consistent with what the MFA-completion
+     * and refresh paths already reveal. Deactivation is not a credential secret — the
+     * check only runs AFTER BCrypt verification, so it discloses nothing to guessers.
+     */
+    @ExceptionHandler(AccountDeactivatedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public Mono<ErrorResponse> handleAccountDeactivated(AccountDeactivatedException ex, ServerWebExchange exchange) {
+        String path = exchange.getRequest().getPath().value();
+        log.warn("status=403 path={} Login on deactivated account", path);
+        Locale locale = resolveLocale(exchange);
+        return Mono.just(buildErrorResponse(HttpStatus.FORBIDDEN,
+                msg(locale, "error.forbidden"), msg(locale, "error.account_deactivated"),
+                exchange, null, "error.account_deactivated"));
     }
 
     @ExceptionHandler(BadCredentialsException.class)
@@ -228,8 +255,12 @@ public class GlobalExceptionHandler {
         String errorKey = statusToKey(status);
         String reason = ex.getReason();
         String translatedMessage = reason != null ? msg(locale, reason) : msg(locale, errorKey);
+        // AUD19C-CODE: when the reason is a machine-readable error.* key, surface it as
+        // `code` so clients can branch on it. Message behavior is untouched; the field
+        // is additive (absent before, absent still for non-key reasons).
+        String code = reason != null && reason.startsWith("error.") ? reason : null;
         return Mono.just(ResponseEntity.status(status).body(
-                buildErrorResponse(status, msg(locale, errorKey), translatedMessage, exchange)));
+                buildErrorResponse(status, msg(locale, errorKey), translatedMessage, exchange, null, code)));
     }
 
     @ExceptionHandler(PdfUnavailableException.class)

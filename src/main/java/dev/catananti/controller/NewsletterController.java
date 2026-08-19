@@ -72,6 +72,22 @@ public class NewsletterController {
                 .flatMap(this::localizeResult);
     }
 
+    /**
+     * AUD19C-1: RFC 8058 one-click unsubscribe. Mail providers POST to the
+     * List-Unsubscribe header URL with the form body {@code List-Unsubscribe=One-Click};
+     * the body is deliberately ignored — the token in the query string identifies the
+     * subscriber, exactly like the GET variant above. Path is permitAll + CSRF-exempt.
+     */
+    @PostMapping("/one-click-unsubscribe")
+    @Operation(summary = "One-click unsubscribe (RFC 8058)",
+            description = "Unsubscribe via the List-Unsubscribe-Post one-click POST from mail providers")
+    public Mono<Map<String, String>> oneClickUnsubscribe(
+            @RequestParam @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(min = 10, max = 200) String token) {
+        log.debug("Newsletter one-click unsubscription (RFC 8058)");
+        return newsletterService.unsubscribeByToken(token)
+                .flatMap(this::localizeResult);
+    }
+
     // F-084: Extracted repeated locale resolution pattern (was duplicated 5x)
     private Mono<Map<String, String>> localizeResult(Map<String, String> result) {
         return Mono.deferContextual(ctx -> {

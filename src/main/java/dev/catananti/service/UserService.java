@@ -2,12 +2,17 @@ package dev.catananti.service;
 
 import dev.catananti.dto.ProfileUpdateRequest;
 import dev.catananti.dto.RoleUpdateRequest;
+import dev.catananti.dto.UserActivityResponse;
 import dev.catananti.dto.UserRequest;
 import dev.catananti.dto.UserResponse;
 import dev.catananti.entity.User;
 import dev.catananti.entity.UserRole;
 import dev.catananti.config.PaginationConfig;
 import dev.catananti.exception.ResourceNotFoundException;
+import dev.catananti.repository.ArticleRepository;
+import dev.catananti.repository.AuditLogRepository;
+import dev.catananti.repository.CommentRepository;
+import dev.catananti.repository.RefreshTokenRepository;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.util.DigestUtils;
 import dev.catananti.util.PiiMasker;
@@ -23,6 +28,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -42,6 +48,14 @@ public class UserService {
     private final UserCacheService userCacheService;
     private final RefreshTokenService refreshTokenService;
     private final PaginationConfig paginationConfig;
+    // AUD18-M8: explicit operator so the role update can commit BEFORE the Cloudflare
+    // HTTP call (an @Transactional annotation would wrap side effects into the tx).
+    private final org.springframework.transaction.reactive.TransactionalOperator transactionalOperator;
+    // AUD19-F140: read-only sources for the admin user-activity summary
+    private final ArticleRepository articleRepository;
+    private final CommentRepository commentRepository;
+    private final AuditLogRepository auditLogRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     public Flux<UserResponse> getAllUsers(int page, int size) {
         int offset = page * size;
@@ -69,6 +83,44 @@ public class UserService {
         return userRepository.findById(id)
                 .map(UserResponse::fromEntity)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")));
+    }
+
+    /**
+     * AUD19-F140: activity summary for the admin user list.
+     *
+     * <p>All four values are derived from existing data — no schema migration:
+     * accountCreated = users.created_at; articlesCreated = COUNT(articles.author_id);
+     * commentsPosted = COUNT(comments.user_id) (structural link added in V21);
+     * lastLogin = the newest of (last LOGIN audit entry, last refresh-token issuance).
+     * AUD19-LOGIN: the audit source is now live — logLoginSuccess is wired into every
+     * successful login (password and MFA via AuthService.issueFullTokens, OAuth2 via
+     * OAuth2Service.issueTokens), writing action='LOGIN' rows that this query reads.
+     * The refresh-token fallback is kept for logins predating the wiring and because
+     * the audit write is best-effort. lastLogin is null when neither source has data.</p>
+     *
+     * @throws ResourceNotFoundException (→ 404) when the user does not exist
+     */
+    public Mono<UserActivityResponse> getUserActivity(Long id) {
+        return userRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")))
+                .flatMap(user -> Mono.zip(
+                                articleRepository.countByAuthorId(id).defaultIfEmpty(0L),
+                                commentRepository.countByUserId(id).defaultIfEmpty(0L),
+                                auditLogRepository.findLastActionAt(id, AuditEventType.LOGIN.action())
+                                        .map(Optional::of).defaultIfEmpty(Optional.empty()),
+                                refreshTokenRepository.findLatestCreatedAtByUserId(id)
+                                        .map(Optional::of).defaultIfEmpty(Optional.empty()))
+                        .map(counts -> new UserActivityResponse(
+                                latestOf(counts.getT3().orElse(null), counts.getT4().orElse(null)),
+                                user.getCreatedAt(),
+                                counts.getT1(),
+                                counts.getT2())));
+    }
+
+    private static LocalDateTime latestOf(LocalDateTime a, LocalDateTime b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return a.isAfter(b) ? a : b;
     }
 
     public Mono<UserResponse> getUserByEmail(String email) {
@@ -139,12 +191,21 @@ public class UserService {
     }
 
     private Mono<UserResponse> updateUserEntity(User user, UserRequest request) {
+        // AUD18-M5: track which credential-relevant fields change BEFORE mutating the
+        // entity, so sessions can be revoked and the auth cache evicted after save
+        // (mirrors updateProfile's password handling and the F-046 pattern).
+        boolean emailChanging = !user.getEmail().equals(
+                htmlSanitizerService.stripHtml(request.getEmail().toLowerCase().trim()));
+        boolean passwordChanging = request.getPassword() != null && !request.getPassword().isBlank();
+        boolean roleChanging = request.getRole() != null
+                && !request.getRole().equalsIgnoreCase(user.getRole());
+
         user.setName(htmlSanitizerService.stripHtml(request.getName()));
         user.setEmail(htmlSanitizerService.stripHtml(request.getEmail().toLowerCase().trim()));
-        
+
         // F-233: Wrap blocking BCrypt on boundedElastic scheduler
         Mono<Void> passwordMono = Mono.empty();
-        if (request.getPassword() != null && !request.getPassword().isBlank()) {
+        if (passwordChanging) {
             passwordMono = Mono.fromCallable(() -> passwordEncoder.encode(request.getPassword()))
                     .subscribeOn(Schedulers.boundedElastic())
                     .map(encoded -> {
@@ -153,7 +214,7 @@ public class UserService {
                     })
                     .then();
         }
-        
+
         if (request.getRole() != null) {
             try {
                 user.setRole(UserRole.valueOf(request.getRole().toUpperCase()).name());
@@ -162,11 +223,24 @@ public class UserService {
                 return Mono.error(new IllegalArgumentException("error.invalid_role"));
             }
         }
-        
+
         user.setUpdatedAt(LocalDateTime.now());
 
-        return passwordMono.then(userRepository.save(user)
-                .map(UserResponse::fromEntity));
+        return passwordMono.then(userRepository.save(user))
+                .flatMap(saved -> {
+                    // AUD18-M5: an admin password reset must kill the target's live
+                    // sessions, like a self-service password change does (updateProfile).
+                    Mono<Void> revoke = passwordChanging
+                            ? refreshTokenService.revokeAllUserTokens(saved.getId())
+                            : Mono.empty();
+                    return revoke.then(Mono.fromRunnable(() -> {
+                        // AUD18-M5 / F-046: any credential or authorization change makes the
+                        // cached auth snapshot stale — evict for immediate effect.
+                        if (emailChanging || passwordChanging || roleChanging) {
+                            userCacheService.evict(saved.getId());
+                        }
+                    })).thenReturn(UserResponse.fromEntity(saved));
+                });
     }
 
     @Transactional
@@ -311,10 +385,33 @@ public class UserService {
     }
 
     /**
-     * Safe role update that prevents demoting the last admin or self-demotion
+     * AUD18-M8: outcome of the DB-only role change, carrying what the post-commit
+     * side effects need ({@code removedCfRuleId} is the Cloudflare rule cleared from
+     * the user row on demotion, still to be deleted at Cloudflare).
      */
-    @Transactional
+    public record RoleChange(User user, String oldRole, String removedCfRuleId) {}
+
+    /**
+     * Safe role update that prevents demoting the last admin or self-demotion.
+     *
+     * <p>AUD18-M8: restructured so the Cloudflare Email Routing HTTP call happens
+     * AFTER the DB transaction commits (TX-08 — external I/O inside a transaction
+     * holds a pool connection through the whole HTTP round-trip). The role change is
+     * the source of truth; the forwarding rule is best-effort infrastructure that is
+     * reconciled after commit and logged on failure, like the promotion email.
+     */
     public Mono<UserResponse> updateUserRoleSafe(Long id, RoleUpdateRequest request, String currentUserEmail) {
+        return transactionalOperator.transactional(updateUserRoleDbOnly(id, request, currentUserEmail))
+                .flatMap(this::applyRoleChangeSideEffects);
+    }
+
+    /**
+     * DB-only half of the role update: validations + role save. Public so
+     * {@code RoleUpgradeRequestService} can run it inside its OWN transaction
+     * (status transition + promotion stay atomic) and defer the Cloudflare/email
+     * side effects to {@link #applyRoleChangeSideEffects} after commit (AUD18-M8).
+     */
+    public Mono<RoleChange> updateUserRoleDbOnly(Long id, RoleUpdateRequest request, String currentUserEmail) {
         return userRepository.findByEmail(currentUserEmail)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")))
                 .flatMap(currentUser -> {
@@ -322,7 +419,7 @@ public class UserService {
                     if (currentUser.getId().equals(id) && !UserRole.ADMIN.matches(request.getRole())) {
                         return Mono.error(new IllegalArgumentException("error.cannot_demote_self"));
                     }
-                    
+
                     return userRepository.findById(id)
                             .switchIfEmpty(Mono.error(new ResourceNotFoundException("error.user_not_found")))
                             .flatMap(targetUser -> {
@@ -333,15 +430,15 @@ public class UserService {
                                                 if (adminCount <= 1) {
                                                     return Mono.error(new IllegalArgumentException("error.cannot_demote_last_admin"));
                                                 }
-                                                return performRoleUpdate(targetUser, request.getRole());
+                                                return performRoleUpdateDb(targetUser, request.getRole());
                                             });
                                 }
-                                return performRoleUpdate(targetUser, request.getRole());
+                                return performRoleUpdateDb(targetUser, request.getRole());
                             });
                 });
     }
 
-    private Mono<UserResponse> performRoleUpdate(User user, String newRole) {
+    private Mono<RoleChange> performRoleUpdateDb(User user, String newRole) {
         String oldRole = user.getRole();
         boolean wasDevOrAbove = UserRole.ADMIN.matches(oldRole) || UserRole.DEV.matches(oldRole);
         boolean isDevOrAbove = UserRole.ADMIN.matches(newRole) || UserRole.DEV.matches(newRole);
@@ -349,40 +446,78 @@ public class UserService {
         user.setRole(newRole);
         user.setUpdatedAt(LocalDateTime.now());
 
-        // Manage Cloudflare Email Routing on promotion/demotion
+        // AUD18-M8: on demotion the rule id is cleared in the SAME transaction as the
+        // role change (the row never claims a rule a demoted user shouldn't have); the
+        // actual Cloudflare delete happens post-commit in applyRoleChangeSideEffects.
+        String removedCfRuleId = null;
+        if (wasDevOrAbove && !isDevOrAbove && user.getCfEmailRuleId() != null) {
+            removedCfRuleId = user.getCfEmailRuleId();
+            user.setCfEmailRuleId(null);
+        }
+        final String removed = removedCfRuleId;
+
+        return userRepository.save(user)
+                .map(saved -> new RoleChange(saved, oldRole, removed));
+    }
+
+    /**
+     * AUD18-M8: post-commit half of the role update — Cloudflare Email Routing and
+     * the promotion email. Both are best-effort: a Cloudflare outage must neither
+     * roll back nor block an already-committed role change (failures are logged for
+     * manual reconciliation, consistent with how the codebase treats notification
+     * emails). Must be invoked OUTSIDE any transaction.
+     */
+    public Mono<UserResponse> applyRoleChangeSideEffects(RoleChange change) {
+        User user = change.user();
+        String oldRole = change.oldRole();
+        boolean wasDevOrAbove = UserRole.ADMIN.matches(oldRole) || UserRole.DEV.matches(oldRole);
+        boolean isDevOrAbove = UserRole.ADMIN.matches(user.getRole()) || UserRole.DEV.matches(user.getRole());
+
+        // AUD18-M5 / F-046: the cached auth snapshot carries the old role — evict so
+        // the new authorization takes effect immediately.
+        userCacheService.evict(user.getId());
+
         Mono<Void> cfAction = Mono.empty();
         if (!wasDevOrAbove && isDevOrAbove && user.getUsername() != null && !user.getUsername().isBlank()) {
-            // Promotion → create forwarding rule
+            // Promotion → create forwarding rule, then persist the rule id via a
+            // partial UPDATE (CC-07: cannot clobber concurrent writes to other columns).
             cfAction = cfEmailRoutingService.createForwardingRule(user.getUsername(), user.getEmail())
-                    .map(ruleId -> {
+                    .flatMap(ruleId -> {
                         user.setCfEmailRuleId(ruleId);
-                        return ruleId;
+                        return userRepository.updateCfEmailRuleId(user.getId(), ruleId, LocalDateTime.now()).then();
                     })
-                    .then();
-        } else if (wasDevOrAbove && !isDevOrAbove && user.getCfEmailRuleId() != null) {
-            // Demotion → delete forwarding rule
-            String ruleId = user.getCfEmailRuleId();
-            user.setCfEmailRuleId(null);
-            cfAction = cfEmailRoutingService.deleteForwardingRule(ruleId);
+                    .onErrorResume(err -> {
+                        log.warn("Cloudflare forwarding rule creation failed for {} (role change kept): {}",
+                                PiiMasker.maskEmail(user.getEmail()), err.getMessage());
+                        return Mono.empty();
+                    });
+        } else if (wasDevOrAbove && !isDevOrAbove && change.removedCfRuleId() != null) {
+            // Demotion → the rule id was already cleared in the transaction; delete the
+            // rule at Cloudflare best-effort (an orphan rule is only a stale forward).
+            cfAction = cfEmailRoutingService.deleteForwardingRule(change.removedCfRuleId())
+                    .onErrorResume(err -> {
+                        log.warn("Cloudflare forwarding rule deletion failed for {} (ruleId={}): {}",
+                                PiiMasker.maskEmail(user.getEmail()), change.removedCfRuleId(), err.getMessage());
+                        return Mono.empty();
+                    });
         }
 
+        UserResponse response = UserResponse.fromEntity(user);
         return cfAction
-                .then(userRepository.save(user))
-                .map(UserResponse::fromEntity)
-                .flatMap(u -> {
-                    log.debug("Updated role for user {}: {} → {}", PiiMasker.maskEmail(u.getEmail()), oldRole, u.getRole());
+                .then(Mono.defer(() -> {
+                    log.debug("Updated role for user {}: {} → {}", PiiMasker.maskEmail(user.getEmail()), oldRole, user.getRole());
                     // Send email notification on promotion to DEV/ADMIN (non-critical)
                     if (!wasDevOrAbove && isDevOrAbove && user.getUsername() != null) {
                         String newDevEmail = user.getUsername() + "@catananti.dev";
-                        return emailService.sendDevPromotionNotification(user.getEmail(), u.getName(), newDevEmail)
+                        return emailService.sendDevPromotionNotification(user.getEmail(), response.getName(), newDevEmail)
                                 .onErrorResume(err -> {
-                                    log.warn("Failed to send DEV promotion email to {}: {}", PiiMasker.maskEmail(u.getEmail()), err.getMessage());
+                                    log.warn("Failed to send DEV promotion email to {}: {}", PiiMasker.maskEmail(user.getEmail()), err.getMessage());
                                     return Mono.empty();
                                 })
-                                .thenReturn(u);
+                                .thenReturn(response);
                     }
-                    return Mono.just(u);
-                });
+                    return Mono.just(response);
+                }));
     }
 
     public Mono<Void> deleteUser(Long id) {

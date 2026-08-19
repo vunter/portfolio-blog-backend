@@ -3,17 +3,15 @@
 # Java 25 + Spring Boot 4 + WebFlux
 # Optimized: layered JARs + BuildKit cache
 #
-# SUPPLY CHAIN: pin base images by digest before release. Lookup with:
+# SUPPLY CHAIN (L-8): base images pinned by digest (multi-arch index digest).
+# Refresh with:
 #   docker buildx imagetools inspect eclipse-temurin:25-jdk-alpine
 #   docker buildx imagetools inspect eclipse-temurin:25-jre-noble
-# Then change the FROM lines to:
-#   FROM eclipse-temurin:25-jdk-alpine@sha256:<digest> AS builder
-#   FROM eclipse-temurin:25-jre-noble@sha256:<digest> AS runtime
-# Dependabot's docker ecosystem will keep the digest fresh once pinned.
+# Dependabot's docker ecosystem keeps the digests fresh now that they are pinned.
 # ============================================
 
 # Stage 1: Build with Maven cache
-FROM eclipse-temurin:25-jdk-alpine AS builder
+FROM eclipse-temurin:25-jdk-alpine@sha256:5ecfde8e5ecde5954ea3721155b345ef56c1d579b940c761318ad4c05959a151 AS builder
 WORKDIR /app
 
 COPY mvnw .
@@ -33,12 +31,15 @@ RUN --mount=type=cache,target=/root/.m2/repository \
 
 COPY src ./src
 
+# -Prelease-jar (A5/H3): strips dev-only resources (application-dev/local/
+# e2e/nitro.properties with committed dev credentials + dev/ seed data) from
+# the production JAR. See the release-jar profile in pom.xml.
 RUN --mount=type=cache,target=/root/.m2/repository \
     MAVEN_SETTINGS=""; \
     if [ -n "$NEXUS_HOST" ]; then \
       MAVEN_SETTINGS="-s .mvn/nexus-settings.xml"; \
     fi && \
-    ./mvnw clean package -Dmaven.test.skip=true -B $MAVEN_SETTINGS
+    ./mvnw clean package -Dmaven.test.skip=true -B -Prelease-jar $MAVEN_SETTINGS
 
 # Extract Spring Boot layered JAR for optimal Docker caching
 # Splits 300MB fat JAR into: dependencies (~250MB, cached) + application (~10-50MB, changes per deploy)
@@ -53,7 +54,7 @@ RUN wget -q -O /tmp/dd-java-agent.jar \
     echo "${DD_JAVA_AGENT_SHA256}  /tmp/dd-java-agent.jar" | sha256sum -c -
 
 # Stage 2: Runtime (Debian — Playwright's Chromium requires glibc)
-FROM eclipse-temurin:25-jre-noble AS runtime
+FROM eclipse-temurin:25-jre-noble@sha256:d062925a8ef2d71547b3ef558ee10037b60cf8a325d6b4575c6b0c4e9acabd08 AS runtime
 
 LABEL org.opencontainers.image.title="Portfolio Blog API" \
       org.opencontainers.image.version="2.0.0" \
@@ -122,7 +123,11 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
 # stalls in container environments where /dev/random can block.
 # UseContainerSupport is default-on since Java 11 but kept explicit for
 # auditability. -XX:MaxRAMPercentage respects cgroup memory limits.
-ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseZGC -Djava.security.egd=file:/dev/./urandom" \
+# -Duser.timezone=UTC (AUD19C-4): pins the invariant that every LocalDateTime in
+# the system is a UTC instant — LocalDateTime.now(), DB TIMESTAMP columns and the
+# 'Z'-suffixed JSON serialization (JacksonConfig) all assume it; dev machines may
+# run UTC-3 but production must never inherit a host zone.
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseZGC -Djava.security.egd=file:/dev/./urandom -Duser.timezone=UTC" \
     DD_AGENT_ENABLED=false \
     DD_SERVICE=portfolio-blog-api \
     DD_ENV=production \

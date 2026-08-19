@@ -47,11 +47,8 @@ public class AdminTagController {
         });
     }
 
-    @GetMapping("/{id}")
-    public Mono<TagResponse> getTagById(@PathVariable Long id) {
-        log.debug("Admin fetching tag by id: {}", id);
-        return tagService.getTagById(id);
-    }
+    // AUD19C-5: GET /{id} removed — verified zero callers (the frontend edits tags
+    // from the list it already holds).
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

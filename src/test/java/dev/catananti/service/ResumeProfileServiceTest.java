@@ -527,6 +527,38 @@ class ResumeProfileServiceTest {
         }
 
         @Test
+        @DisplayName("AUD18-JA8: includeContact=false omits email/phone from the rendered HTML")
+        void shouldOmitContactWhenIncludeContactFalse() {
+            when(profileRepository.findByOwnerIdAndLocale(ownerId, "en"))
+                    .thenReturn(Mono.just(testProfile));
+            mockBuildFullResponse(profileId);
+
+            StepVerifier.create(resumeProfileService.generateResumeHtml(ownerId, "en", false))
+                    .assertNext(html -> {
+                        assertThat(html).doesNotContain("john@example.com");
+                        assertThat(html).doesNotContain("+1234567890");
+                        // the rest of the resume still renders
+                        assertThat(html).contains("JOHN DOE");
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("AUD18-JA8: default 2-arg overload keeps contact fields")
+        void shouldKeepContactByDefault() {
+            when(profileRepository.findByOwnerIdAndLocale(ownerId, "en"))
+                    .thenReturn(Mono.just(testProfile));
+            mockBuildFullResponse(profileId);
+
+            StepVerifier.create(resumeProfileService.generateResumeHtml(ownerId, "en"))
+                    .assertNext(html -> {
+                        assertThat(html).contains("john@example.com");
+                        assertThat(html).contains("+1234567890");
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
         @DisplayName("Should escape HTML in profile fields")
         void shouldEscapeHtmlInFields() {
             testProfile.setFullName("John <script>alert('xss')</script> Doe");

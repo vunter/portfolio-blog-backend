@@ -23,7 +23,6 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -41,7 +40,6 @@ public class ResumeProfileController {
 
     private static final Pattern NON_SLUG_CHARS = Pattern.compile("[^a-z0-9]+");
     private static final Pattern LEADING_TRAILING_HYPHENS = Pattern.compile("^-|-$");
-    private static final Set<String> RESPONSE_ONLY_FIELDS = Set.of("id", "ownerId", "locale", "avatarUrl", "createdAt", "updatedAt");
 
     /** F-093: Caffeine cache for email→userId to avoid DB lookup per request (TTL 5 min). */
     private final Cache<String, Long> userIdByEmailCache = Caffeine.newBuilder()
@@ -49,7 +47,6 @@ public class ResumeProfileController {
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .build();
 
-    private final tools.jackson.databind.ObjectMapper objectMapper;
     private final ResumeProfileService profileService;
     private final PdfGenerationService pdfGenerationService;
     private final PublicResumeService publicResumeService;
@@ -118,49 +115,6 @@ public class ResumeProfileController {
                     // Invalidate public PDF cache so next download reflects updated profile
                     publicResumeService.clearPdfCache(null);
                 })
-                .map(ResponseEntity::ok);
-    }
-
-    /**
-     * F-095: Partially update the authenticated user's resume profile.
-     * Only the provided fields are updated; omitted fields remain unchanged.
-     */
-    @PatchMapping
-    public Mono<ResponseEntity<ResumeProfileResponse>> patchProfile(
-            Authentication authentication,
-            @RequestBody java.util.Map<String, Object> updates,
-            @RequestParam(defaultValue = "en") @jakarta.validation.constraints.Pattern(regexp = "^[a-z]{2}(-[a-zA-Z]{2})?$", message = "Invalid locale format") String locale) {
-        return extractUserId(authentication)
-                .flatMap(userId -> profileService.getProfileByOwnerId(userId, locale)
-                        .switchIfEmpty(Mono.just(ResumeProfileResponse.builder()
-                                .locale(locale)
-                                .educations(java.util.List.of())
-                                .experiences(java.util.List.of())
-                                .skills(java.util.List.of())
-                                .languages(java.util.List.of())
-                                .certifications(java.util.List.of())
-                                .additionalInfo(java.util.List.of())
-                                .testimonials(java.util.List.of())
-                                .proficiencies(java.util.List.of())
-                                .projects(java.util.List.of())
-                                .learningTopics(java.util.List.of())
-                                .build()))
-                        .flatMap(existing -> {
-                            try {
-                                // Convert existing response to map, overlay with updates, strip response-only fields
-                                @SuppressWarnings("unchecked")
-                                java.util.Map<String, Object> base = objectMapper.convertValue(existing, java.util.Map.class);
-                                base.putAll(updates);
-                                RESPONSE_ONLY_FIELDS.forEach(base::remove);
-                                ResumeProfileRequest merged = objectMapper.convertValue(base, ResumeProfileRequest.class);
-                                return profileService.saveProfile(userId, merged, locale);
-                            } catch (Exception e) {
-                                return Mono.error(new org.springframework.web.server.ResponseStatusException(
-                                        org.springframework.http.HttpStatus.BAD_REQUEST,
-                                        "Invalid patch data"));
-                            }
-                        }))
-                .doOnSuccess(profile -> publicResumeService.clearPdfCache(null))
                 .map(ResponseEntity::ok);
     }
 

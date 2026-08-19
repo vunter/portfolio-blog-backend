@@ -88,6 +88,10 @@ public class BlogMetrics {
         pdfGeneratedCounter = meterRegistry.counter("blog.pdf.generated");
         pdfGenerationTimer = Timer.builder("blog.pdf.generation.duration")
                 .description("Time to generate PDF documents")
+                // Publish histogram buckets so Prometheus exposes
+                // blog_pdf_generation_duration_seconds_bucket — required by the
+                // PdfGenerationSlow alert's histogram_quantile() expression.
+                .publishPercentileHistogram()
                 .register(meterRegistry);
     }
 

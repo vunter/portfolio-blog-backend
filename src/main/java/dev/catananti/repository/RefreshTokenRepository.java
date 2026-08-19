@@ -49,4 +49,11 @@ public interface RefreshTokenRepository extends ReactiveCrudRepository<RefreshTo
     @Modifying
     @Query("DELETE FROM refresh_tokens WHERE user_id = :userId")
     Mono<Long> deleteByUserId(Long userId);
+
+    // AUD19-F140: newest token issuance ≈ last login (every login flow mints a refresh
+    // token). Fallback source for the admin activity endpoint while LOGIN audit rows are
+    // not emitted; expired-token cleanup means old logins fade to "unknown" (acceptable —
+    // the field is optional). ORDER BY + LIMIT 1 so "no rows" maps to an empty Mono.
+    @Query("SELECT created_at FROM refresh_tokens WHERE user_id = :userId ORDER BY created_at DESC LIMIT 1")
+    Mono<LocalDateTime> findLatestCreatedAtByUserId(Long userId);
 }

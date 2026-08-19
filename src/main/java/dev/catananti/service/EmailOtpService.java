@@ -135,13 +135,7 @@ public class EmailOtpService {
                     String emailRateKey = OTP_EMAIL_RATE_PREFIX + user.getEmail().toLowerCase();
 
                     // Check per-email rate limit
-                    return redisTemplate.opsForValue().increment(emailRateKey)
-                            .flatMap(count -> {
-                                if (count == 1) {
-                                    return redisTemplate.expire(emailRateKey, otpEmailRateWindow).thenReturn(count);
-                                }
-                                return Mono.just(count);
-                            })
+                    return incrementWithTtl(emailRateKey, otpEmailRateWindow)
                             .flatMap(count -> {
                                 if (count > maxOtpSendsPerEmail) {
                                     log.warn("OTP email rate limit exceeded for user {}", userId);
@@ -165,10 +159,17 @@ public class EmailOtpService {
                                                     .thenReturn(existingOtp);
                                         })
                                         .switchIfEmpty(Mono.defer(() -> {
-                                            // No existing OTP — generate a new one
+                                            // No existing OTP — generate a new one.
+                                            // AUD18-M9: a new code means a new guess budget — drop the
+                                            // failed-attempt counter left by the PREVIOUS code (a lockout
+                                            // deletes the OTP key but not the counter, so without this a
+                                            // legitimate resend was born already locked out). The resend
+                                            // itself stays bounded by the per-email rate limit above; the
+                                            // reuse branch keeps the counter because the code is the same.
                                             String otp = generateOtp();
-                                            return redisTemplate.opsForValue()
-                                                    .set(redisKey, otp, Duration.ofMinutes(expirationMinutes))
+                                            return redisTemplate.delete(OTP_ATTEMPTS_PREFIX + userId)
+                                                    .then(redisTemplate.opsForValue()
+                                                            .set(redisKey, otp, Duration.ofMinutes(expirationMinutes)))
                                                     .then(emailService.sendOtpVerification(
                                                             user.getEmail(),
                                                             user.getName(),
@@ -185,7 +186,7 @@ public class EmailOtpService {
      * Verify the OTP code provided by the user during login.
      *
      * SEG-5: Brute-force protection. Each verify attempt increments a counter keyed by
-     * userId (TTL = OTP validity, set on the first increment). Once the counter reaches
+     * userId (TTL = OTP validity, asserted on every pass — AUD18-L7). Once the counter reaches
      * the configured threshold, the OTP Redis key is invalidated (deleted) and the attempt
      * is rejected, so a static 6-digit code cannot be guessed across repeated logins.
      * On success both the OTP key and the attempt counter are removed.
@@ -193,12 +194,8 @@ public class EmailOtpService {
     public Mono<Boolean> verifyOtp(Long userId, String code) {
         String redisKey = REDIS_PREFIX + userId;
         String attemptsKey = OTP_ATTEMPTS_PREFIX + userId;
-        return redisTemplate.opsForValue().increment(attemptsKey)
+        return incrementWithTtl(attemptsKey, Duration.ofMinutes(expirationMinutes))
                 .flatMap(attempts -> {
-                    Mono<Boolean> ttlSet = attempts == 1
-                            ? redisTemplate.expire(attemptsKey, Duration.ofMinutes(expirationMinutes))
-                            : Mono.just(true);
-                    return ttlSet.then(Mono.defer(() -> {
                         if (attempts > maxOtpVerifyAttempts) {
                             // Too many guesses — invalidate the OTP so a fresh login cannot keep guessing it.
                             log.warn("Email OTP brute force limit reached for userId={}", userId);
@@ -225,8 +222,23 @@ public class EmailOtpService {
                                     return Mono.just(false);
                                 })
                                 .defaultIfEmpty(false);
-                    }));
                 });
+    }
+
+    /**
+     * AUD18-L7: INCR-then-EXPIRE hardening. The TTL used to be set only when the
+     * counter was first created (count==1); if that single EXPIRE call failed, the key
+     * lived forever (permanent rate limit / lockout). Check-and-repair instead: after
+     * every INCR, (re)apply the TTL whenever the key has none — this also covers a
+     * racing INCR re-creating the key right after expiry.
+     */
+    private Mono<Long> incrementWithTtl(String key, Duration ttl) {
+        return redisTemplate.opsForValue().increment(key)
+                .flatMap(count -> redisTemplate.getExpire(key)
+                        .defaultIfEmpty(Duration.ZERO)
+                        .flatMap(current -> current.isZero() || current.isNegative()
+                                ? redisTemplate.expire(key, ttl).thenReturn(count)
+                                : Mono.just(count)));
     }
 
     private String generateOtp() {

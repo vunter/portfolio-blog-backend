@@ -92,7 +92,7 @@ public class EmailTemplatePreviewController {
                 "successBody", "Your email address has been changed to new@example.com.",
                 "warningTitle", "Wasn't you?",
                 "warningBody", "If you did not request this change, click below to revert immediately.",
-                "revertUrl", SITE + "/auth/revert-email?token=sample-token",
+                "revertUrl", SITE + "/auth/revert-email-change?token=sample-token",
                 "revertButtonText", "Revert Email Change",
                 "revertExpires", "This revert link expires in 48 hours.",
                 "fallbackText", "If the button doesn't work, copy and paste this URL:"))),

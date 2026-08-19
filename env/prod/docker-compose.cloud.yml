@@ -29,8 +29,9 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_COOKIE_SECURE=${JWT_COOKIE_SECURE}
       - JWT_COOKIE_DOMAIN=${JWT_COOKIE_DOMAIN}
-      # CORS
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+      # CORS — AUD19C-6: `:-` fallback so an EMPTY Doppler var doesn't override the
+      # application-cloud.properties default with a blank value (empty beats file default)
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://catananti.dev,https://www.catananti.dev}
       # Admin seed
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - ADMIN_NAME=${ADMIN_NAME}

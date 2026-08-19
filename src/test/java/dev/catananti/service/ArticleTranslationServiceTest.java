@@ -221,34 +221,8 @@ class ArticleTranslationServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("getTranslation")
-    class GetTranslation {
-
-        @Test
-        @DisplayName("should return translation when it exists")
-        void shouldReturnTranslation() {
-            when(articleI18nRepository.findByArticleIdAndLocale(1L, "pt-br"))
-                    .thenReturn(Mono.just(testI18n));
-
-            StepVerifier.create(articleTranslationService.getTranslation(1L, "pt-br"))
-                    .assertNext(i18n -> {
-                        assertThat(i18n.getLocale()).isEqualTo("pt-br");
-                        assertThat(i18n.getTitle()).isEqualTo("Titulo do Artigo de Teste");
-                    })
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("should return empty when translation not found")
-        void shouldReturnEmptyWhenNotFound() {
-            when(articleI18nRepository.findByArticleIdAndLocale(1L, "de"))
-                    .thenReturn(Mono.empty());
-
-            StepVerifier.create(articleTranslationService.getTranslation(1L, "de"))
-                    .verifyComplete();
-        }
-    }
+    // AUD19C-3: getTranslation tests removed with the method (sole caller was the
+    // orphaned GET /admin/articles/{id}/translations/{locale} endpoint).
 
     @Nested
     @DisplayName("deleteTranslation")

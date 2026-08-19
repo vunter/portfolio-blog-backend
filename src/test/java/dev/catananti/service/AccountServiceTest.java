@@ -27,7 +27,6 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.web.server.ResponseStatusException;
@@ -68,6 +67,7 @@ class AccountServiceTest {
     @Mock private RefreshTokenService refreshTokenService;
     @Mock private AuditService auditService;
     @Mock private PasswordEncoder passwordEncoder;
+    @Mock private UserCacheService userCacheService;
     @Mock private TransactionalOperator transactionalOperator;
 
     @InjectMocks
@@ -116,13 +116,22 @@ class AccountServiceTest {
     class Reauthentication {
 
         @Test
-        @DisplayName("senha errada: nenhum efeito colateral, nem transação aberta")
+        @DisplayName("AUD19C-A5: senha errada -> 400 (não 401), nenhum efeito colateral, nem transação aberta")
         void wrongPasswordHasNoEffect() {
             stubUserFound();
             when(passwordEncoder.matches("wrong", HASH)).thenReturn(false);
 
             StepVerifier.create(service.deleteAccount(EMAIL, "wrong", AccountService.Mode.DEACTIVATE, false))
-                    .expectError(BadCredentialsException.class)
+                    .expectErrorSatisfies(err -> {
+                        // reautenticação falha em requisição autenticada é 400 (validação de
+                        // negócio), não 401 — 401 fazia o cliente descartar a sessão válida
+                        org.assertj.core.api.Assertions.assertThat(err)
+                                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+                        org.springframework.web.server.ResponseStatusException rse =
+                                (org.springframework.web.server.ResponseStatusException) err;
+                        org.assertj.core.api.Assertions.assertThat(rse.getStatusCode().value()).isEqualTo(400);
+                        org.assertj.core.api.Assertions.assertThat(rse.getReason()).isEqualTo("error.password_invalid");
+                    })
                     .verify();
 
             verify(transactionalOperator, never()).transactional(any(Mono.class));
@@ -157,6 +166,8 @@ class AccountServiceTest {
             // sessions are revoked (kept as audit trail), not deleted
             verify(refreshTokenService).revokeAllUserTokens(USER_ID);
             verify(refreshTokenRepository, never()).deleteByUserId(anyLong());
+            // AUD18-L3 / F-046: cached auth snapshot dropped for immediate lockout
+            verify(userCacheService).evict(USER_ID);
             // audit carries the userId only — no email
             verify(auditService).logAction(eq("ACCOUNT_DEACTIVATED"), eq("USER"),
                     eq(USER_ID.toString()), eq(USER_ID), isNull(), anyString());
@@ -199,6 +210,7 @@ class AccountServiceTest {
 
             // the post-commit steps must not run when the transaction failed
             verify(refreshTokenService, never()).revokeAllUserTokens(anyLong());
+            verify(userCacheService, never()).evict(anyLong());
             verify(auditService, never()).logAction(anyString(), anyString(), anyString(), anyLong(), any(), anyString());
         }
     }

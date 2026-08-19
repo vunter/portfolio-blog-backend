@@ -206,35 +206,6 @@ class ArticleVersionServiceTest {
     }
 
     @Nested
-    @DisplayName("getLatestVersion")
-    class GetLatestVersion {
-
-        @Test
-        @DisplayName("Should get latest version")
-        void shouldGetLatestVersion() {
-            when(versionRepository.findLatestByArticleId(articleId))
-                    .thenReturn(Mono.just(testVersion));
-
-            StepVerifier.create(versionService.getLatestVersion(articleId))
-                    .assertNext(version -> {
-                        assertThat(version.getVersionNumber()).isEqualTo(1);
-                    })
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("Should throw error when no versions found")
-        void shouldThrowWhenNoVersions() {
-            when(versionRepository.findLatestByArticleId(articleId))
-                    .thenReturn(Mono.empty());
-
-            StepVerifier.create(versionService.getLatestVersion(articleId))
-                    .expectError(ResourceNotFoundException.class)
-                    .verify();
-        }
-    }
-
-    @Nested
     @DisplayName("restoreVersion")
     class RestoreVersion {
 

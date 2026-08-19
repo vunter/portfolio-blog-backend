@@ -43,6 +43,7 @@ public class OAuth2Service {
     private final JwtTokenProvider tokenProvider;
     private final IdService idService;
     private final AuditService auditService;
+    private final AuthService authService;
     private final WebClient webClient;
     private final ReactiveStringRedisTemplate redisTemplate;
     private final CircuitBreaker circuitBreaker;
@@ -76,6 +77,7 @@ public class OAuth2Service {
                          JwtTokenProvider tokenProvider,
                          IdService idService,
                          AuditService auditService,
+                         AuthService authService,
                          ReactiveStringRedisTemplate redisTemplate,
                          ResilienceConfig resilience,
                          tools.jackson.databind.ObjectMapper objectMapper,
@@ -86,6 +88,7 @@ public class OAuth2Service {
         this.tokenProvider = tokenProvider;
         this.idService = idService;
         this.auditService = auditService;
+        this.authService = authService;
         this.redisTemplate = redisTemplate;
         // Reuse the configured WebClient.Builder so OAuth provider calls inherit
         // the connector-level connect / response timeouts.
@@ -518,6 +521,17 @@ public class OAuth2Service {
     }
 
     private Mono<TokenResponse> issueTokens(User user, String clientIp) {
+        // AUD18-A10: honor MFA exactly like password login. Before this check, a social
+        // login minted full tokens for MFA-enabled accounts, so anyone controlling the
+        // linked provider account (or the verified email) skipped the second factor
+        // entirely. Delegates to AuthService so the challenge token/Redis format is the
+        // one /api/v1/admin/mfa/verify already understands.
+        if (Boolean.TRUE.equals(user.getMfaEnabled())) {
+            // AUD19-LOGIN: deliberately NOT audited here — a challenge is not a login.
+            // The challenge completes through /admin/mfa/verify → AuthService.completeMfaLogin
+            // → issueFullTokens, which writes the LOGIN row for this flow.
+            return authService.issueMfaChallenge(user);
+        }
         String accessToken = tokenProvider.generateToken(user.getId(), user.getRole());
         return refreshTokenService.createRefreshToken(user.getId(), clientIp, "OAuth2")
                 .map(refreshToken -> TokenResponse.builder()
@@ -527,7 +541,14 @@ public class OAuth2Service {
                         .expiresIn(jwtExpirationMs / 1000)
                         .email(user.getEmail())
                         .name(user.getName())
-                        .build());
+                        .build())
+                // AUD19-LOGIN: all three providers (Google/GitHub/LinkedIn) funnel through
+                // this non-MFA branch. Fire-and-forget on purpose (mirrors
+                // AuthService.issueFullTokens): the audit row is best-effort and must never
+                // fail or delay the OAuth2 callback; logAction swallows persistence errors.
+                .doOnNext(response -> auditService.logLoginSuccess(user.getId(), user.getEmail(), clientIp)
+                        .subscribe(null, e -> log.warn("AUD19-LOGIN: failed to record LOGIN audit for {}: {}",
+                                dev.catananti.util.PiiMasker.maskEmail(user.getEmail()), e.getMessage())));
     }
 
     private String generateUsername(String email) {

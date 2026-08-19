@@ -118,23 +118,7 @@ class AdminTagControllerTest {
         }
     }
 
-    @Nested
-    @DisplayName("GET /api/v1/admin/tags/{id}")
-    class GetTagById {
-
-        @Test
-        @DisplayName("Should return tag by ID")
-        void shouldReturnTag() {
-            when(tagService.getTagById(101L)).thenReturn(Mono.just(javaTag));
-
-            StepVerifier.create(controller.getTagById(101L))
-                    .assertNext(tag -> {
-                        assertThat(tag.getName()).isEqualTo("Java");
-                        assertThat(tag.getColor()).isEqualTo("#E76F00");
-                    })
-                    .verifyComplete();
-        }
-    }
+    // AUD19C-5: GET /{id} tests removed with the orphan endpoint.
 
     @Nested
     @DisplayName("POST /api/v1/admin/tags")

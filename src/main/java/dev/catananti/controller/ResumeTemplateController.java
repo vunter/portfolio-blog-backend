@@ -33,8 +33,6 @@ import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -93,17 +91,6 @@ public class ResumeTemplateController {
         // F-097: Verify ownership to prevent IDOR
         return extractUserId(authentication)
                 .flatMap(userId -> templateService.getTemplateById(id)
-                        .flatMap(template -> verifyOwnership(template, userId)));
-    }
-
-    @Operation(summary = "Get template by slug")
-    @GetMapping("/templates/slug/{slug}")
-    public Mono<ResumeTemplateResponse> getTemplateBySlug(
-            @Parameter(description = "Template slug") @PathVariable String slug,
-            Authentication authentication) {
-        // F-097: Verify ownership to prevent IDOR
-        return extractUserId(authentication)
-                .flatMap(userId -> templateService.getTemplateBySlug(slug)
                         .flatMap(template -> verifyOwnership(template, userId)));
     }
 
@@ -211,8 +198,11 @@ public class ResumeTemplateController {
             @PathVariable Long id,
             Authentication authentication) {
         
+        // AUD18-JM19: same F-097 ownership check as the other read paths — duplicate leaked
+        // any user's template content into the caller's own copy.
         return extractUserId(authentication)
                 .flatMap(userId -> templateService.getTemplateById(id)
+                        .flatMap(source -> verifyOwnership(source, userId))
                         .flatMap(source -> {
                             ResumeTemplateRequest copyReq = new ResumeTemplateRequest();
                             copyReq.setName(source.getName() + " (Copy)");
@@ -258,22 +248,6 @@ public class ResumeTemplateController {
 
     // ==================== PDF Generation ====================
 
-    @Operation(summary = "Generate PDF from template slug")
-    @PostMapping("/templates/slug/{slug}/pdf")
-    public Mono<ResponseEntity<byte[]>> generatePdfFromSlug(
-            @PathVariable @jakarta.validation.constraints.Pattern(regexp = "^[a-z0-9-]+$") @jakarta.validation.constraints.Size(max = 200) String slug,
-            @RequestBody(required = false) Map<String, String> variables) {
-        
-        return templateService.generatePdfFromSlug(slug, variables)
-                .map(pdfBytes -> {
-                    String filename = generateFilename(slug);
-                    return ResponseEntity.ok()
-                            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                            .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_PDF_VALUE)
-                            .body(pdfBytes);
-                });
-    }
-
     @Operation(summary = "Generate PDF from raw HTML content",
                description = "Convert provided HTML content directly to PDF without saving as template")
     @ApiResponses({
@@ -282,9 +256,29 @@ public class ResumeTemplateController {
     })
     @PostMapping("/pdf/generate")
     public Mono<ResponseEntity<byte[]>> generatePdfFromHtml(
-            @Valid @RequestBody PdfGenerationRequest request) {
-        
-        return templateService.generatePdfFromHtml(request)
+            @Valid @RequestBody PdfGenerationRequest request,
+            Authentication authentication) {
+
+        // AUD18-JM19: when the request references a STORED template (by id or slug)
+        // instead of inline HTML, apply the same F-097 ownership check as the direct
+        // template routes — otherwise this endpoint was a side door to render any
+        // user's template.
+        Mono<Void> ownershipCheck;
+        if (request.getHtmlContent() == null && request.getTemplateId() != null) {
+            ownershipCheck = extractUserId(authentication)
+                    .flatMap(userId -> templateService.getTemplateById(request.getTemplateId())
+                            .flatMap(template -> verifyOwnership(template, userId)))
+                    .then();
+        } else if (request.getHtmlContent() == null && request.getTemplateSlug() != null) {
+            ownershipCheck = extractUserId(authentication)
+                    .flatMap(userId -> templateService.getTemplateBySlug(request.getTemplateSlug())
+                            .flatMap(template -> verifyOwnership(template, userId)))
+                    .then();
+        } else {
+            ownershipCheck = Mono.empty();
+        }
+
+        return ownershipCheck.then(Mono.defer(() -> templateService.generatePdfFromHtml(request)))
                 .map(pdfBytes -> {
                     String filename = request.getFilename() != null 
                             ? ensurePdfExtension(request.getFilename())

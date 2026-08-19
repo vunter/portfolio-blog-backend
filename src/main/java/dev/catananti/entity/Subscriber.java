@@ -60,6 +60,11 @@ public class Subscriber implements Persistable<Long>, NewRecordAware {
     @Column("created_at")
     private LocalDateTime createdAt;
 
+    // AUD18-L6: when the current confirmation token was issued. Token expiry reads
+    // this instead of created_at, so re-subscribing no longer rewrites created_at.
+    @Column("token_issued_at")
+    private LocalDateTime tokenIssuedAt;
+
     @Column("analytics_consent")
     @Builder.Default
     private Boolean analyticsConsent = false;

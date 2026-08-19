@@ -498,6 +498,15 @@ public class ArticleService {
      * Falls back to recent articles if no related articles by tags are found.
      */
     public Flux<ArticleResponse> getRelatedArticles(String slug, int limit) {
+        return getRelatedArticles(slug, limit, null);
+    }
+
+    /**
+     * AUD18-C8: locale-aware variant — the frontend sends {@code locale} but the endpoint
+     * ignored it, so related cards always rendered English titles/summaries. Applies the
+     * same NP-4 batch translation overlay used by the other public article listings.
+     */
+    public Flux<ArticleResponse> getRelatedArticles(String slug, int limit, String locale) {
         return articleRepository.findBySlugAndStatus(slug, ArticleStatus.PUBLISHED.name())
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("Article", "slug", slug)))
                 .flatMapMany(article ->
@@ -506,6 +515,7 @@ public class ArticleService {
                     articleRepository.findRelatedArticles(article.getId(), limit)
                             .switchIfEmpty(articleRepository.findRecentPublishedExcluding(article.getId(), limit))
                             .collectList()
+                            .flatMap(articles -> applyLocaleBatch(articles, locale))
                             .flatMap(this::enrichArticlesWithMetadata)
                             .flatMapMany(Flux::fromIterable)
                             .map(this::mapToListResponse)

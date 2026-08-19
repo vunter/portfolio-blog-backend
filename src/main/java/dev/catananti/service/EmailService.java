@@ -295,7 +295,7 @@ public class EmailService {
             )
         ));
 
-        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeUrl);
+        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeToken);
     }
 
     /**
@@ -323,7 +323,7 @@ public class EmailService {
                 + msg("email.article.notification.unsubscribe") + "</a></p>"
         ));
 
-        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeUrl);
+        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeToken);
     }
 
     /**
@@ -357,18 +357,24 @@ public class EmailService {
                 + msg("email.article.notification.unsubscribe") + "</a></p>"
         ));
 
-        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeUrl);
+        return sendHtmlEmailWithUnsubscribe(to, subject, html, unsubscribeToken);
     }
 
     /**
      * Send HTML email with List-Unsubscribe headers (RFC 8058) for newsletter emails.
+     * AUD19C-1: the header URL is the one-click POST API endpoint built from the
+     * subscriber token — distinct from the SPA page linked in the email body. RFC 8058
+     * requires the header URL to accept the provider's {@code List-Unsubscribe=One-Click}
+     * POST; the SPA route previously used here could not, making the header inert.
      */
-    public Mono<Void> sendHtmlEmailWithUnsubscribe(String to, String subject, String htmlContent, String unsubscribeUrl) {
+    public Mono<Void> sendHtmlEmailWithUnsubscribe(String to, String subject, String htmlContent, String unsubscribeToken) {
+        // Same-origin /api construction, like the newsletter tracking URLs above.
+        String oneClickUrl = siteUrl + "/api/v1/newsletter/one-click-unsubscribe?token=" + unsubscribeToken;
         return checkRateLimit(to).then(Mono.fromCallable(() -> {
             if (resendClient != null) {
-                sendViaResendWithHeaders(to, subject, htmlContent, unsubscribeUrl);
+                sendViaResendWithHeaders(to, subject, htmlContent, oneClickUrl);
             } else {
-                sendViaSmtpWithHeaders(to, subject, htmlContent, unsubscribeUrl);
+                sendViaSmtpWithHeaders(to, subject, htmlContent, oneClickUrl);
             }
             return (Void) null;
         }).subscribeOn(virtualThreadScheduler)
@@ -559,7 +565,9 @@ public class EmailService {
                 "userName", userName,
                 "userEmail", userEmail,
                 "requestedRole", requestedRole,
-                "reason", reason != null && !reason.isBlank() ? reason : "<em>No reason provided</em>"
+                // AUD18-JA9: bound via th:text now (user-supplied HTML must render escaped),
+                // so the fallback is plain text instead of an <em> fragment.
+                "reason", reason != null && !reason.isBlank() ? reason : "No reason provided"
             )
         ));
 

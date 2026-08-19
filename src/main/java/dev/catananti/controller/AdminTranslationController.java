@@ -92,7 +92,8 @@ public class AdminTranslationController {
                 log.info("Translation created: {} (locale={}, id={})", key, locale, id);
                 return i18nController.invalidateCache()
                         .onErrorResume(e -> { log.warn("Cache invalidation failed after create: {}", e.getMessage()); return Mono.empty(); })
-                        .thenReturn(ResponseEntity.ok(Map.of("id", (Object) id, "status", (Object) "created")));
+                        // AUD19C-SNOW: stringify Snowflake id — Longs above 2^53 get mangled by JS
+                        .thenReturn(ResponseEntity.ok(Map.of("id", (Object) String.valueOf(id), "status", (Object) "created")));
             });
     }
 

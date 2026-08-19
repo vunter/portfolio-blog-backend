@@ -363,6 +363,11 @@ class ApiEndpointIntegrationTest {
         @Mock private UserRepository userRepository;
         @Mock private org.springframework.security.web.server.csrf.ServerCsrfTokenRepository csrfTokenRepository;
         @Mock private dev.catananti.metrics.BlogMetrics blogMetrics;
+        // AUD19C-C1B: real instance (not a mock) — the login tests assert the actual
+        // Set-Cookie output, and the old jwtExpirationMs/cookieSecure/cookieDomain
+        // reflection values now live here (secure=false as before).
+        private final dev.catananti.security.AuthCookieService authCookieService =
+                new dev.catananti.security.AuthCookieService(86400000L, false, "");
 
         private AuthController authController;
         private WebTestClient client;
@@ -370,17 +375,8 @@ class ApiEndpointIntegrationTest {
         @BeforeEach
         void setUp() throws Exception {
             authController = new AuthController(authService, recaptchaService, emailChangeService,
-                    emailVerificationService, refreshTokenService, csrfTokenRepository, blogMetrics);
-            // Set @Value fields via reflection (not injected in standalone mode)
-            java.lang.reflect.Field expField = AuthController.class.getDeclaredField("jwtExpirationMs");
-            expField.setAccessible(true);
-            expField.setLong(authController, 86400000L);
-            java.lang.reflect.Field secureField = AuthController.class.getDeclaredField("cookieSecure");
-            secureField.setAccessible(true);
-            secureField.setBoolean(authController, false);
-            java.lang.reflect.Field domainField = AuthController.class.getDeclaredField("cookieDomain");
-            domainField.setAccessible(true);
-            domainField.set(authController, "");
+                    emailVerificationService, refreshTokenService, csrfTokenRepository, blogMetrics,
+                    authCookieService);
 
             client = WebTestClient.bindToController(authController)
                     .configureClient().build();
@@ -740,20 +736,7 @@ class ApiEndpointIntegrationTest {
             verify(tagService).deleteTag(1L);
         }
 
-        @Test
-        @DisplayName("GET /admin/tags/{id} — get single tag (200)")
-        void getTagById_200() {
-            // Given
-            when(tagService.getTagById(1L))
-                    .thenReturn(Mono.just(buildTag("Java", "java")));
-
-            // When & Then
-            client.get().uri("/api/v1/admin/tags/1")
-                    .exchange()
-                    .expectStatus().isOk()
-                    .expectBody()
-                    .jsonPath("$.slug").isEqualTo("java");
-        }
+        // AUD19C-5: GET /admin/tags/{id} test removed with the orphan endpoint.
     }
 
     // ========================================================================
@@ -780,10 +763,10 @@ class ApiEndpointIntegrationTest {
         @DisplayName("GET /admin/comments — list comments by status (200)")
         void listComments_200() {
             var page = pageOf(List.of(buildComment("post-1", "Alice")));
-            when(commentService.getAdminCommentsByStatus("PENDING", 0, 20))
+            when(commentService.getAdminCommentsByStatus("PENDING", null, 0, 20))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(adminCommentController.getCommentsByStatus("PENDING", 0, 20))
+            StepVerifier.create(adminCommentController.getCommentsByStatus("PENDING", null, 0, 20))
                     .assertNext(result -> {
                         assertThat(result.getContent()).hasSize(1);
                         assertThat(result.getContent().get(0).getAuthorName()).isEqualTo("Alice");
@@ -945,26 +928,7 @@ class ApiEndpointIntegrationTest {
                     .verifyComplete();
         }
 
-        @Test
-        @DisplayName("GET /admin/users/stats — user statistics (200)")
-        void userStats_200() {
-            // Given
-            when(userService.getTotalUsers()).thenReturn(Mono.just(10L));
-            when(userService.countUsersByRole("ADMIN")).thenReturn(Mono.just(2L));
-            when(userService.countUsersByRole("DEV")).thenReturn(Mono.just(3L));
-            when(userService.countUsersByRole("VIEWER")).thenReturn(Mono.just(2L));
-
-            // When & Then
-            client.get().uri("/api/v1/admin/users/stats")
-                    .exchange()
-                    .expectStatus().isOk()
-                    .expectBody()
-                    .jsonPath("$.total").isEqualTo(10)
-                    .jsonPath("$.admins").isEqualTo(2)
-                    .jsonPath("$.devs").isEqualTo(3)
-                    .jsonPath("$.editors").isEqualTo(0)
-                    .jsonPath("$.viewers").isEqualTo(2);
-        }
+        // AUD19C-5: GET /admin/users/stats test removed with the orphan endpoint.
 
         @Test
         @DisplayName("POST /admin/users — create user with DEV role (201)")
@@ -1564,11 +1528,10 @@ class ApiEndpointIntegrationTest {
          *   GET  /api/v1/tags/**
          *   GET  /api/v1/search/**
          *   POST /api/v1/newsletter/subscribe
-         *   POST /api/v1/articles/{slug}/comments
+         *   POST /api/v1/articles/{slug}/comments (authenticated + CSRF — AUD18-L8)
          *   GET  /api/v1/articles/{slug}/comments
          *   POST /api/v1/admin/auth/login
-         *   POST /api/v1/admin/auth/login/v2
-         *   POST /api/v1/admin/auth/register
+         *   POST /api/v1/admin/auth/register  (login/v2 removed — AUD18-M7)
          *
          * AUTHENTICATED (any role):
          *   GET  /api/v1/admin/auth/verify

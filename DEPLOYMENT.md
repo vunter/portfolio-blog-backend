@@ -63,23 +63,27 @@ Cloudflare (DNS + proxy)
 │      │          │                                                │
 │      ▼          ▼                                                │
 │  ┌────────┐  ┌───────┐  ┌────────────┐                           │
-│  │Postgres│  │ Redis │  │ Prometheus │                           │
-│  │  :5432 │  │ :6379 │  │   :9090    │                           │
+│  │Postgres│  │ Redis │  │ Playwright │                           │
+│  │  :5432 │  │ :6379 │  │  sidecar   │                           │
 │  └────────┘  └───────┘  └────────────┘                           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+> There is NO Prometheus/Grafana/Alertmanager on the droplet — production
+> observability is Datadog only. The Prometheus stack described later in this
+> document belongs to the local dev stack (`env/dev/docker-compose.yml`).
+
 ### Container Inventory (7 services)
 
-| Container                  | Image                            | Memory Limit | Purpose                           |
-|----------------------------|----------------------------------|--------------|-----------------------------------|
-| `blog-postgres`            | `postgres:17-alpine`             | 512 MB       | Primary database (R2DBC)          |
-| `portfolio-blog-api`       | `portfolio-blog-api:latest`      | 2 GB         | Spring Boot 4 API (Java 25, ZGC)  |
-| `blog-redis`               | `redis:7-alpine`                 | 512 MB       | Session & cache (256 MB maxmem)   |
-| `portfolio-blog-frontend`  | `portfolio-blog-frontend:latest` | 256 MB       | Angular SSR (Node + Nginx)        |
-| `blog-nginx`               | `nginx:alpine`                   | 256 MB       | Reverse proxy, SSL termination    |
-| `blog-prometheus`          | `prom/prometheus:v3.2.1`         | 512 MB       | Metrics collection (30d retention)|
-| `datadog-agent`            | `gcr.io/datadoghq/agent:7`      | 512 MB       | APM, logs, infrastructure metrics |
+| Container                   | Image                              | Memory Limit | Purpose                           |
+|-----------------------------|------------------------------------|--------------|-----------------------------------|
+| `blog-postgres`             | `postgres:17-alpine`               | 512 MB       | Primary database (R2DBC)          |
+| `portfolio-blog-api`        | `portfolio-blog-api:latest`        | 2 GB         | Spring Boot 4 API (Java 25, ZGC)  |
+| `blog-redis`                | `redis:7-alpine`                   | 512 MB       | Session & cache (256 MB maxmem)   |
+| `portfolio-blog-frontend`   | `portfolio-blog-frontend:latest`   | 256 MB       | Angular SSR (Node + Nginx)        |
+| `portfolio-blog-playwright` | `portfolio-blog-playwright:latest` | —            | Chromium sidecar (PDF generation) |
+| `blog-nginx`                | `nginx:1.27-alpine`                | 256 MB       | Reverse proxy, SSL termination    |
+| `datadog-agent`             | `gcr.io/datadoghq/agent:7`        | 512 MB       | APM, logs, infrastructure metrics |
 
 ---
 
@@ -149,7 +153,7 @@ push to main
 │          │     │ 3. docker build Frontend image                    │
 │ Java 25  │     │ 4. docker save + gzip → api.tar.gz, frontend.tar.gz│
 │ Temurin  │     │ 5. SCP images to droplet                          │
-│          │     │ 6. SCP config files (nginx, prometheus, etc.)     │
+│          │     │ 6. SCP config files (nginx, compose, etc.)        │
 │ 1433     │     │ 7. SSH → docker load → doppler run -- compose up  │
 │ tests    │     │                                                    │
 └──────────┘     └────────────────────────────────────────────────────┘
@@ -204,18 +208,26 @@ docker image prune -f
 - `blog-redis` → source: `redis` (with password auth for check)
 - `blog-nginx` → source: `nginx`
 
-### Prometheus
+### Prometheus (dev stack ONLY — not deployed to production)
 
+Production has no Prometheus: Datadog is the prod observability stack, and
+`alert_rules.yml` is only mounted by the dev compose
+(`env/dev/docker-compose.yml`, service `blog-prometheus`).
+
+In the dev stack:
 - Scrapes `/actuator/prometheus` from the API every 15s
+- Alerting: `alert_rules.yml` → Alertmanager (`env/dev/alertmanager.yml`), dashboards in Grafana
 - Retention: 30 days
-- Accessible at `127.0.0.1:9090` (localhost only)
-- Protected by HTTP basic auth via Nginx
 
 ### Micrometer
 
-The API exports metrics to both Prometheus and Datadog:
-- `micrometer-registry-prometheus` — pull-based (Prometheus scrapes)
-- `micrometer-registry-datadog` — push-based (sends to DD API directly)
+The API registers both exporters; which one is live depends on the environment:
+- `micrometer-registry-prometheus` — pull-based; `/actuator/prometheus` is
+  scraped by the DEV Prometheus (and available to the Datadog agent's
+  openmetrics check in prod)
+- `micrometer-registry-datadog` — push-based (sends to the DD API directly);
+  this is the PROD metrics pipeline (`DD_METRICS_ENABLED`, default on for the
+  `cloud` profile)
 
 ### Sentry
 
@@ -366,7 +378,6 @@ doppler run -- docker compose -f docker-compose.cloud.yml up -d
 | 4000  | Frontend      | Internal only    | Proxied by Nginx              |
 | 5432  | PostgreSQL    | `127.0.0.1:5432` | Localhost only               |
 | 6379  | Redis         | `127.0.0.1:6379` | Localhost only               |
-| 9090  | Prometheus    | `127.0.0.1:9090` | Localhost only               |
 | 8125  | DD Agent      | Internal only    | DogStatsD (UDP)              |
 | 8126  | DD Agent      | Internal only    | APM trace intake (TCP)       |
 

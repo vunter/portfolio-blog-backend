@@ -104,6 +104,14 @@ public class Article implements Persistable<Long>, NewRecordAware {
     @Column("scheduled_at")
     private LocalDateTime scheduledAt;
 
+    /**
+     * AUD19C-2: when the subscriber e-mail fan-out for this article's publication was
+     * claimed (compare-and-swap on {@code notified_at IS NULL}). Non-null means the
+     * announcement was already sent once — republishing never e-mails subscribers again.
+     */
+    @Column("notified_at")
+    private LocalDateTime notifiedAt;
+
     @Column("original_locale")
     @Builder.Default
     private String originalLocale = "en";

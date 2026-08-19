@@ -81,9 +81,12 @@ public class ImageProcessingService {
         try {
             BufferedImage original = ImageIO.read(new ByteArrayInputStream(imageBytes));
             if (original == null) {
-                log.warn("Failed to decode image, returning raw bytes");
-                variants.put("", new ImageVariant("", imageBytes, 0, 0));
-                return variants;
+                // AUD18-JB6: REJECT instead of storing the raw upload — the fallback kept
+                // user bytes verbatim, defeating the EXIF strip/re-encode this service exists
+                // for (and storing whatever payload failed to decode).
+                log.warn("Rejecting upload: image could not be decoded (contentType={})", contentType);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Unsupported or corrupt image file");
             }
 
             int origWidth = original.getWidth();
@@ -117,8 +120,10 @@ public class ImageProcessingService {
             log.debug("Generated {} variants for image ({}x{})", variants.size(), origWidth, origHeight);
 
         } catch (IOException e) {
+            // AUD18-JB6: decode/encode failure also rejects — see above.
             log.error("Image processing failed", e);
-            variants.put("", new ImageVariant("", imageBytes, 0, 0));
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Unsupported or corrupt image file");
         }
 
         return variants;

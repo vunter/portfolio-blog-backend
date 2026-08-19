@@ -20,7 +20,6 @@ import dev.catananti.util.PiiMasker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -80,6 +79,7 @@ public class AccountService {
     private final RefreshTokenService refreshTokenService;
     private final AuditService auditService;
     private final PasswordEncoder passwordEncoder;
+    private final UserCacheService userCacheService;
     private final TransactionalOperator transactionalOperator;
 
     /** What deletion will touch, so the screen can inform before the holder decides. */
@@ -120,6 +120,10 @@ public class AccountService {
                             return transactionalOperator.transactional(
                                             commonCascade(userId, mode, cancelNewsletter, now)
                                                     .then(finalStep))
+                                    // AUD18-L3 / F-046: evict from the JWT auth cache so the deleted
+                                    // account locks out immediately (same as deactivateUser) — without
+                                    // this, a cached snapshot kept access tokens working until expiry.
+                                    .then(Mono.fromRunnable(() -> userCacheService.evict(userId)))
                                     .then(Mono.defer(() -> revokeSessions(userId, mode)))
                                     .then(Mono.defer(() -> audit(userId, mode)));
                         }));
@@ -139,9 +143,15 @@ public class AccountService {
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(matches -> {
                     if (!matches) {
+                        // AUD19C-A5: wrong re-auth password on an authenticated request is a
+                        // business validation failure (400), not a broken session (401) — a 401
+                        // here made API clients treat the still-valid session as expired.
+                        // Mirrors UserService's wrong-current-password convention
+                        // (ResponseStatusException BAD_REQUEST + error.* key).
                         log.warn("Account deletion denied — reauthentication failed for {}",
                                 PiiMasker.maskEmail(user.getEmail()));
-                        return Mono.error(new BadCredentialsException("error.invalid_credentials"));
+                        return Mono.error(new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST, "error.password_invalid"));
                     }
                     return Mono.just(user);
                 });

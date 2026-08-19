@@ -1,6 +1,5 @@
 package dev.catananti.controller;
 
-import dev.catananti.dto.BlogExport;
 import dev.catananti.repository.ArticleRepository;
 import dev.catananti.service.ExportImportService;
 import dev.catananti.service.ExportImportService.ImportResult;
@@ -38,63 +37,27 @@ class AdminExportControllerTest {
     @InjectMocks
     private AdminExportController controller;
 
-    private BlogExport blogExport;
-    private BlogExport.BlogStats blogStats;
-
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(controller, "maxExportArticles", 10000);
         ReflectionTestUtils.setField(controller, "maxImportSize", 2097152);
 
         lenient().when(articleRepository.countAll()).thenReturn(Mono.just(25L));
-
-        blogStats = BlogExport.BlogStats.builder()
-                .totalArticles(25)
-                .publishedArticles(20)
-                .draftArticles(3)
-                .scheduledArticles(2)
-                .totalTags(10)
-                .totalViews(5000)
-                .totalLikes(300)
-                .build();
-
-        blogExport = BlogExport.builder()
-                .version("1.0")
-                .exportedAt(LocalDateTime.now())
-                .exportedBy("Admin")
-                .stats(blogStats)
-                .articles(List.of())
-                .tags(List.of())
-                .build();
     }
 
+    // AUD19C-5: root GET /admin/export and GET /admin/export/stats tests removed
+    // with the orphan endpoints. The export-limit check is now covered via /json.
+
     @Nested
-    @DisplayName("GET /api/v1/admin/export")
-    class ExportBlog {
-
-        @Test
-        @DisplayName("Should export blog data")
-        void shouldExportBlogData() {
-            when(exportImportService.exportAll("Admin"))
-                    .thenReturn(Mono.just(blogExport));
-
-            StepVerifier.create(controller.exportBlog("Admin"))
-                    .assertNext(response -> {
-                        assertThat(response.getStatusCode().value()).isEqualTo(200);
-                        assertThat(response.getBody()).isNotNull();
-                        assertThat(response.getBody().getVersion()).isEqualTo("1.0");
-                        assertThat(response.getBody().getExportedBy()).isEqualTo("Admin");
-                        assertThat(response.getBody().getStats().getTotalArticles()).isEqualTo(25);
-                    })
-                    .verifyComplete();
-        }
+    @DisplayName("GET /api/v1/admin/export/json")
+    class ExportAsJsonFile {
 
         @Test
         @DisplayName("Should reject exports above the configured article limit")
         void shouldRejectExportWhenOverLimit() {
             when(articleRepository.countAll()).thenReturn(Mono.just(10001L));
 
-            StepVerifier.create(controller.exportBlog("Admin"))
+            StepVerifier.create(controller.exportAsJsonFile("Admin"))
                     .expectErrorSatisfies(error -> {
                         assertThat(error).isInstanceOf(ResponseStatusException.class);
                         ResponseStatusException ex = (ResponseStatusException) error;
@@ -105,11 +68,6 @@ class AdminExportControllerTest {
 
             verifyNoInteractions(exportImportService);
         }
-    }
-
-    @Nested
-    @DisplayName("GET /api/v1/admin/export/json")
-    class ExportAsJsonFile {
 
         @Test
         @DisplayName("Should export blog as JSON file with content-disposition header")
@@ -196,25 +154,4 @@ class AdminExportControllerTest {
         }
     }
 
-    @Nested
-    @DisplayName("GET /api/v1/admin/export/stats")
-    class GetExportStats {
-
-        @Test
-        @DisplayName("Should return export statistics")
-        void shouldReturnExportStats() {
-            when(exportImportService.exportAll("preview"))
-                    .thenReturn(Mono.just(blogExport));
-
-            StepVerifier.create(controller.getExportStats())
-                    .assertNext(response -> {
-                        assertThat(response.getStatusCode().value()).isEqualTo(200);
-                        assertThat(response.getBody()).isNotNull();
-                        assertThat(response.getBody().getTotalArticles()).isEqualTo(25);
-                        assertThat(response.getBody().getPublishedArticles()).isEqualTo(20);
-                        assertThat(response.getBody().getTotalTags()).isEqualTo(10);
-                    })
-                    .verifyComplete();
-        }
-    }
 }

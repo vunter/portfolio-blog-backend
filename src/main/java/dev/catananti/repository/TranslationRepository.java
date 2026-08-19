@@ -79,7 +79,9 @@ public class TranslationRepository {
 
         return query.map((row, meta) -> {
             Map<String, Object> map = new java.util.HashMap<>();
-            map.put("id", row.get("id", Long.class));
+            // AUD19C-SNOW: stringify Snowflake id — Longs above 2^53 get mangled by JS
+            Long rowId = row.get("id", Long.class);
+            map.put("id", rowId != null ? String.valueOf(rowId) : null);
             map.put("translationKey", row.get("translation_key", String.class));
             map.put("locale", row.get("locale", String.class));
             map.put("value", row.get("value", String.class));

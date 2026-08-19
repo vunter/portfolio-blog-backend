@@ -62,6 +62,9 @@ class OAuth2ServiceTest {
     @Mock
     private ResilienceConfig resilienceConfig;
 
+    @Mock
+    private AuthService authService;
+
     private OAuth2Service oAuth2Service;
 
     private User testUser;
@@ -71,7 +74,7 @@ class OAuth2ServiceTest {
     void setUp() {
         oAuth2Service = new OAuth2Service(
                 userRepository, socialAccountRepository, refreshTokenService,
-                tokenProvider, idService, auditService, redisTemplate, resilienceConfig,
+                tokenProvider, idService, auditService, authService, redisTemplate, resilienceConfig,
                 new tools.jackson.databind.ObjectMapper(),
                 org.springframework.web.reactive.function.client.WebClient.builder());
 
@@ -643,6 +646,8 @@ class OAuth2ServiceTest {
 
             // deactivation must not be reversible through a social login: no tokens minted
             verify(refreshTokenService, never()).createRefreshToken(anyLong(), anyString(), anyString());
+            // AUD19-LOGIN: and no LOGIN success audit row either
+            verify(auditService, never()).logLoginSuccess(anyLong(), anyString(), any());
         }
 
         @Test
@@ -662,6 +667,111 @@ class OAuth2ServiceTest {
             // rejected before any side effect: no provider link is created
             verify(socialAccountRepository, never()).save(any(UserSocialAccount.class));
             verify(refreshTokenService, never()).createRefreshToken(anyLong(), anyString(), anyString());
+        }
+    }
+
+    // ==================== AUD18-A10: MFA gate ====================
+
+    @Nested
+    @DisplayName("findOrCreateUser — MFA-enabled account (AUD18-A10)")
+    class MfaGate {
+
+        // Same reflection route as DeactivatedAccountGate: the gate sits in the private
+        // issueTokens/findOrCreateUser path only reachable through the WebClient callbacks.
+        @SuppressWarnings("unchecked")
+        private Mono<TokenResponse> findOrCreateUser(String provider, String providerId, String email) {
+            try {
+                var m = OAuth2Service.class.getDeclaredMethod("findOrCreateUser",
+                        String.class, String.class, String.class, String.class, String.class,
+                        String.class, boolean.class);
+                m.setAccessible(true);
+                return (Mono<TokenResponse>) m.invoke(oAuth2Service,
+                        provider, providerId, email, "Name", null, "127.0.0.1", true);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        private User mfaUser() {
+            return User.builder()
+                    .id(1234567890123456789L)
+                    .email("test@example.com")
+                    .name("Test User")
+                    .role("VIEWER")
+                    .active(true)
+                    .mfaEnabled(true)
+                    .mfaPreferredMethod("TOTP")
+                    .build();
+        }
+
+        @Test
+        @DisplayName("Should issue an MFA challenge instead of tokens for an MFA-enabled user")
+        void shouldIssueMfaChallenge_WhenMfaEnabled() {
+            UserSocialAccount existing = UserSocialAccount.builder()
+                    .id(1L)
+                    .userId(1234567890123456789L)
+                    .provider("google")
+                    .providerId("google-id")
+                    .build();
+            when(socialAccountRepository.findByProviderAndProviderId("google", "google-id"))
+                    .thenReturn(Mono.just(existing));
+            when(userRepository.findById(1234567890123456789L)).thenReturn(Mono.just(mfaUser()));
+            when(authService.issueMfaChallenge(any(User.class)))
+                    .thenReturn(Mono.just(TokenResponse.builder()
+                            .mfaRequired(true)
+                            .mfaToken("challenge-token")
+                            .email("test@example.com")
+                            .name("Test User")
+                            .build()));
+
+            StepVerifier.create(findOrCreateUser("google", "google-id", "test@example.com"))
+                    .assertNext(resp -> {
+                        assertThat(resp.getMfaRequired()).isTrue();
+                        assertThat(resp.getMfaToken()).isEqualTo("challenge-token");
+                        assertThat(resp.getAccessToken()).isNull();
+                        assertThat(resp.getRefreshToken()).isNull();
+                    })
+                    .verifyComplete();
+
+            // The whole point of AUD18-A10: no full session before the second factor
+            verify(authService).issueMfaChallenge(any(User.class));
+            verify(refreshTokenService, never()).createRefreshToken(anyLong(), anyString(), anyString());
+            verify(tokenProvider, never()).generateToken(anyLong(), anyString());
+            // AUD19-LOGIN: a challenge is not a login — the LOGIN audit row is written
+            // by AuthService.completeMfaLogin when the OTP is verified, not here
+            verify(auditService, never()).logLoginSuccess(anyLong(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("Should mint full tokens when MFA is disabled")
+        void shouldIssueFullTokens_WhenMfaDisabled() {
+            UserSocialAccount existing = UserSocialAccount.builder()
+                    .id(1L)
+                    .userId(testUser.getId())
+                    .provider("google")
+                    .providerId("google-id")
+                    .build();
+            when(socialAccountRepository.findByProviderAndProviderId("google", "google-id"))
+                    .thenReturn(Mono.just(existing));
+            when(userRepository.findById(testUser.getId())).thenReturn(Mono.just(testUser));
+            when(tokenProvider.generateToken(testUser.getId(), "ADMIN")).thenReturn("access-token");
+            when(refreshTokenService.createRefreshToken(testUser.getId(), "127.0.0.1", "OAuth2"))
+                    .thenReturn(Mono.just(testRefreshToken));
+            // AUD19-LOGIN: the full-token path fires a best-effort audit write
+            when(auditService.logLoginSuccess(testUser.getId(), "test@example.com", "127.0.0.1"))
+                    .thenReturn(Mono.empty());
+
+            StepVerifier.create(findOrCreateUser("google", "google-id", "test@example.com"))
+                    .assertNext(resp -> {
+                        assertThat(resp.getMfaRequired()).isFalse();
+                        assertThat(resp.getAccessToken()).isEqualTo("access-token");
+                        assertThat(resp.getRefreshToken()).isEqualTo("refresh-token-value");
+                    })
+                    .verifyComplete();
+
+            verify(authService, never()).issueMfaChallenge(any(User.class));
+            // AUD19-LOGIN: a successful OAuth2 login writes a LOGIN audit row
+            verify(auditService).logLoginSuccess(testUser.getId(), "test@example.com", "127.0.0.1");
         }
     }
 

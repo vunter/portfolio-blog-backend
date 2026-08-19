@@ -261,6 +261,32 @@ class EmailServiceTest {
         }
 
         @Test
+        @DisplayName("AUD19C-1: header should point at the one-click API, body at the SPA page")
+        void shouldUseOneClickApiUrlInHeaderAndSpaUrlInBody() throws Exception {
+            setupRateLimitAllow();
+            when(mailSender.createMimeMessage()).thenReturn(mimeMessage);
+            when(resilience.getExternalTimeout()).thenReturn(Duration.ofSeconds(30));
+            stubAllMessages();
+
+            StepVerifier.create(emailService.sendNewsletterWelcome("user@test.com", "John", "unsub-token-123"))
+                    .verifyComplete();
+
+            // RFC 8058: the List-Unsubscribe URL must accept the provider's one-click
+            // POST — that is the /api one-click endpoint, NOT the SPA page.
+            verify(mimeMessage).addHeader("List-Unsubscribe",
+                    "<http://localhost:4200/api/v1/newsletter/one-click-unsubscribe?token=unsub-token-123>");
+            verify(mimeMessage).addHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+
+            // The human-facing link in the body footer keeps the SPA page.
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> vars = ArgumentCaptor.forClass(Map.class);
+            verify(templateService).render(eq("newsletter-welcome"), vars.capture());
+            assertThat(String.valueOf(vars.getValue().get("extraFooter")))
+                    .contains("/newsletter/unsubscribe?token=unsub-token-123")
+                    .doesNotContain("/api/v1/newsletter/one-click-unsubscribe");
+        }
+
+        @Test
         @DisplayName("should use default subscriber name when name is null")
         void shouldUseDefaultNameWhenNull() {
             setupRateLimitAllow();

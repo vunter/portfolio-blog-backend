@@ -81,33 +81,6 @@ class BookmarkControllerTest {
     }
 
     @Nested
-    @DisplayName("GET /api/v1/bookmarks/{articleSlug}")
-    class IsBookmarked {
-
-        @Test
-        @DisplayName("Should return true when article is bookmarked")
-        void shouldReturnTrueWhenBookmarked() {
-            when(bookmarkService.isBookmarked(VISITOR_ID, ARTICLE_SLUG))
-                    .thenReturn(Mono.just(true));
-
-            StepVerifier.create(controller.isBookmarked(VISITOR_ID, ARTICLE_SLUG))
-                    .assertNext(status -> assertThat(status.bookmarked()).isTrue())
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("Should return false when article is not bookmarked")
-        void shouldReturnFalseWhenNotBookmarked() {
-            when(bookmarkService.isBookmarked(VISITOR_ID, ARTICLE_SLUG))
-                    .thenReturn(Mono.just(false));
-
-            StepVerifier.create(controller.isBookmarked(VISITOR_ID, ARTICLE_SLUG))
-                    .assertNext(status -> assertThat(status.bookmarked()).isFalse())
-                    .verifyComplete();
-        }
-    }
-
-    @Nested
     @DisplayName("POST /api/v1/bookmarks/{articleSlug}")
     class AddBookmark {
 

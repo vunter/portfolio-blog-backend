@@ -13,7 +13,8 @@
  </tr>
  <tr>
  <td>Reason</td>
- <td th:utext="${reason}">No reason provided</td>
+ <!-- AUD18-JA9: reason is user-supplied — th:text (escaped), never th:utext -->
+ <td th:text="${reason}">No reason provided</td>
  </tr>
  </table>
  <p>Please review this request in the admin panel under <strong>Users → Role Requests</strong>.</p>

@@ -406,6 +406,63 @@ class ArticleServiceTest {
     }
 
     @Test
+    @DisplayName("AUD18-C8: Should localize related articles when locale is provided")
+    void getRelatedArticles_WithLocale_ShouldApplyTranslation() {
+        Article related = Article.builder()
+                .id(2L).slug("related-article").title("Related")
+                .status(ArticleStatus.PUBLISHED).viewsCount(0).likesCount(0)
+                .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now())
+                .publishedAt(LocalDateTime.now())
+                .build();
+
+        when(articleRepository.findBySlugAndStatus("test-article", "PUBLISHED"))
+                .thenReturn(Mono.just(testArticle));
+        when(articleRepository.findRelatedArticles(articleId, 3))
+                .thenReturn(Flux.just(related));
+        when(articleRepository.findRecentPublishedExcluding(articleId, 3))
+                .thenReturn(Flux.empty());
+        when(articleTranslationService.applyTranslations(anyList(), eq("pt")))
+                .thenAnswer(inv -> {
+                    java.util.List<Article> articles = inv.getArgument(0);
+                    articles.forEach(a -> a.setTitle("Relacionado"));
+                    return Mono.just(articles);
+                });
+
+        StepVerifier.create(articleService.getRelatedArticles("test-article", 3, "pt").collectList())
+                .assertNext(list -> {
+                    assertThat(list).hasSize(1);
+                    assertThat(list.getFirst().getTitle()).isEqualTo("Relacionado");
+                })
+                .verifyComplete();
+
+        verify(articleTranslationService).applyTranslations(anyList(), eq("pt"));
+    }
+
+    @Test
+    @DisplayName("AUD18-C8: Should skip translation overlay for default 'en' locale")
+    void getRelatedArticles_WithEnglishLocale_ShouldSkipTranslation() {
+        Article related = Article.builder()
+                .id(2L).slug("related-article").title("Related")
+                .status(ArticleStatus.PUBLISHED).viewsCount(0).likesCount(0)
+                .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now())
+                .publishedAt(LocalDateTime.now())
+                .build();
+
+        when(articleRepository.findBySlugAndStatus("test-article", "PUBLISHED"))
+                .thenReturn(Mono.just(testArticle));
+        when(articleRepository.findRelatedArticles(articleId, 3))
+                .thenReturn(Flux.just(related));
+        when(articleRepository.findRecentPublishedExcluding(articleId, 3))
+                .thenReturn(Flux.empty());
+
+        StepVerifier.create(articleService.getRelatedArticles("test-article", 3, "en").collectList())
+                .assertNext(list -> assertThat(list).hasSize(1))
+                .verifyComplete();
+
+        verify(articleTranslationService, never()).applyTranslations(anyList(), anyString());
+    }
+
+    @Test
     @DisplayName("Should throw when getting related articles for non-existent slug")
     void getRelatedArticles_ShouldThrow_WhenNotFound() {
         when(articleRepository.findBySlugAndStatus("ghost", "PUBLISHED"))

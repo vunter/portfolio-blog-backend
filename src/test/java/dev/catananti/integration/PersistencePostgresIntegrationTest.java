@@ -321,6 +321,46 @@ class PersistencePostgresIntegrationTest {
                 .isEqualTo(1L);
     }
 
+    /**
+     * AUD19-F140: the two lastLogin sources for the admin activity endpoint must
+     * return the newest timestamp for the user (and only for the requested
+     * action, on the audit side) and complete empty — not NULL — when no rows exist.
+     */
+    @Test
+    void lastLoginQueriesReturnNewestTimestampAndEmptyWhenAbsent() {
+        execute("INSERT INTO users (id, email, name, password_hash, role) VALUES (500, 'activity@test.dev', 'Act', 'x', 'ADMIN') ON CONFLICT DO NOTHING");
+        // reset so the assertion is deterministic when the test reuses an external database
+        execute("DELETE FROM audit_logs WHERE performed_by = 500");
+        execute("DELETE FROM refresh_tokens WHERE user_id = 500");
+
+        var auditRepo = new R2dbcRepositoryFactory(template)
+                .getRepository(dev.catananti.repository.AuditLogRepository.class);
+        var tokenRepo = new R2dbcRepositoryFactory(template)
+                .getRepository(dev.catananti.repository.RefreshTokenRepository.class);
+
+        StepVerifier.create(auditRepo.findLastActionAt(500L, "LOGIN")).verifyComplete();
+        StepVerifier.create(tokenRepo.findLatestCreatedAtByUserId(500L)).verifyComplete();
+
+        execute("INSERT INTO audit_logs (id, action, entity_type, entity_id, performed_by, created_at) "
+              + "VALUES (500, 'LOGIN', 'USER', '500', 500, TIMESTAMP '2026-01-01 10:00:00')");
+        execute("INSERT INTO audit_logs (id, action, entity_type, entity_id, performed_by, created_at) "
+              + "VALUES (501, 'LOGIN', 'USER', '500', 500, TIMESTAMP '2026-02-01 10:00:00')");
+        // newer but a different action — must NOT be picked up as a login
+        execute("INSERT INTO audit_logs (id, action, entity_type, entity_id, performed_by, created_at) "
+              + "VALUES (502, 'LOGIN_FAILED', 'USER', '500', 500, TIMESTAMP '2026-03-01 10:00:00')");
+        execute("INSERT INTO refresh_tokens (id, user_id, token, expires_at, created_at) "
+              + "VALUES (500, 500, 'tok-activity-old', TIMESTAMP '2099-01-01 00:00:00', TIMESTAMP '2026-01-15 10:00:00')");
+        execute("INSERT INTO refresh_tokens (id, user_id, token, expires_at, created_at) "
+              + "VALUES (501, 500, 'tok-activity-new', TIMESTAMP '2099-01-01 00:00:00', TIMESTAMP '2026-02-15 10:00:00')");
+
+        StepVerifier.create(auditRepo.findLastActionAt(500L, "LOGIN"))
+                .expectNext(java.time.LocalDateTime.of(2026, 2, 1, 10, 0))
+                .verifyComplete();
+        StepVerifier.create(tokenRepo.findLatestCreatedAtByUserId(500L))
+                .expectNext(java.time.LocalDateTime.of(2026, 2, 15, 10, 0))
+                .verifyComplete();
+    }
+
     @Test
     void batchRepliesQueryExpandsInClauseOnPostgres() {
         execute("INSERT INTO users (id, email, name, password_hash, role) VALUES (200, 'in@test.dev', 'In', 'x', 'ADMIN') ON CONFLICT DO NOTHING");

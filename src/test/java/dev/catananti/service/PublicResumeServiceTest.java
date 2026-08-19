@@ -246,6 +246,81 @@ class PublicResumeServiceTest {
                     .expectError(ResourceNotFoundException.class)
                     .verify();
         }
+
+        @Test
+        @DisplayName("AUD18-JA8: template path (explicit opt-in) keeps contact fields")
+        void templatePath_keepsContactFields() {
+            ResumeProfileResponse response = ResumeProfileResponse.builder()
+                    .fullName("John Doe")
+                    .email("john@example.com")
+                    .phone("+55 11 99999-0000")
+                    .locale("en")
+                    .build();
+
+            when(resumeTemplateRepository.findByAlias("john-doe")).thenReturn(Mono.just(activeTemplate));
+            when(resumeProfileService.getProfileByOwnerIdWithFallback(eq(ownerId), eq("en")))
+                    .thenReturn(Mono.just(response));
+            when(userRepository.findById(ownerId))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder().build()));
+
+            StepVerifier.create(publicResumeService.getProfileByAlias("john-doe", "en"))
+                    .assertNext(profile -> {
+                        assertThat(profile.getEmail()).isEqualTo("john@example.com");
+                        assertThat(profile.getPhone()).isEqualTo("+55 11 99999-0000");
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("AUD18-JA8: username fallback (no published template) omits email/phone")
+        void usernameFallback_omitsContactFields() {
+            Long fallbackUserId = 77L;
+            ResumeProfileResponse response = ResumeProfileResponse.builder()
+                    .fullName("Jane Roe")
+                    .email("jane-private@example.com")
+                    .phone("+55 11 88888-1111")
+                    .linkedin("linkedin.com/in/janeroe")
+                    .locale("en")
+                    .build();
+
+            when(resumeTemplateRepository.findByAlias("janeroe")).thenReturn(Mono.empty());
+            when(resumeTemplateRepository.findBySlug("janeroe")).thenReturn(Mono.empty());
+            when(userRepository.findByUsername("janeroe"))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder().id(fallbackUserId).build()));
+            when(resumeProfileService.getProfileByOwnerIdWithFallback(eq(fallbackUserId), eq("en")))
+                    .thenReturn(Mono.just(response));
+            when(userRepository.findById(fallbackUserId))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder().build()));
+
+            StepVerifier.create(publicResumeService.getProfileByAlias("janeroe", "en"))
+                    .assertNext(profile -> {
+                        assertThat(profile.getEmail()).isNull();
+                        assertThat(profile.getPhone()).isNull();
+                        // public-by-nature links are kept
+                        assertThat(profile.getLinkedin()).isEqualTo("linkedin.com/in/janeroe");
+                        assertThat(profile.getFullName()).isEqualTo("Jane Roe");
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("AUD18-JA8: username-fallback HTML rendering passes includeContact=false")
+        void usernameFallback_htmlOmitsContact() {
+            Long fallbackUserId = 77L;
+            when(resumeTemplateRepository.findByAlias("janeroe")).thenReturn(Mono.empty());
+            when(resumeTemplateRepository.findBySlug("janeroe")).thenReturn(Mono.empty());
+            when(userRepository.findByUsername("janeroe"))
+                    .thenReturn(Mono.just(dev.catananti.entity.User.builder().id(fallbackUserId).build()));
+            when(resumeProfileService.generateResumeHtml(eq(fallbackUserId), eq("en"), eq(false)))
+                    .thenReturn(Mono.just("<html>No-contact resume</html>"));
+
+            StepVerifier.create(publicResumeService.getResumeHtml("janeroe", "en"))
+                    .assertNext(html -> assertThat(html).contains("No-contact resume"))
+                    .verifyComplete();
+
+            verify(resumeProfileService).generateResumeHtml(fallbackUserId, "en", false);
+            verify(resumeProfileService, never()).generateResumeHtml(anyLong(), anyString());
+        }
     }
 
     // ============================

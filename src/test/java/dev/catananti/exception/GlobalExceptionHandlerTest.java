@@ -391,6 +391,57 @@ class GlobalExceptionHandlerTest {
                     .assertNext(resp -> {
                         assertThat(resp.getStatusCode().value()).isEqualTo(400);
                         assertThat(resp.getBody()).isNotNull();
+                        // AUD19C-CODE: null reason -> no machine-readable code
+                        assertThat(resp.getBody().code()).isNull();
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("AUD19C-CODE: should surface an error.* reason as the machine-readable code")
+        void shouldPopulateCode_WhenReasonIsErrorKey() {
+            var ex = new ResponseStatusException(HttpStatus.UNAUTHORIZED, "error.mfa_token_invalid");
+
+            StepVerifier.create(handler.handleResponseStatusException(ex, exchange))
+                    .assertNext(resp -> {
+                        assertThat(resp.getStatusCode().value()).isEqualTo(401);
+                        assertThat(resp.getBody().code()).isEqualTo("error.mfa_token_invalid");
+                        // message behavior unchanged: still the (passthrough) resolved reason
+                        assertThat(resp.getBody().message()).isEqualTo("error.mfa_token_invalid");
+                    })
+                    .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("AUD19C-CODE: should leave code absent for free-text reasons")
+        void shouldNotPopulateCode_WhenReasonIsFreeText() {
+            var ex = new ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied");
+
+            StepVerifier.create(handler.handleResponseStatusException(ex, exchange))
+                    .assertNext(resp -> assertThat(resp.getBody().code()).isNull())
+                    .verifyComplete();
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // handleAccountDeactivated
+    // ──────────────────────────────────────────────
+    @Nested
+    @DisplayName("handleAccountDeactivated()")
+    class HandleAccountDeactivated {
+
+        @Test
+        @DisplayName("AUD19C-DEACT: should return 403 with error.account_deactivated message and code")
+        void shouldReturn403WithDeactivatedCode() {
+            var ex = new AccountDeactivatedException();
+
+            StepVerifier.create(handler.handleAccountDeactivated(ex, exchange))
+                    .assertNext(resp -> {
+                        assertThat(resp.status()).isEqualTo(403);
+                        assertThat(resp.error()).isEqualTo("error.forbidden");
+                        assertThat(resp.message()).isEqualTo("error.account_deactivated");
+                        assertThat(resp.code()).isEqualTo("error.account_deactivated");
+                        assertThat(resp.path()).isEqualTo("/api/test");
                     })
                     .verifyComplete();
         }

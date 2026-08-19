@@ -5,6 +5,7 @@ import dev.catananti.entity.User;
 import dev.catananti.entity.UserSocialAccount;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.repository.UserSocialAccountRepository;
+import dev.catananti.security.AuthCookieService;
 import dev.catananti.service.OAuth2Service;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,7 +48,11 @@ class OAuth2ControllerTest {
 
     @BeforeEach
     void setUp() {
-        OAuth2Controller controller = new OAuth2Controller(oAuth2Service, userRepository, socialAccountRepository);
+        // AUD19C-C1B: real cookie service — cookie attribute assertions below exercise
+        // the shared contract the controller migrated to.
+        AuthCookieService authCookieService = new AuthCookieService(86400000L, true, "");
+        OAuth2Controller controller = new OAuth2Controller(oAuth2Service, userRepository,
+                socialAccountRepository, authCookieService);
 
         var auth = new UsernamePasswordAuthenticationToken("admin@test.com", null,
                 List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
@@ -136,7 +141,45 @@ class OAuth2ControllerTest {
                     .cookie("oauth_state", validState)
                     .exchange()
                     .expectStatus().isFound()
-                    .expectHeader().valueMatches("Location", ".*/auth/oauth-callback.*");
+                    .expectHeader().valueMatches("Location", ".*/auth/oauth-callback.*")
+                    // AUD19C-C1B: post-migration to AuthCookieService the cookie behavior is
+                    // unchanged: HttpOnly+Secure+Lax, access on /api, refresh on the auth path
+                    // with its previous 7-day lifetime (rememberMe=true semantics).
+                    .expectCookie().valueEquals("access_token", "access-token-123")
+                    .expectCookie().httpOnly("access_token", true)
+                    .expectCookie().secure("access_token", true)
+                    .expectCookie().sameSite("access_token", "Lax")
+                    .expectCookie().path("access_token", "/api")
+                    .expectCookie().valueEquals("refresh_token", "refresh-token-123")
+                    .expectCookie().httpOnly("refresh_token", true)
+                    .expectCookie().path("refresh_token", "/api/v1/admin/auth")
+                    .expectCookie().maxAge("refresh_token", java.time.Duration.ofDays(7));
+        }
+
+        @Test
+        @DisplayName("AUD18-A10: Should redirect to the MFA challenge without setting auth cookies")
+        void shouldRedirectToMfaChallenge_WhenMfaRequired() {
+            String validState = "a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5";
+            when(oAuth2Service.validateAndConsumeState(validState)).thenReturn(Mono.just(true));
+            TokenResponse mfaChallenge = TokenResponse.builder()
+                    .mfaRequired(true)
+                    .mfaToken("11111111-2222-4333-8444-555555555555")
+                    .email("admin@test.com")
+                    .name("Admin")
+                    .build();
+            when(oAuth2Service.handleGoogleCallback(eq("code123"), anyString()))
+                    .thenReturn(Mono.just(mfaChallenge));
+
+            webTestClient
+                    .get().uri("/api/v1/admin/auth/oauth2/callback/google?code=code123&state=" + validState)
+                    .cookie("oauth_state", validState)
+                    .exchange()
+                    .expectStatus().isFound()
+                    // Challenge travels in the URL fragment, never as cookies
+                    .expectHeader().valueMatches("Location",
+                            ".*/auth/oauth-callback#mfa_required=true&mfa_token=11111111-2222-4333-8444-555555555555.*")
+                    .expectHeader().value("Set-Cookie", value ->
+                            org.assertj.core.api.Assertions.assertThat(value).doesNotContain("access_token"));
         }
 
         @Test
@@ -174,6 +217,8 @@ class OAuth2ControllerTest {
                     .exchange()
                     .expectStatus().isOk()
                     .expectBody()
+                    // AUD19C-SESSID: Snowflake ids serialize as strings
+                    .jsonPath("$[0].id").isEqualTo("10")
                     .jsonPath("$[0].provider").isEqualTo("google")
                     .jsonPath("$[0].providerEmail").isEqualTo("admin@gmail.com");
         }

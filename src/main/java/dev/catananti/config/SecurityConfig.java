@@ -58,9 +58,10 @@ public class SecurityConfig {
     private boolean swaggerEnabled;
 
     // F-016: Single source of truth for public auth paths — used by both CSRF exemption and authorize rules
+    // AUD18-M7: /login/v2 removed — the endpoint no longer exists (Q7.14 merged v1/v2),
+    // and a permitAll+CSRF-exempt rule for a dead path was a latent hole if it ever came back.
     private static final Set<String> PUBLIC_AUTH_PATHS = Set.of(
             "/api/v1/admin/auth/login",
-            "/api/v1/admin/auth/login/v2",
             "/api/v1/admin/auth/register",
             "/api/v1/admin/auth/refresh",
             "/api/v1/admin/auth/logout",
@@ -74,6 +75,11 @@ public class SecurityConfig {
             "/api/v1/admin/mfa/verify",
             "/api/v1/admin/mfa/send-email-otp"
     );
+
+    // AUD18-L8: matches the authenticated comment-creation endpoint
+    // (POST /api/v1/articles/{slug}/comments) so it is NOT CSRF-exempt.
+    private static final java.util.regex.Pattern COMMENT_CREATE_PATTERN =
+            java.util.regex.Pattern.compile("^/api/v1/articles/[^/]+/comments/?$");
 
     @Bean
     public CookieServerCsrfTokenRepository csrfTokenRepository() {
@@ -99,11 +105,18 @@ public class SecurityConfig {
                                 if ("GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
                                 }
+                                // AUD18-L8: the blanket /api/v1/articles/ exemption also covered the
+                                // AUTHENTICATED comment-creation POST. The Angular client already sends
+                                // X-XSRF-TOKEN on every mutation (withXsrfConfiguration in app.config.ts),
+                                // so require CSRF for that endpoint like every other authenticated write.
+                                // Anonymous article endpoints (views/likes) stay exempt.
+                                if ("POST".equals(method) && COMMENT_CREATE_PATTERN.matcher(path).matches()) {
+                                    return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.match();
+                                }
                                 // Exempt public endpoints protected by dedicated rate limiting and security layers
                                 if (path.startsWith("/api/v1/articles/") || path.startsWith("/api/v1/newsletter/")
                                     || path.startsWith("/api/v1/contact") || path.startsWith("/api/v1/search/")
                                     || "/api/v1/analytics/event".equals(path)
-                                    || path.startsWith("/api/v1/analytics/view/")
                                     || "/api/v1/csp-report".equals(path)
                                     || "/api/v1/client-errors".equals(path)) {
                                     return org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher.MatchResult.notMatch();
@@ -179,9 +192,10 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/admin/auth/oauth2/authorize/**").permitAll()
                         .pathMatchers("/api/v1/admin/auth/oauth2/callback/**").permitAll()
                         .pathMatchers("/api", "/api/v1", "/api/health").permitAll()
-                        // Public resume endpoints
-                        .pathMatchers("/api/v1/resume/css/**").permitAll()
-                        .pathMatchers("/api/v1/resume/templates/popular").permitAll()
+                        // AUD19C-SEC: removed permitAll for /api/v1/resume/templates/popular and
+                        // /api/v1/resume/css/** — no controller serves either path; dead anonymous
+                        // rules under a prefix that is otherwise ADMIN/DEV were a latent hole if a
+                        // matching endpoint ever appeared.
                         // Public resume download
                         .pathMatchers("/api/public/**").permitAll()
                         .pathMatchers("/api/v1/public/**").permitAll()
@@ -224,6 +238,8 @@ public class SecurityConfig {
                         .pathMatchers("/api/v1/admin/articles/**").hasAnyRole("ADMIN", "DEV")
                         .pathMatchers("/api/v1/admin/tags/**").hasAnyRole("ADMIN", "DEV")
                         .pathMatchers("/api/v1/admin/comments/**").hasAnyRole("ADMIN", "DEV")
+                        // AUD18-M3: upload is intentionally authenticated() (VIEWERs upload their own
+                        // avatar); MediaController.uploadMedia enforces purpose=AVATAR for non-ADMIN/DEV.
                         .pathMatchers("/api/v1/admin/media/upload").authenticated()
                         .pathMatchers("/api/v1/admin/media/**").hasAnyRole("ADMIN", "DEV")
                         // Notifications - all authenticated users
@@ -272,8 +288,25 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         log.info("Configuring CORS");
         CorsConfiguration configuration = new CorsConfiguration();
+        // AUD19C-SEC: a blank cors.allowed-origins would split into [""] and register an
+        // unusable (and confusing) origin pattern. Fail fast on real deployments; warn in dev.
+        if (allowedOrigins.isBlank()) {
+            boolean strictProfile = environment.matchesProfiles("prod | cloud | qa");
+            if (strictProfile) {
+                throw new IllegalStateException(
+                        "SEC: cors.allowed-origins is blank — the prod, cloud and qa profiles "
+                        + "require explicit origins.");
+            }
+            log.warn("SEC: cors.allowed-origins is blank — no cross-origin requests will be allowed. "
+                    + "Set cors.allowed-origins to specific origins.");
+        }
         // F-022: Validate that allowedOriginPatterns do not include broad wildcards in production
-        List<String> origins = List.of(allowedOrigins.split(","));
+        // AUD19C-SEC: trim + drop blank entries so "a, ,b" or trailing commas can't register
+        // an empty origin pattern.
+        List<String> origins = java.util.Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isBlank())
+                .toList();
         for (String origin : origins) {
             if ("*".equals(origin.trim())) {
                 boolean isProduction = environment.matchesProfiles("prod | cloud");

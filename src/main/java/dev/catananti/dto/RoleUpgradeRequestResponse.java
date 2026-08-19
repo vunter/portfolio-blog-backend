@@ -17,26 +17,32 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class RoleUpgradeRequestResponse {
 
-    private Long id;
-    private Long userId;
+    // AUD19C-4: Snowflake ids are serialized as strings (JS Number loses precision
+    // past 2^53; the frontend already types them as string).
+    private String id;
+    private String userId;
     private String userName;
     private String userEmail;
     private String currentRole;
     private String requestedRole;
     private String reason;
     private String status;
-    private Long reviewedBy;
+    private String reviewedBy;
     private LocalDateTime reviewedAt;
     private LocalDateTime createdAt;
 
+    private static String asString(Long value) {
+        return value != null ? String.valueOf(value) : null;
+    }
+
     public static RoleUpgradeRequestResponse fromEntity(RoleUpgradeRequest entity) {
         return RoleUpgradeRequestResponse.builder()
-                .id(entity.getId())
-                .userId(entity.getUserId())
+                .id(asString(entity.getId()))
+                .userId(asString(entity.getUserId()))
                 .requestedRole(entity.getRequestedRole())
                 .reason(entity.getReason())
                 .status(entity.getStatus().name())
-                .reviewedBy(entity.getReviewedBy())
+                .reviewedBy(asString(entity.getReviewedBy()))
                 .reviewedAt(entity.getReviewedAt())
                 .createdAt(entity.getCreatedAt())
                 .build();
@@ -48,15 +54,15 @@ public class RoleUpgradeRequestResponse {
     public static RoleUpgradeRequestResponse fromEntityWithUser(
             RoleUpgradeRequest entity, String userName, String userEmail, String currentRole) {
         return RoleUpgradeRequestResponse.builder()
-                .id(entity.getId())
-                .userId(entity.getUserId())
+                .id(asString(entity.getId()))
+                .userId(asString(entity.getUserId()))
                 .userName(userName)
                 .userEmail(userEmail)
                 .currentRole(currentRole)
                 .requestedRole(entity.getRequestedRole())
                 .reason(entity.getReason())
                 .status(entity.getStatus().name())
-                .reviewedBy(entity.getReviewedBy())
+                .reviewedBy(asString(entity.getReviewedBy()))
                 .reviewedAt(entity.getReviewedAt())
                 .createdAt(entity.getCreatedAt())
                 .build();

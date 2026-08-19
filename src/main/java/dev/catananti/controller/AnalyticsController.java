@@ -8,7 +8,6 @@ import dev.catananti.service.AnalyticsService;
 import dev.catananti.service.AnalyticsTokenService;
 import dev.catananti.service.RecaptchaService;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -83,21 +82,6 @@ public class AnalyticsController {
                     return Mono.error(new org.springframework.web.server.ResponseStatusException(
                             HttpStatus.BAD_REQUEST, e.getMessage()));
                 });
-    }
-
-    @PostMapping("/view/{slug}")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    public Mono<Void> trackView(
-            @PathVariable @Pattern(regexp = "^[a-z0-9-]+$", message = "Invalid slug format") String slug,
-            ServerHttpRequest httpRequest) {
-        if (!hasAnalyticsConsent(httpRequest)) {
-            log.debug("Article view rejected: no consent header");
-            return Mono.empty();
-        }
-        // View tracking is a simplified path — only consent + rate limiting apply
-        // (no PoW/token/reCAPTCHA required for article view tracking via slug)
-        log.debug("Tracking article view for slug={}", slug);
-        return analyticsService.trackArticleView(slug, httpRequest);
     }
 
     /**

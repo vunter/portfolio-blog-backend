@@ -6,9 +6,9 @@ import dev.catananti.dto.ProfileUpdateRequest;
 import dev.catananti.dto.RoleUpdateRequest;
 import dev.catananti.dto.RoleUpgradeRequestDto;
 import dev.catananti.dto.RoleUpgradeRequestResponse;
+import dev.catananti.dto.UserActivityResponse;
 import dev.catananti.dto.UserRequest;
 import dev.catananti.dto.UserResponse;
-import dev.catananti.dto.UserStatsResponse;
 import dev.catananti.service.RoleUpgradeRequestService;
 import dev.catananti.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -128,15 +128,6 @@ public class AdminUserController {
                 .map(ResponseEntity::ok);
     }
 
-    @GetMapping("/email/{email}")
-    @Operation(summary = "Get user by email", description = "Get user information by email address")
-    public Mono<ResponseEntity<UserResponse>> getUserByEmail(
-            @PathVariable @jakarta.validation.constraints.Email @jakarta.validation.constraints.Size(max = 254) String email) {
-        log.debug("Admin fetching user by email: {}", PiiMasker.maskEmail(email));
-        return userService.getUserByEmail(email)
-                .map(ResponseEntity::ok);
-    }
-
     @PostMapping
     @Operation(summary = "Create new user", description = "Create a new user account")
     public Mono<ResponseEntity<UserResponse>> createUser(
@@ -177,25 +168,8 @@ public class AdminUserController {
                 .map(ResponseEntity::ok);
     }
 
-    @GetMapping("/stats")
-    @Operation(summary = "Get user statistics", description = "Get user count by role")
-    public Mono<ResponseEntity<UserStatsResponse>> getUserStats() {
-        log.debug("Fetching user statistics");
-        return Mono.zip(
-                userService.getTotalUsers(),
-                userService.countUsersByRole("ADMIN"),
-                userService.countUsersByRole("DEV"),
-                userService.countUsersByRole("VIEWER")
-        ).map(tuple -> ResponseEntity.ok(
-                UserStatsResponse.builder()
-                        .total(tuple.getT1())
-                        .admins(tuple.getT2())
-                        .devs(tuple.getT3())
-                        .editors(0L)
-                        .viewers(tuple.getT4())
-                        .build()
-        ));
-    }
+    // AUD19C-5: GET /stats removed — verified zero callers (the admin dashboard
+    // derives its counters elsewhere). UserStatsResponse dto removed with it.
 
     @PutMapping("/{id}/activate")
     @Operation(summary = "Activate user", description = "Activate a deactivated user account")
@@ -216,17 +190,18 @@ public class AdminUserController {
     }
 
     /**
-     * F-140: Activity summary endpoint. Currently unimplemented — needs a schema migration to add
-     * last_login_at / action_count columns plus an audit-log aggregation. Returns 501 to make this
-     * explicit instead of shipping a misleading placeholder body.
+     * F-140 / AUD19-F140: Activity summary endpoint — implemented (formerly a 501 stub). No schema
+     * migration was needed: everything is derived from existing tables (users.created_at, article
+     * and comment counts, and lastLogin from the newest LOGIN audit entry or refresh-token
+     * issuance). lastLogin may be null when no source has data; the frontend treats it as optional.
+     * 404 when the user does not exist.
      */
     @GetMapping("/{id}/activity")
-    @Operation(summary = "Get user activity (not yet implemented)", description = "Returns 501 until activity tracking is added")
-    public Mono<ResponseEntity<java.util.Map<String, Object>>> getUserActivity(@PathVariable Long id) {
-        return Mono.just(ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
-                .body(java.util.Map.of(
-                        "error", "Not Implemented",
-                        "message", "User activity tracking is not yet available")));
+    @Operation(summary = "Get user activity", description = "Get a user's activity summary: last login, account creation date, articles created and comments posted")
+    public Mono<ResponseEntity<UserActivityResponse>> getUserActivity(@PathVariable Long id) {
+        log.debug("Admin fetching activity for user: id={}", id);
+        return userService.getUserActivity(id)
+                .map(ResponseEntity::ok);
     }
 
     // ============================================

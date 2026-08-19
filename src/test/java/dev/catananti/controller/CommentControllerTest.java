@@ -157,4 +157,140 @@ class CommentControllerTest {
             verify(commentService).createComment("spring-boot-guide", commentRequest);
         }
     }
+
+    @Nested
+    @DisplayName("POST /api/v1/articles/{slug}/comments/{commentId}/like — AUD18-M1/AUD18-L2")
+    class ToggleCommentLike {
+
+        private static final String SLUG = "spring-boot-guide";
+        private static final Long COMMENT_ID = 101L;
+
+        @Mock
+        private dev.catananti.service.InteractionDeduplicationService deduplicationService;
+
+        @Mock
+        private org.springframework.core.env.Environment environment;
+
+        @Mock
+        private org.springframework.http.server.reactive.ServerHttpRequest mockRequest;
+
+        private CommentController likeController;
+
+        private final dev.catananti.entity.Comment approvedComment = dev.catananti.entity.Comment.builder()
+                .id(COMMENT_ID)
+                .articleId(1L)
+                .status(dev.catananti.entity.CommentStatus.APPROVED)
+                .build();
+
+        @BeforeEach
+        void setUpController() {
+            // F-065: manual construction — deduplicationService is Optional<>
+            likeController = new CommentController(commentService, recaptchaService, userService,
+                    java.util.Optional.of(deduplicationService), paginationConfig, environment);
+        }
+
+        @Test
+        @DisplayName("AUD18-M1: new like increments when dedup key is genuinely new")
+        void toggleLike_NewLike_ShouldIncrement() {
+            when(commentService.getApprovedCommentForArticle(SLUG, COMMENT_ID)).thenReturn(Mono.just(approvedComment));
+            when(deduplicationService.hasLikedComment(eq(COMMENT_ID), any())).thenReturn(Mono.just(false));
+            when(deduplicationService.recordCommentLikeIfNew(eq(COMMENT_ID), any())).thenReturn(Mono.just(true));
+            when(commentService.likeCommentAndReturnCount(COMMENT_ID)).thenReturn(Mono.just(6));
+
+            StepVerifier.create(likeController.toggleCommentLike(SLUG, COMMENT_ID, mockRequest))
+                    .assertNext(result -> {
+                        assertThat(result.get("liked")).isEqualTo(true);
+                        assertThat(result.get("likesCount")).isEqualTo(6);
+                    })
+                    .verifyComplete();
+
+            verify(commentService).likeCommentAndReturnCount(COMMENT_ID);
+            verify(commentService, never()).getCommentLikeCount(anyLong());
+        }
+
+        @Test
+        @DisplayName("AUD18-M1: duplicate like does NOT increment when SETNX reports no change")
+        void toggleLike_DuplicateLike_ShouldNotIncrement() {
+            when(commentService.getApprovedCommentForArticle(SLUG, COMMENT_ID)).thenReturn(Mono.just(approvedComment));
+            when(deduplicationService.hasLikedComment(eq(COMMENT_ID), any())).thenReturn(Mono.just(false));
+            // racing duplicate: hasLiked saw false but SETNX lost the race
+            when(deduplicationService.recordCommentLikeIfNew(eq(COMMENT_ID), any())).thenReturn(Mono.just(false));
+            when(commentService.getCommentLikeCount(COMMENT_ID)).thenReturn(Mono.just(5));
+
+            StepVerifier.create(likeController.toggleCommentLike(SLUG, COMMENT_ID, mockRequest))
+                    .assertNext(result -> {
+                        assertThat(result.get("liked")).isEqualTo(true);
+                        assertThat(result.get("likesCount")).isEqualTo(5);
+                    })
+                    .verifyComplete();
+
+            verify(commentService, never()).likeCommentAndReturnCount(anyLong());
+        }
+
+        @Test
+        @DisplayName("AUD18-M1: unlike decrements when the dedup key was actually removed")
+        void toggleLike_Unlike_ShouldDecrement() {
+            when(commentService.getApprovedCommentForArticle(SLUG, COMMENT_ID)).thenReturn(Mono.just(approvedComment));
+            when(deduplicationService.hasLikedComment(eq(COMMENT_ID), any())).thenReturn(Mono.just(true));
+            when(deduplicationService.removeCommentLike(eq(COMMENT_ID), any())).thenReturn(Mono.just(true));
+            when(commentService.unlikeCommentAndReturnCount(COMMENT_ID)).thenReturn(Mono.just(4));
+
+            StepVerifier.create(likeController.toggleCommentLike(SLUG, COMMENT_ID, mockRequest))
+                    .assertNext(result -> {
+                        assertThat(result.get("liked")).isEqualTo(false);
+                        assertThat(result.get("likesCount")).isEqualTo(4);
+                    })
+                    .verifyComplete();
+
+            verify(commentService).unlikeCommentAndReturnCount(COMMENT_ID);
+        }
+
+        @Test
+        @DisplayName("AUD18-M1: racing unlike does NOT decrement when delete removed nothing")
+        void toggleLike_RacingUnlike_ShouldNotDecrement() {
+            when(commentService.getApprovedCommentForArticle(SLUG, COMMENT_ID)).thenReturn(Mono.just(approvedComment));
+            when(deduplicationService.hasLikedComment(eq(COMMENT_ID), any())).thenReturn(Mono.just(true));
+            // racing duplicate unlike: another request already deleted the key
+            when(deduplicationService.removeCommentLike(eq(COMMENT_ID), any())).thenReturn(Mono.just(false));
+            when(commentService.getCommentLikeCount(COMMENT_ID)).thenReturn(Mono.just(5));
+
+            StepVerifier.create(likeController.toggleCommentLike(SLUG, COMMENT_ID, mockRequest))
+                    .assertNext(result -> {
+                        assertThat(result.get("liked")).isEqualTo(false);
+                        assertThat(result.get("likesCount")).isEqualTo(5);
+                    })
+                    .verifyComplete();
+
+            verify(commentService, never()).unlikeCommentAndReturnCount(anyLong());
+        }
+
+        @Test
+        @DisplayName("AUD18-L2: like on nonexistent/foreign comment 404s BEFORE touching Redis")
+        void toggleLike_UnknownComment_ShouldErrorWithoutRedisWrite() {
+            when(commentService.getApprovedCommentForArticle(SLUG, COMMENT_ID))
+                    .thenReturn(Mono.error(new dev.catananti.exception.ResourceNotFoundException(
+                            "Comment", "id", COMMENT_ID)));
+
+            StepVerifier.create(likeController.toggleCommentLike(SLUG, COMMENT_ID, mockRequest))
+                    .expectError(dev.catananti.exception.ResourceNotFoundException.class)
+                    .verify();
+
+            verifyNoInteractions(deduplicationService);
+            verify(commentService, never()).likeCommentAndReturnCount(anyLong());
+        }
+
+        @Test
+        @DisplayName("AUD18-L2: like status on nonexistent/foreign comment 404s")
+        void likeStatus_UnknownComment_ShouldError() {
+            when(commentService.getApprovedCommentForArticle(SLUG, COMMENT_ID))
+                    .thenReturn(Mono.error(new dev.catananti.exception.ResourceNotFoundException(
+                            "Comment", "id", COMMENT_ID)));
+            when(deduplicationService.hasLikedComment(eq(COMMENT_ID), any())).thenReturn(Mono.just(false));
+            when(commentService.getCommentLikeCount(COMMENT_ID)).thenReturn(Mono.just(0));
+
+            StepVerifier.create(likeController.getCommentLikeStatus(SLUG, COMMENT_ID, mockRequest))
+                    .expectError(dev.catananti.exception.ResourceNotFoundException.class)
+                    .verify();
+        }
+    }
 }

@@ -50,7 +50,8 @@ class AdminTranslationControllerTest {
         @DisplayName("Should return paginated translations without search")
         void shouldReturnPaginatedTranslations() {
             Map<String, Object> item = Map.of(
-                    "id", 1L,
+                    // AUD19C-SNOW: repository now stringifies Snowflake ids
+                    "id", "1",
                     "translationKey", "home.title",
                     "locale", "en",
                     "value", "Home",
@@ -162,7 +163,8 @@ class AdminTranslationControllerTest {
                     .assertNext(response -> {
                         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
                         assertThat(response.getBody()).containsEntry("status", "created");
-                        assertThat(response.getBody()).containsEntry("id", 100L);
+                        // AUD19C-SNOW: id serialized as String
+                        assertThat(response.getBody()).containsEntry("id", "100");
                     })
                     .verifyComplete();
         }

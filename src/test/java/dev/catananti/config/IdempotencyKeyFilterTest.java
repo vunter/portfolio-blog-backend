@@ -150,6 +150,101 @@ class IdempotencyKeyFilterTest {
         }
 
         @Test
+        @DisplayName("AUD18-M4: should store done:<status> with full TTL on success")
+        void shouldStoreDoneKeyOnSuccess() {
+            String key = UUID.randomUUID().toString();
+            when(redisTemplate.opsForValue()).thenReturn(valueOps);
+            when(valueOps.setIfAbsent(eq("idem:a:unknown:" + key), eq("processing"), any(Duration.class)))
+                    .thenReturn(Mono.just(true));
+            when(valueOps.set(eq("idem:a:unknown:" + key), eq("done:200"), eq(Duration.ofHours(24))))
+                    .thenReturn(Mono.just(true));
+
+            MockServerWebExchange exchange = MockServerWebExchange.from(
+                    MockServerHttpRequest.post("/api/v1/articles")
+                            .header("X-Idempotency-Key", key)
+                            .build());
+            WebFilterChain chain = e -> {
+                e.getResponse().setStatusCode(HttpStatus.OK);
+                return Mono.empty();
+            };
+
+            StepVerifier.create(filter.filter(exchange, chain))
+                    .verifyComplete();
+
+            verify(valueOps).set(eq("idem:a:unknown:" + key), eq("done:200"), eq(Duration.ofHours(24)));
+            verify(redisTemplate, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("AUD18-M4: should release key when the response is an error status "
+                + "(GlobalExceptionHandler converts exceptions to normal responses)")
+        void shouldReleaseKeyOnErrorStatusResponse() {
+            String key = UUID.randomUUID().toString();
+            when(redisTemplate.opsForValue()).thenReturn(valueOps);
+            when(valueOps.setIfAbsent(eq("idem:a:unknown:" + key), eq("processing"), any(Duration.class)))
+                    .thenReturn(Mono.just(true));
+            when(redisTemplate.delete(eq("idem:a:unknown:" + key)))
+                    .thenReturn(Mono.just(1L));
+
+            MockServerWebExchange exchange = MockServerWebExchange.from(
+                    MockServerHttpRequest.post("/api/v1/articles")
+                            .header("X-Idempotency-Key", key)
+                            .build());
+            // Chain completes NORMALLY with a 500 response — this is what the exchange
+            // looks like after GlobalExceptionHandler turns an exception into a response.
+            WebFilterChain chain = e -> {
+                e.getResponse().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR);
+                return Mono.empty();
+            };
+
+            StepVerifier.create(filter.filter(exchange, chain))
+                    .verifyComplete();
+
+            verify(redisTemplate).delete("idem:a:unknown:" + key);
+            verify(valueOps, never()).set(anyString(), anyString(), any(Duration.class));
+        }
+
+        @Test
+        @DisplayName("AUD18-M4: failed request then retry with the same key succeeds")
+        void failedRequestThenRetrySucceeds() {
+            String key = UUID.randomUUID().toString();
+            String redisKey = "idem:a:unknown:" + key;
+            when(redisTemplate.opsForValue()).thenReturn(valueOps);
+            // Both attempts win the SETNX (the key was deleted after the failure)
+            when(valueOps.setIfAbsent(eq(redisKey), eq("processing"), any(Duration.class)))
+                    .thenReturn(Mono.just(true));
+            when(redisTemplate.delete(eq(redisKey))).thenReturn(Mono.just(1L));
+            when(valueOps.set(eq(redisKey), eq("done:201"), eq(Duration.ofHours(24))))
+                    .thenReturn(Mono.just(true));
+
+            // First attempt: handler answers 400
+            MockServerWebExchange failedExchange = MockServerWebExchange.from(
+                    MockServerHttpRequest.post("/api/v1/articles")
+                            .header("X-Idempotency-Key", key)
+                            .build());
+            StepVerifier.create(filter.filter(failedExchange, e -> {
+                        e.getResponse().setStatusCode(HttpStatus.BAD_REQUEST);
+                        return Mono.empty();
+                    }))
+                    .verifyComplete();
+            verify(redisTemplate).delete(redisKey);
+
+            // Retry: same key, handler now succeeds with 201 — processed, not 409'd
+            MockServerWebExchange retryExchange = MockServerWebExchange.from(
+                    MockServerHttpRequest.post("/api/v1/articles")
+                            .header("X-Idempotency-Key", key)
+                            .build());
+            StepVerifier.create(filter.filter(retryExchange, e -> {
+                        e.getResponse().setStatusCode(HttpStatus.CREATED);
+                        return Mono.empty();
+                    }))
+                    .verifyComplete();
+
+            assertThat(retryExchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.CREATED);
+            verify(valueOps).set(eq(redisKey), eq("done:201"), eq(Duration.ofHours(24)));
+        }
+
+        @Test
         @DisplayName("should work with PUT requests")
         void shouldWorkWithPutRequests() {
             String key = UUID.randomUUID().toString();

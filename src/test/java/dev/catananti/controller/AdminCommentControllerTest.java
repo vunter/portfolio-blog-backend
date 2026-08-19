@@ -76,16 +76,39 @@ class AdminCommentControllerTest {
                     .last(true)
                     .build();
 
-            when(commentService.getAdminCommentsByStatus("PENDING", 0, 20))
+            when(commentService.getAdminCommentsByStatus("PENDING", null, 0, 20))
                     .thenReturn(Mono.just(page));
 
-            StepVerifier.create(controller.getCommentsByStatus("PENDING", 0, 20))
+            StepVerifier.create(controller.getCommentsByStatus("PENDING", null, 0, 20))
                     .assertNext(result -> {
                         assertThat(result.getContent()).hasSize(1);
                         assertThat(result.getContent().getFirst().getStatus()).isEqualTo("PENDING");
                         assertThat(result.getContent().getFirst().getAuthorName()).isEqualTo("João Silva");
                     })
                     .verifyComplete();
+        }
+
+        @Test
+        @DisplayName("AUD19C-2: Should pass the search term through to the service")
+        void shouldPassSearchTermThrough() {
+            PageResponse<CommentResponse> page = PageResponse.<CommentResponse>builder()
+                    .content(List.of(pendingComment))
+                    .page(0)
+                    .size(20)
+                    .totalElements(1)
+                    .totalPages(1)
+                    .first(true)
+                    .last(true)
+                    .build();
+
+            when(commentService.getAdminCommentsByStatus("ALL", "João", 0, 20))
+                    .thenReturn(Mono.just(page));
+
+            StepVerifier.create(controller.getCommentsByStatus("ALL", "João", 0, 20))
+                    .assertNext(result -> assertThat(result.getContent()).hasSize(1))
+                    .verifyComplete();
+
+            verify(commentService).getAdminCommentsByStatus("ALL", "João", 0, 20);
         }
     }
 

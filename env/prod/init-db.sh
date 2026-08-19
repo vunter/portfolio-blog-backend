@@ -17,20 +17,25 @@ set -euo pipefail
 
 # Pass the password as a psql variable so we don't interpolate it directly
 # into the SQL heredoc (avoids quoting issues / partial leaks via -x).
+# M-19: psql does NOT interpolate :'var' inside dollar-quoted ($$...$$)
+# blocks, so the previous DO-block approach reached the server as a literal
+# ":'app_pwd'" and failed under ON_ERROR_STOP. The documented pattern is to
+# keep :'var' in plain SQL: generate the CREATE with format(%L) + \gexec,
+# then ALTER unconditionally so re-runs stay idempotent.
 PGPASSWORD="$DB_PASSWORD" \
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
     -v "app_pwd=$DB_PASSWORD" <<-'EOSQL'
-    -- Create app user with the password supplied via the :app_pwd variable
-    -- (psql double-quotes it; we never embed it in a literal SQL string).
-    DO $$
-    BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'blogadmin') THEN
-            EXECUTE format('CREATE USER blogadmin WITH PASSWORD %L', :'app_pwd');
-        ELSE
-            EXECUTE format('ALTER USER blogadmin WITH PASSWORD %L', :'app_pwd');
-        END IF;
-    END
-    $$;
+    -- Create the app user only if missing. format(%L) safely quotes the
+    -- password literal; \gexec executes each generated statement (none when
+    -- the user already exists).
+    SELECT format('CREATE USER blogadmin WITH PASSWORD %L', :'app_pwd')
+    WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'blogadmin')
+    \gexec
+
+    -- Always (re)sync the password so re-running the script converges.
+    -- :'app_pwd' is interpolated by psql as a properly quoted literal here
+    -- (plain SQL, no dollar quotes).
+    ALTER USER blogadmin WITH PASSWORD :'app_pwd';
 
     -- Connection + schema usage
     GRANT CONNECT ON DATABASE blog TO blogadmin;

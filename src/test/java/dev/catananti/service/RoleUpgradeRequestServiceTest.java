@@ -142,25 +142,35 @@ class RoleUpgradeRequestServiceTest {
                     .id(5001L).userId(100L).requestedRole("DEV").status(RoleUpgradeRequestStatus.PENDING)
                     .createdAt(LocalDateTime.now()).build();
 
+            User promoted = User.builder().id(100L).email("viewer@test.com").name("Viewer User").role("DEV").build();
+
             when(userRepository.findByEmail("admin@test.com")).thenReturn(Mono.just(adminUser));
             when(roleUpgradeRequestRepository.findById(5001L)).thenReturn(Mono.just(request));
             when(roleUpgradeRequestRepository.transitionFromPending(
                     eq(5001L), eq("APPROVED"), anyLong(), any(LocalDateTime.class)))
                     .thenReturn(Mono.just(1L));
-            when(userService.updateUserRoleSafe(eq(100L), any(), eq("admin@test.com")))
-                    .thenReturn(Mono.empty());
-            when(userRepository.findById(100L)).thenReturn(Mono.just(
-                    User.builder().id(100L).email("viewer@test.com").name("Viewer User").role("DEV").build()));
+            // AUD18-M8: DB half joins the transaction; Cloudflare/email side effects run after commit
+            UserService.RoleChange change = new UserService.RoleChange(promoted, "VIEWER", null);
+            when(userService.updateUserRoleDbOnly(eq(100L), any(), eq("admin@test.com")))
+                    .thenReturn(Mono.just(change));
+            when(userService.applyRoleChangeSideEffects(change))
+                    .thenReturn(Mono.just(dev.catananti.dto.UserResponse.fromEntity(promoted)));
             when(emailService.sendRoleRequestApproved(anyString(), anyString(), anyString(), anyString()))
                     .thenReturn(Mono.empty());
 
             StepVerifier.create(service.approveRequest(5001L, "admin@test.com"))
                     .assertNext(result -> {
                         assertThat(result.getRequestedRole()).isEqualTo("DEV");
+                        // AUD19C-4: the response carries the role held BEFORE the promotion
+                        assertThat(result.getCurrentRole()).isEqualTo("VIEWER");
                     })
                     .verifyComplete();
 
-            verify(userService).updateUserRoleSafe(eq(100L), any(), eq("admin@test.com"));
+            verify(userService).updateUserRoleDbOnly(eq(100L), any(), eq("admin@test.com"));
+            verify(userService).applyRoleChangeSideEffects(change);
+            // AUD19C-4: the approval email announces VIEWER → DEV, not DEV → DEV
+            verify(emailService).sendRoleRequestApproved(
+                    "viewer@test.com", "Viewer User", "VIEWER", "DEV");
         }
 
         @Test
@@ -181,7 +191,8 @@ class RoleUpgradeRequestServiceTest {
                     .expectError(ResponseStatusException.class)
                     .verify();
 
-            verify(userService, never()).updateUserRoleSafe(anyLong(), any(), anyString());
+            verify(userService, never()).updateUserRoleDbOnly(anyLong(), any(), anyString());
+            verify(userService, never()).applyRoleChangeSideEffects(any());
         }
 
         @Test

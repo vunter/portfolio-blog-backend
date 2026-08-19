@@ -324,6 +324,27 @@ class EmailTemplateServiceTest {
  }
 
  @Test
+ @DisplayName("AUD18-JA9: role-upgrade-request escapes user-supplied reason (no HTML injection)")
+ void roleUpgradeRequestEscapesUserSuppliedReason() {
+ String html = service.render("role-upgrade-request", merge(
+ baseVars("#f59e0b 0%, #d97706 100%", "Role Upgrade Request"),
+ Map.of(
+ "userName", "Jane User",
+ "userEmail", "jane@example.com",
+ "requestedRole", "DEV",
+ "reason", "<img src=x onerror=alert(1)>gimme <b>DEV</b>"
+ )
+ ));
+
+ assertFalse(html.contains("<img src=x"),
+ "reason must be HTML-escaped — raw <img> tag leaked into the email");
+ assertFalse(html.contains("<b>DEV</b>"),
+ "reason must be HTML-escaped — raw <b> tag leaked into the email");
+ assertTrue(html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+ "escaped reason text should be present");
+ }
+
+ @Test
  @DisplayName("Each template includes its specific icon emoji")
  void templatesIncludeCorrectIcons() {
  // Spot-check a few templates for their unique icons

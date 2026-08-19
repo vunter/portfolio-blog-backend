@@ -22,6 +22,9 @@ public class UserResponse {
     private String bio;
     private String role;
     private Boolean active;
+    // AUD19: read-through of User.emailVerified so the account page can offer
+    // "resend verification" only when the address is still unverified.
+    private Boolean emailVerified;
     private Boolean hasPassword;
     private Boolean termsAccepted;
     private String preferredLocale;
@@ -38,6 +41,7 @@ public class UserResponse {
                 .bio(user.getBio())
                 .role(user.getRole())
                 .active(user.getActive())
+                .emailVerified(user.getEmailVerified())
                 .hasPassword(user.getPasswordHash() != null && !user.getPasswordHash().isEmpty())
                 .termsAccepted(user.getTermsAccepted())
                 .preferredLocale(user.getPreferredLocale())

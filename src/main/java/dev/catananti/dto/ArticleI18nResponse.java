@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
  * Prevents direct entity exposure and controls which fields are visible in the API.
  */
 public record ArticleI18nResponse(
-        Long articleId,
+        // AUD19C-SNOW: String, not Long — Snowflake ids exceed JS Number.MAX_SAFE_INTEGER (2^53)
+        String articleId,
         String locale,
         String title,
         String subtitle,
@@ -25,7 +26,7 @@ public record ArticleI18nResponse(
 
     public static ArticleI18nResponse from(ArticleI18n entity) {
         return new ArticleI18nResponse(
-                entity.getArticleId(),
+                String.valueOf(entity.getArticleId()),
                 entity.getLocale(),
                 entity.getTitle(),
                 entity.getSubtitle(),

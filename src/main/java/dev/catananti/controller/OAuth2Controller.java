@@ -3,6 +3,7 @@ package dev.catananti.controller;
 import dev.catananti.entity.UserSocialAccount;
 import dev.catananti.repository.UserRepository;
 import dev.catananti.repository.UserSocialAccountRepository;
+import dev.catananti.security.AuthCookieService;
 import dev.catananti.service.OAuth2Service;
 import dev.catananti.util.IpAddressExtractor;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +36,9 @@ public class OAuth2Controller {
     private final OAuth2Service oAuth2Service;
     private final UserRepository userRepository;
     private final UserSocialAccountRepository socialAccountRepository;
+    // AUD19C-C1B: shared auth-cookie contract (the inline copy here had drifted:
+    // access maxAge came from the response's expiresIn and refresh was always 7d).
+    private final AuthCookieService authCookieService;
 
     @Value("${jwt.cookie.secure:true}")
     private boolean cookieSecure;
@@ -136,18 +140,28 @@ public class OAuth2Controller {
                     };
 
                     return callbackMono.map(tokenResponse -> {
-                        ResponseCookie.ResponseCookieBuilder accessBuilder = ResponseCookie.from("access_token", tokenResponse.getAccessToken())
-                                .httpOnly(true).secure(cookieSecure).path("/api")
-                                .sameSite("Lax").maxAge(tokenResponse.getExpiresIn());
-                        ResponseCookie.ResponseCookieBuilder refreshBuilder = ResponseCookie.from("refresh_token", tokenResponse.getRefreshToken())
-                                .httpOnly(true).secure(cookieSecure).path("/api/v1/admin/auth")
-                                .sameSite("Lax").maxAge(Duration.ofDays(7));
-                        if (cookieDomain != null && !cookieDomain.isBlank()) {
-                            accessBuilder.domain(cookieDomain);
-                            refreshBuilder.domain(cookieDomain);
+                        // AUD18-A10: MFA-enabled accounts get a challenge instead of tokens —
+                        // mirror the password flow. There is no session yet, so no auth cookies
+                        // are set; the short-lived mfaToken travels in the URL *fragment*
+                        // (never sent to the server, so it cannot land in access logs) and the
+                        // SPA callback page routes to /auth/mfa-verify exactly like password
+                        // login does.
+                        if (Boolean.TRUE.equals(tokenResponse.getMfaRequired())) {
+                            StringBuilder fragment = new StringBuilder("mfa_required=true&mfa_token=")
+                                    .append(java.net.URLEncoder.encode(tokenResponse.getMfaToken(), java.nio.charset.StandardCharsets.UTF_8));
+                            if (tokenResponse.getEmail() != null) {
+                                fragment.append("&email=")
+                                        .append(java.net.URLEncoder.encode(tokenResponse.getEmail(), java.nio.charset.StandardCharsets.UTF_8));
+                            }
+                            return ResponseEntity.status(HttpStatus.FOUND)
+                                    .location(URI.create("/auth/oauth-callback#" + fragment))
+                                    .<Void>build();
                         }
-                        httpResponse.addCookie(accessBuilder.build());
-                        httpResponse.addCookie(refreshBuilder.build());
+                        // AUD19C-C1B: unified on AuthCookieService — access maxAge now comes from
+                        // jwt.expiration (same value expiresIn is derived from) and refresh keeps
+                        // its previous 7-day lifetime via rememberMe=true.
+                        authCookieService.addAccessTokenCookie(httpResponse, tokenResponse.getAccessToken());
+                        authCookieService.addRefreshTokenCookie(httpResponse, tokenResponse.getRefreshToken(), true);
                         // Coerce to a non-negative long so a malformed expiresIn cannot inject CR/LF
                         // into the Location header or build a malformed redirect target.
                         long expiresIn = Math.max(0L, tokenResponse.getExpiresIn());
@@ -163,7 +177,8 @@ public class OAuth2Controller {
         return userRepository.findByEmail(email)
                 .flatMapMany(user -> socialAccountRepository.findByUserId(user.getId()))
                 .map(account -> Map.<String, Object>of(
-                        "id", account.getId(),
+                        // AUD19C-SESSID: Snowflake ids > 2^53 lose precision as JSON numbers
+                        "id", String.valueOf(account.getId()),
                         "provider", account.getProvider(),
                         "providerEmail", account.getProviderEmail() != null ? account.getProviderEmail() : "",
                         "displayName", account.getDisplayName() != null ? account.getDisplayName() : "",

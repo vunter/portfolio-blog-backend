@@ -68,6 +68,11 @@ public interface UserRepository extends ReactiveCrudRepository<User, Long> {
     @Query("UPDATE users SET password_hash = :passwordHash, updated_at = :updatedAt WHERE id = :id")
     Mono<Long> updatePasswordHash(Long id, String passwordHash, LocalDateTime updatedAt);
 
+    /** AUD18-M8: persists the Cloudflare rule id created AFTER the role-change commit (CC-07 partial UPDATE). */
+    @Modifying
+    @Query("UPDATE users SET cf_email_rule_id = :ruleId, updated_at = :updatedAt WHERE id = :id")
+    Mono<Long> updateCfEmailRuleId(Long id, String ruleId, LocalDateTime updatedAt);
+
     /**
      * Marca o e-mail como verificado. A cláusula {@code email_verified = false}
      * torna a operação idempotente e devolve 0 quando já estava verificado, o que

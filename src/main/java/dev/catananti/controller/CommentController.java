@@ -128,21 +128,36 @@ public class CommentController {
             @PathVariable Long commentId,
             ServerHttpRequest request) {
         // Q2.6: UPDATE ... RETURNING returns the new count atomically — one roundtrip.
-        return deduplicationService
-                .map(svc -> svc.hasLikedComment(commentId, request)
-                        .flatMap(alreadyLiked -> {
-                            if (alreadyLiked) {
-                                return svc.removeCommentLike(commentId, request)
-                                        .then(commentService.unlikeCommentAndReturnCount(commentId))
-                                        .map(count -> Map.<String, Object>of("liked", false, "likesCount", count));
-                            } else {
-                                return svc.recordCommentLikeIfNew(commentId, request)
-                                        .then(commentService.likeCommentAndReturnCount(commentId))
-                                        .map(count -> Map.<String, Object>of("liked", true, "likesCount", count));
-                            }
-                        }))
-                .orElseGet(() -> commentService.likeCommentAndReturnCount(commentId)
-                        .map(count -> Map.<String, Object>of("liked", true, "likesCount", count)));
+        // AUD18-L2: validate the comment exists, is APPROVED and belongs to the slug's
+        // article BEFORE touching Redis or the count — otherwise a like on a bogus id
+        // wrote a dedup key and answered 200 {likesCount:0}.
+        return commentService.getApprovedCommentForArticle(slug, commentId)
+                .then(Mono.defer(() -> deduplicationService
+                        .map(svc -> svc.hasLikedComment(commentId, request)
+                                .flatMap(alreadyLiked -> {
+                                    if (alreadyLiked) {
+                                        // AUD18-M1: gate the decrement on the delete result (BUG-4
+                                        // pattern from ArticleController) — only adjust the count when
+                                        // removeCommentLike actually removed the dedup key, otherwise a
+                                        // racing/duplicate unlike would deflate the count.
+                                        return svc.removeCommentLike(commentId, request)
+                                                .flatMap(removed -> Boolean.TRUE.equals(removed)
+                                                        ? commentService.unlikeCommentAndReturnCount(commentId)
+                                                        : commentService.getCommentLikeCount(commentId))
+                                                .map(count -> Map.<String, Object>of("liked", false, "likesCount", count));
+                                    } else {
+                                        // AUD18-M1: gate the increment on the SETNX result — only
+                                        // increment when recordCommentLikeIfNew reports a genuinely new
+                                        // like, otherwise duplicate likes inflated the count.
+                                        return svc.recordCommentLikeIfNew(commentId, request)
+                                                .flatMap(isNew -> Boolean.TRUE.equals(isNew)
+                                                        ? commentService.likeCommentAndReturnCount(commentId)
+                                                        : commentService.getCommentLikeCount(commentId))
+                                                .map(count -> Map.<String, Object>of("liked", true, "likesCount", count));
+                                    }
+                                }))
+                        .orElseGet(() -> commentService.likeCommentAndReturnCount(commentId)
+                                .map(count -> Map.<String, Object>of("liked", true, "likesCount", count)))));
     }
 
     @GetMapping("/{commentId}/like/status")
@@ -155,8 +170,10 @@ public class CommentController {
                 .map(svc -> svc.hasLikedComment(commentId, request))
                 .orElseGet(() -> Mono.just(false));
 
-        return hasLikedMono.zipWith(commentService.getCommentLikeCount(commentId))
-                .map(tuple -> Map.<String, Object>of("liked", tuple.getT1(), "likesCount", tuple.getT2()));
+        // AUD18-L2: 404 when the comment doesn't exist / isn't APPROVED / isn't on this article
+        return commentService.getApprovedCommentForArticle(slug, commentId)
+                .then(hasLikedMono.zipWith(commentService.getCommentLikeCount(commentId))
+                        .map(tuple -> Map.<String, Object>of("liked", tuple.getT1(), "likesCount", tuple.getT2())));
     }
 
     /**

@@ -165,7 +165,6 @@ This starts: app (8080), PostgreSQL (5432), Redis (6379), Prometheus (9090), Gra
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/v1/analytics/event` | Track custom event |
-| POST | `/api/v1/analytics/view/{slug}` | Track article view |
 
 ### Authentication
 
@@ -197,7 +196,6 @@ This starts: app (8080), PostgreSQL (5432), Redis (6379), Prometheus (9090), Gra
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/admin/articles/{id}/versions` | Version history |
-| GET | `/api/v1/admin/articles/{id}/versions/latest` | Latest version |
 | GET | `/api/v1/admin/articles/{id}/versions/{num}` | Specific version |
 | POST | `/api/v1/admin/articles/{id}/versions/{num}/restore` | Restore version |
 | GET | `/api/v1/admin/articles/{id}/versions/compare` | Compare versions |
@@ -218,7 +216,6 @@ This starts: app (8080), PostgreSQL (5432), Redis (6379), Prometheus (9090), Gra
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/admin/tags` | List all tags |
-| GET | `/api/v1/admin/tags/{id}` | Get tag by ID |
 | POST | `/api/v1/admin/tags` | Create tag |
 | PUT | `/api/v1/admin/tags/{id}` | Update tag |
 | DELETE | `/api/v1/admin/tags/{id}` | Delete tag |
@@ -236,7 +233,6 @@ This starts: app (8080), PostgreSQL (5432), Redis (6379), Prometheus (9090), Gra
 | DELETE | `/api/v1/admin/users/{id}` | Delete user |
 | PUT | `/api/v1/admin/users/{id}/activate` | Activate user |
 | PUT | `/api/v1/admin/users/{id}/deactivate` | Deactivate user |
-| GET | `/api/v1/admin/users/stats` | User statistics |
 
 ### Admin - Dashboard & Analytics
 
@@ -282,11 +278,9 @@ This starts: app (8080), PostgreSQL (5432), Redis (6379), Prometheus (9090), Gra
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/admin/export` | Export blog data (JSON) |
 | GET | `/api/v1/admin/export/json` | Download as JSON file |
 | GET | `/api/v1/admin/export/markdown` | Export as Markdown |
 | POST | `/api/v1/admin/export/import` | Import blog data |
-| GET | `/api/v1/admin/export/stats` | Export preview stats |
 
 ### Admin - Images
 

@@ -44,18 +44,6 @@ public class BookmarkController {
         return bookmarkService.getBookmarks(visitorId, page, size);
     }
 
-    @GetMapping("/{articleSlug}")
-    @Operation(summary = "Check if article is bookmarked")
-    public Mono<BookmarkStatus> isBookmarked(
-            @RequestHeader("X-Visitor-Id") @Size(min = 8, max = 64)
-            @Pattern(regexp = "^[a-zA-Z0-9-]+$", message = "Visitor ID must contain only alphanumeric characters and dashes")
-            String visitorId,
-            @PathVariable @Size(min = 1, max = 200) String articleSlug) {
-        log.debug("Checking bookmark for articleSlug={}", articleSlug);
-        return bookmarkService.isBookmarked(visitorId, articleSlug)
-                .map(BookmarkStatus::new);
-    }
-
     @PostMapping("/{articleSlug}")
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Bookmark an article")

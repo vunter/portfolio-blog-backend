@@ -12,9 +12,6 @@ public interface ArticleVersionRepository extends ReactiveCrudRepository<Article
 
     Flux<ArticleVersion> findByArticleIdOrderByVersionNumberDesc(Long articleId);
 
-    @Query("SELECT * FROM article_versions WHERE article_id = :articleId ORDER BY version_number DESC LIMIT 1")
-    Mono<ArticleVersion> findLatestByArticleId(Long articleId);
-
     @Query("SELECT COALESCE(MAX(version_number), 0) FROM article_versions WHERE article_id = :articleId")
     Mono<Integer> findMaxVersionNumber(Long articleId);
 

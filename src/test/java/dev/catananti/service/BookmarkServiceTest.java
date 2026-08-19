@@ -215,58 +215,6 @@ class BookmarkServiceTest {
         }
     }
 
-    // ==================== isBookmarked ====================
-
-    @Nested
-    @DisplayName("isBookmarked")
-    class IsBookmarked {
-
-        @Test
-        @DisplayName("Should return true when bookmark exists")
-        void shouldReturnTrueWhenBookmarkExists() {
-            // Given
-            String hashedId = bookmarkService.hashVisitorId(visitorId);
-            when(articleRepository.findBySlug(articleSlug))
-                    .thenReturn(Mono.just(testArticle));
-            when(bookmarkRepository.findByArticleIdAndVisitorHash(articleId, hashedId))
-                    .thenReturn(Mono.just(testBookmark));
-
-            // When & Then
-            StepVerifier.create(bookmarkService.isBookmarked(visitorId, articleSlug))
-                    .expectNext(true)
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("Should return false when bookmark does not exist")
-        void shouldReturnFalseWhenBookmarkDoesNotExist() {
-            // Given
-            String hashedId = bookmarkService.hashVisitorId(visitorId);
-            when(articleRepository.findBySlug(articleSlug))
-                    .thenReturn(Mono.just(testArticle));
-            when(bookmarkRepository.findByArticleIdAndVisitorHash(articleId, hashedId))
-                    .thenReturn(Mono.empty());
-
-            // When & Then
-            StepVerifier.create(bookmarkService.isBookmarked(visitorId, articleSlug))
-                    .expectNext(false)
-                    .verifyComplete();
-        }
-
-        @Test
-        @DisplayName("Should return false when article not found")
-        void shouldReturnFalseWhenArticleNotFound() {
-            // Given
-            when(articleRepository.findBySlug("non-existent"))
-                    .thenReturn(Mono.empty());
-
-            // When & Then
-            StepVerifier.create(bookmarkService.isBookmarked(visitorId, "non-existent"))
-                    .expectNext(false)
-                    .verifyComplete();
-        }
-    }
-
     // ==================== addBookmark ====================
 
     @Nested
