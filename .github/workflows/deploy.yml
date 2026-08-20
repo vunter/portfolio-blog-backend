@@ -502,7 +502,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies & build
@@ -888,11 +888,18 @@ jobs:
                 return 1
               fi
               echo "!!! Rolling back to previous SHA: $PREV_DEPLOY_SHA"
+              # The playwright sidecar rolls back with the API on purpose: the
+              # Java client and the browser server must run the same minor, or
+              # every PDF request fails the version handshake. Leaving the new
+              # sidecar against a rolled-back API would be a silent outage —
+              # the smoke tests below only cover /api/v1/languages and /.
               if docker pull "ghcr.io/vunter/portfolio-blog-api:${PREV_DEPLOY_SHA}" \
-                && docker pull "ghcr.io/vunter/portfolio-blog-frontend:${PREV_DEPLOY_SHA}"; then
+                && docker pull "ghcr.io/vunter/portfolio-blog-frontend:${PREV_DEPLOY_SHA}" \
+                && docker pull "ghcr.io/vunter/portfolio-blog-playwright:${PREV_DEPLOY_SHA}"; then
                 docker tag "ghcr.io/vunter/portfolio-blog-api:${PREV_DEPLOY_SHA}" portfolio-blog-api:latest
                 docker tag "ghcr.io/vunter/portfolio-blog-frontend:${PREV_DEPLOY_SHA}" portfolio-blog-frontend:latest
-                doppler run -- docker compose -f docker-compose.cloud.yml up -d --wait --wait-timeout 120 --no-deps --force-recreate app frontend || true
+                docker tag "ghcr.io/vunter/portfolio-blog-playwright:${PREV_DEPLOY_SHA}" portfolio-blog-playwright:latest
+                doppler run -- docker compose -f docker-compose.cloud.yml up -d --wait --wait-timeout 120 --no-deps --force-recreate playwright app frontend || true
                 docker exec blog-nginx nginx -s reload || true
                 echo "!!! Rollback complete to SHA $PREV_DEPLOY_SHA"
               else

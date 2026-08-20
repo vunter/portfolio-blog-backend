@@ -216,9 +216,16 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!-- Override Boot-managed r2dbc-postgresql (4.0.7 and 4.1.0 both manage
+		     1.1.1.RELEASE, so a Boot upgrade will not bring this): 1.1.2.RELEASE
+		     fixes reference-counting and concurrency bugs in ReactorNettyClient
+		     (#717) plus an SSL handshake truncation, both of which sit directly
+		     under this app's reactive driver path. Drop the pin once a Boot BOM
+		     manages 1.1.2 or newer. -->
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>r2dbc-postgresql</artifactId>
+			<version>1.1.2.RELEASE</version>
 		</dependency>
 
 		<!-- Flyway: versioned DB migrations (uses JDBC alongside R2DBC) -->
