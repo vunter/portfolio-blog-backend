@@ -487,11 +487,16 @@
 			<artifactId>geoip2</artifactId>
 			<version>5.2.0</version>
 		</dependency>
-		<!-- Q13.1: Structured JSON logging for production (log aggregation: ELK, Datadog, CloudWatch) -->
+		<!-- Q13.1: Structured JSON logging for production (log aggregation: ELK, Datadog, CloudWatch).
+		     9.0 requires Jackson >= 3.0 (tools.jackson.*) and drops Jackson 2 support. That is
+		     coherent with Spring Boot 4, which manages jackson-bom 3.x and puts Jackson 3 on the
+		     classpath by default. The LogstashEncoder XML surface used by logback-spring.xml
+		     (includeMdcKeyName / timeZone / fieldNames) is unchanged in 9.0; only the
+		     decorator/extension API was reworked, and this project registers no decorators. -->
 		<dependency>
 			<groupId>net.logstash.logback</groupId>
 			<artifactId>logstash-logback-encoder</artifactId>
-			<version>8.0</version>
+			<version>9.0</version>
 		</dependency>
 	</dependencies>
 
