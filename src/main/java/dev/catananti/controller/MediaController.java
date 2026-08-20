@@ -148,7 +148,7 @@ public class MediaController {
     ) {
         static MediaAssetResponse from(MediaAsset asset) {
             return new MediaAssetResponse(
-                    String.valueOf(asset.getId()),
+                    asset.getId() != null ? String.valueOf(asset.getId()) : null,
                     asset.getOriginalFilename(),
                     asset.getContentType(),
                     asset.getFileSize(),

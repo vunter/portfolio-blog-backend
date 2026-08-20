@@ -24,9 +24,13 @@ public record ArticleI18nResponse(
         LocalDateTime translatedAt
 ) {
 
+    private static String asString(Long value) {
+        return value != null ? String.valueOf(value) : null;
+    }
+
     public static ArticleI18nResponse from(ArticleI18n entity) {
         return new ArticleI18nResponse(
-                String.valueOf(entity.getArticleId()),
+                asString(entity.getArticleId()),
                 entity.getLocale(),
                 entity.getTitle(),
                 entity.getSubtitle(),

@@ -21,14 +21,18 @@ public record AuditLogResponse(
         LocalDateTime createdAt
 ) {
 
+    private static String asString(Long value) {
+        return value != null ? String.valueOf(value) : null;
+    }
+
     public static AuditLogResponse from(AuditLog log) {
         return new AuditLogResponse(
-                String.valueOf(log.getId()),
+                asString(log.getId()),
                 log.getAction(),
                 log.getEntityType(),
                 log.getEntityId(),
                 // performedBy is null for failed logins — keep it null, not "null"
-                log.getPerformedBy() != null ? String.valueOf(log.getPerformedBy()) : null,
+                asString(log.getPerformedBy()),
                 log.getPerformedByEmail(),
                 log.getDetails(),
                 log.getIpAddress(),
