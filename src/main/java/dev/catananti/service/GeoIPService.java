@@ -80,8 +80,11 @@ public class GeoIPService {
             if (addr.isLoopbackAddress() || addr.isSiteLocalAddress() || addr.isLinkLocalAddress()) {
                 return Optional.<String>empty();
             }
+            // geoip2 5.x: responses and records are Java records. The 4.x
+            // getCountry()/getIsoCode() getters still exist but are deprecated
+            // for removal in 6.0 — use the record accessors.
             CountryResponse response = reader.country(addr);
-            String code = response.getCountry().getIsoCode();
+            String code = response.country().isoCode();
             return Optional.ofNullable(code);
         })
         .subscribeOn(Schedulers.boundedElastic())

@@ -16,6 +16,8 @@ import reactor.test.StepVerifier;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.InetAddress;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,6 +33,33 @@ class GeoIPServiceTest {
     void setUp() {
         geoIPService = new GeoIPService();
         mockReader = mock(DatabaseReader.class);
+    }
+
+    /**
+     * Build a real CountryResponse carrying the given ISO code.
+     * <p>
+     * geoip2 5.x turned CountryResponse and Country into Java records, so the
+     * previous {@code mock(CountryResponse.class)} + {@code when(...getCountry())}
+     * stubbing no longer applies — records are final and their accessors are
+     * generated, not overridable. Constructing the real records via their
+     * canonical constructors is both simpler and a stronger test: it exercises
+     * the actual accessor chain the service calls.
+     */
+    private static CountryResponse countryResponseWithIsoCode(String isoCode) {
+        Country country = new Country(
+                List.of(),   // locales
+                null,        // confidence
+                null,        // geonameId
+                false,       // isInEuropeanUnion
+                isoCode,
+                Map.of());   // names
+        return new CountryResponse(
+                null,        // continent
+                country,
+                null,        // maxmind
+                null,        // registeredCountry
+                null,        // representedCountry
+                null);       // traits
     }
 
     /**
@@ -149,11 +178,8 @@ class GeoIPServiceTest {
         void getCountryCode_ShouldReturnCountryCode_ForValidPublicIp() throws Exception {
             setReader(mockReader);
 
-            CountryResponse response = mock(CountryResponse.class);
-            Country country = mock(Country.class);
-            when(response.getCountry()).thenReturn(country);
-            when(country.getIsoCode()).thenReturn("US");
-            when(mockReader.country(any(InetAddress.class))).thenReturn(response);
+            when(mockReader.country(any(InetAddress.class)))
+                    .thenReturn(countryResponseWithIsoCode("US"));
 
             StepVerifier.create(geoIPService.getCountryCode("8.8.8.8"))
                     .assertNext(code -> assertThat(code).isEqualTo("US"))
@@ -165,11 +191,8 @@ class GeoIPServiceTest {
         void getCountryCode_ShouldTrimIpAddress() throws Exception {
             setReader(mockReader);
 
-            CountryResponse response = mock(CountryResponse.class);
-            Country country = mock(Country.class);
-            when(response.getCountry()).thenReturn(country);
-            when(country.getIsoCode()).thenReturn("BR");
-            when(mockReader.country(any(InetAddress.class))).thenReturn(response);
+            when(mockReader.country(any(InetAddress.class)))
+                    .thenReturn(countryResponseWithIsoCode("BR"));
 
             StepVerifier.create(geoIPService.getCountryCode("  8.8.8.8  "))
                     .assertNext(code -> assertThat(code).isEqualTo("BR"))
@@ -181,11 +204,8 @@ class GeoIPServiceTest {
         void getCountryCode_ShouldReturnEmpty_WhenCountryCodeIsNull() throws Exception {
             setReader(mockReader);
 
-            CountryResponse response = mock(CountryResponse.class);
-            Country country = mock(Country.class);
-            when(response.getCountry()).thenReturn(country);
-            when(country.getIsoCode()).thenReturn(null);
-            when(mockReader.country(any(InetAddress.class))).thenReturn(response);
+            when(mockReader.country(any(InetAddress.class)))
+                    .thenReturn(countryResponseWithIsoCode(null));
 
             StepVerifier.create(geoIPService.getCountryCode("8.8.8.8"))
                     .verifyComplete();
