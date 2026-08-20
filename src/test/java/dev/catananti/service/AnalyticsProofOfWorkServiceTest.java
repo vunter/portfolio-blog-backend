@@ -134,7 +134,7 @@ class AnalyticsProofOfWorkServiceTest {
         @DisplayName("should return challenge response with correct fields")
         void shouldReturnChallengeResponse() {
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
-            when(valueOps.set(anyString(), anyString(), any())).thenReturn(Mono.just(true));
+            when(valueOps.set(anyString(), anyString(), any(java.time.Duration.class))).thenReturn(Mono.just(true));
 
             StepVerifier.create(service.issueChallenge())
                     .assertNext(response -> {
@@ -152,7 +152,7 @@ class AnalyticsProofOfWorkServiceTest {
         @DisplayName("should store challenge in Redis with TTL")
         void shouldStoreInRedis() {
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
-            when(valueOps.set(anyString(), anyString(), any())).thenReturn(Mono.just(true));
+            when(valueOps.set(anyString(), anyString(), any(java.time.Duration.class))).thenReturn(Mono.just(true));
 
             StepVerifier.create(service.issueChallenge())
                     .assertNext(response -> {

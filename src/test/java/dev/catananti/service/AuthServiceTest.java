@@ -460,7 +460,7 @@ class AuthServiceTest {
         when(passwordEncoder.matches("password123", mfaUser.getPasswordHash())).thenReturn(true);
         when(loginAttemptService.clearFailedAttempts("test@example.com")).thenReturn(Mono.empty());
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.set(startsWith("mfa:token:"), eq("200"), any())).thenReturn(Mono.just(true));
+        when(valueOperations.set(startsWith("mfa:token:"), eq("200"), any(java.time.Duration.class))).thenReturn(Mono.just(true));
 
         StepVerifier.create(authService.loginWithRefreshToken(request, "127.0.0.1", "UA"))
                 .assertNext(resp -> {

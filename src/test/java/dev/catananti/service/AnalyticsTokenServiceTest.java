@@ -47,7 +47,7 @@ class AnalyticsTokenServiceTest {
         @DisplayName("should return token response with non-null token and future expiresAt")
         void shouldReturnTokenResponse() {
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
-            when(valueOps.set(anyString(), anyString(), any())).thenReturn(Mono.just(true));
+            when(valueOps.set(anyString(), anyString(), any(java.time.Duration.class))).thenReturn(Mono.just(true));
 
             StepVerifier.create(service.issueToken())
                     .assertNext(response -> {
@@ -65,7 +65,7 @@ class AnalyticsTokenServiceTest {
         @DisplayName("should store token in Redis with TTL")
         void shouldStoreTokenInRedis() {
             when(redisTemplate.opsForValue()).thenReturn(valueOps);
-            when(valueOps.set(anyString(), anyString(), any())).thenReturn(Mono.just(true));
+            when(valueOps.set(anyString(), anyString(), any(java.time.Duration.class))).thenReturn(Mono.just(true));
 
             StepVerifier.create(service.issueToken())
                     .assertNext(response -> {

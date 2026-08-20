@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.7</version>
+		<version>4.1.1</version>
 		<relativePath/>
 	</parent>
 	<groupId>dev.catananti</groupId>
@@ -46,53 +46,30 @@
 		<lombok.version>1.18.42</lombok.version>
 		<jjwt.version>0.13.0</jjwt.version>
 		<testcontainers.version>1.21.3</testcontainers.version>
-		<spring-cloud.version>2025.1.1</spring-cloud.version>
-		<!-- Override Boot-managed pgjdbc (4.0.6 manages 42.7.10, still vulnerable):
-		     42.7.11 fixes CVE-2026-42198 (SCRAM PBKDF2 iteration client-side DoS). -->
-		<postgresql.version>42.7.13</postgresql.version>
+		<!-- Spring Cloud Oakwood. 2025.1.1 supports Boot 4.0.x ONLY — the train's
+		     compatibility matrix lists Boot 4.1.x from 2025.1.2 onwards, so moving to
+		     Boot 4.1 requires moving this too. 2025.1.3 is the current GA of the train. -->
+		<spring-cloud.version>2025.1.3</spring-cloud.version>
+		<!-- NOTE: the pgjdbc override (42.7.13, for CVE-2026-42198 — SCRAM PBKDF2
+		     iteration client-side DoS) was dropped on the move to Spring Boot 4.1.1,
+		     which manages exactly 42.7.13. -->
 	</properties>
 	<dependencyManagement>
 		<dependencies>
-			<!-- Override Boot-managed Spring Framework (parent 4.0.7 manages 7.0.7, affected
-			     by CVE-2026-41842, CVSS 7.5, which trips the failBuildOnCVSS=7 dependency-check
-			     gate): 7.0.8 ships the fix. Imported first so it wins over the Spring Boot BOM.
-			     Remove once Spring Boot 4.0.8 (managing 7.0.8) is adopted. -->
-			<dependency>
-				<groupId>org.springframework</groupId>
-				<artifactId>spring-framework-bom</artifactId>
-				<version>7.0.8</version>
-				<type>pom</type>
-				<scope>import</scope>
-			</dependency>
-			<!-- Override Boot-managed netty (4.0.6 manages 4.2.12.Final, still vulnerable):
-			     4.2.16.Final fixes the 2026-55xxx/56xxx/59xxx batch (ssl-ocsp, haproxy
-			     codec, transport — includes CVE-2026-56820, CVSS 9.1). netty-bom is
-			     imported first so it wins over the Spring Boot BOM. -->
-			<dependency>
-				<groupId>io.netty</groupId>
-				<artifactId>netty-bom</artifactId>
-				<version>4.2.17.Final</version>
-				<type>pom</type>
-				<scope>import</scope>
-			</dependency>
-			<!-- httpcore5/httpclient5 arrive transitively via spring-cloud-vault-config.
-			     CVE-2026-54399/54428 (request smuggling in core5 < 5.4.3) and
-			     CVE-2026-64607 (client5 < 5.6.3) trip the CVSS>=7 gate. -->
-			<dependency>
-				<groupId>org.apache.httpcomponents.core5</groupId>
-				<artifactId>httpcore5</artifactId>
-				<version>5.4.3</version>
-			</dependency>
-			<dependency>
-				<groupId>org.apache.httpcomponents.core5</groupId>
-				<artifactId>httpcore5-h2</artifactId>
-				<version>5.4.3</version>
-			</dependency>
-			<dependency>
-				<groupId>org.apache.httpcomponents.client5</groupId>
-				<artifactId>httpclient5</artifactId>
-				<version>5.6.4</version>
-			</dependency>
+			<!--
+			  CVE-driven BOM overrides RETIRED by the move to Spring Boot 4.1.1, which
+			  manages each at or above the fixed version. Listed here so the security
+			  rationale is not lost if a future Boot bump regresses any of them — verify
+			  against this table before downgrading the parent:
+			    spring-framework  7.0.8+  CVE-2026-41842 (CVSS 7.5)   — 4.1.1 manages 7.0.9
+			    netty             4.2.16+ CVE-2026-56820 (CVSS 9.1) et al
+			                                                          — 4.1.1 manages 4.2.17.Final
+			    httpcore5         5.4.3+  CVE-2026-54399 / 54428      — 4.1.1 manages 5.4.3
+			    httpclient5       5.6.3+  CVE-2026-64607              — 4.1.1 manages 5.6.4
+			    log4j2            2.25.4+ CVE-2026-34477 / 34479      — 4.1.1 manages 2.25.5
+			    pgjdbc            42.7.11+ CVE-2026-42198             — 4.1.1 manages 42.7.13
+			  The overrides below are the ones Boot still does NOT cover.
+			-->
 			<!-- scram comes transitively from r2dbc-postgresql at 3.2:
 			     CVE-2026-53712 (timing side channel, fixed in 3.3). -->
 			<dependency>
@@ -111,15 +88,6 @@
 				<groupId>org.webjars</groupId>
 				<artifactId>swagger-ui</artifactId>
 				<version>5.32.13</version>
-			</dependency>
-			<dependency>
-				<groupId>org.apache.logging.log4j</groupId>
-				<artifactId>log4j-bom</artifactId>
-				<!-- 2.25.4 fixes CVE-2026-34477 (TLS hostname verify bypass) and
-				     CVE-2026-34479 (Log4j1XmlLayout XML injection). -->
-				<version>2.25.4</version>
-				<type>pom</type>
-				<scope>import</scope>
 			</dependency>
 			<dependency>
 				<groupId>org.springframework.cloud</groupId>
@@ -216,16 +184,14 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
-		<!-- Override Boot-managed r2dbc-postgresql (4.0.7 and 4.1.0 both manage
-		     1.1.1.RELEASE, so a Boot upgrade will not bring this): 1.1.2.RELEASE
-		     fixes reference-counting and concurrency bugs in ReactorNettyClient
-		     (#717) plus an SSL handshake truncation, both of which sit directly
-		     under this app's reactive driver path. Drop the pin once a Boot BOM
-		     manages 1.1.2 or newer. -->
+		<!-- r2dbc-postgresql 1.1.2.RELEASE fixes reference-counting/concurrency bugs in
+		     ReactorNettyClient (#717) plus an SSL handshake truncation, both directly
+		     under this app's reactive driver path. The explicit pin is gone because
+		     Spring Boot 4.1.1 manages 1.1.2.RELEASE itself (4.0.7 and 4.1.0 managed
+		     1.1.1.RELEASE — do not drop below 4.1.1 without restoring the pin). -->
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>r2dbc-postgresql</artifactId>
-			<version>1.1.2.RELEASE</version>
 		</dependency>
 
 		<!-- Flyway: versioned DB migrations (uses JDBC alongside R2DBC) -->
