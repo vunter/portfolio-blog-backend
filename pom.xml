@@ -303,7 +303,7 @@
 		<dependency>
 			<groupId>com.resend</groupId>
 			<artifactId>resend-java</artifactId>
-			<version>4.4.0</version>
+			<version>4.13.0</version>
 		</dependency>
 
 		<!-- F-172: Thymeleaf for HTML email templates -->
@@ -330,30 +330,37 @@
 			<version>1.51.0</version>
 		</dependency>
 		<!-- JSoup for HTML parsing/cleaning.
-		     1.18.1 is staleness-only (no unpatched CVE) — pin kept to avoid an
-		     unverified bump breaking the HTML sanitizer; current-enough for the gate. -->
+		     1.23.1 closes CVE-2026-71497, which affects 1.14.3-1.23.0: Cleaner can
+		     emit markup when malformed HTML is cleaned through a custom Safelist that
+		     permits raw-text elements. Neither Safelist here allows one, so the old
+		     pin was not exploitable — but it WAS in the affected range, contrary to
+		     the "no unpatched CVE" note this comment used to carry.
+		     Two behaviour changes came with it: 1.20.1 stopped honouring self-closing
+		     non-void tags (a <div/> now swallows its following siblings) and 1.21.1
+		     escapes < and > inside attributes. Verified against the production
+		     resume_templates row, which uses no self-closing tags. -->
 		<dependency>
 			<groupId>org.jsoup</groupId>
 			<artifactId>jsoup</artifactId>
-			<version>1.18.1</version>
+			<version>1.23.1</version>
 		</dependency>
 
 		<!-- Resilience4j Circuit Breaker for reactive external service calls -->
 		<dependency>
 			<groupId>io.github.resilience4j</groupId>
 			<artifactId>resilience4j-circuitbreaker</artifactId>
-			<version>2.3.0</version>
+			<version>2.4.0</version>
 		</dependency>
 		<dependency>
 			<groupId>io.github.resilience4j</groupId>
 			<artifactId>resilience4j-reactor</artifactId>
-			<version>2.3.0</version>
+			<version>2.4.0</version>
 		</dependency>
 		<!-- OBS-1: exports circuit-breaker metrics to Micrometer (wired by ResilienceConfig) -->
 		<dependency>
 			<groupId>io.github.resilience4j</groupId>
 			<artifactId>resilience4j-micrometer</artifactId>
-			<version>2.3.0</version>
+			<version>2.4.0</version>
 		</dependency>
 
 		<!-- AOP for Performance Monitoring -->
@@ -380,7 +387,7 @@
 		<dependency>
 			<groupId>io.sentry</groupId>
 			<artifactId>sentry-spring-boot-4-starter</artifactId>
-			<version>8.36.0</version>
+			<version>8.53.0</version>
 		</dependency>
 
 		<!-- 2FA: TOTP (Time-based One-Time Password) -->
@@ -393,12 +400,12 @@
 		<dependency>
 			<groupId>com.google.zxing</groupId>
 			<artifactId>core</artifactId>
-			<version>3.5.3</version>
+			<version>3.5.4</version>
 		</dependency>
 		<dependency>
 			<groupId>com.google.zxing</groupId>
 			<artifactId>javase</artifactId>
-			<version>3.5.3</version>
+			<version>3.5.4</version>
 		</dependency>
 
 		<!-- Test Dependencies -->

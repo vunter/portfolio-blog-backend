@@ -26,6 +26,32 @@ class HtmlSanitizerServiceTest {
             assertThat(sanitizerService.sanitize(null)).isNull();
         }
 
+        // jsoup 1.20.1 stopped honouring self-closing syntax on non-void tags:
+        // <div/> no longer closes itself, so everything after it becomes a child
+        // instead of a sibling. That reshapes the tree a PDF is laid out from.
+        // Pinning it here means the next jsoup bump has to face the change
+        // instead of silently re-nesting stored content.
+        @Test
+        @DisplayName("Self-closing non-void tags nest their siblings (jsoup >= 1.20.1)")
+        void shouldNestSiblingsAfterSelfClosingNonVoidTag() {
+            String sanitized = sanitizerService.sanitize("<div/><p>after</p>");
+
+            assertThat(sanitized).contains("<p>after</p>");
+            assertThat(sanitized.replaceAll("\\s+", ""))
+                    .as("the <p> is parsed inside the <div>, not beside it")
+                    .contains("<div><p>after</p></div>");
+        }
+
+        // 1.21.1 escapes < and > inside attribute values as an mXSS defence.
+        @Test
+        @DisplayName("Angle brackets inside attributes are escaped (jsoup >= 1.21.1)")
+        void shouldEscapeAngleBracketsInAttributes() {
+            String sanitized = sanitizerService.sanitize("<a href=\"/x\" title=\"a<b\">link</a>");
+
+            assertThat(sanitized).contains("&lt;b");
+            assertThat(sanitized).doesNotContain("title=\"a<b\"");
+        }
+
         @Test
         @DisplayName("Should return empty string for empty input")
         void shouldReturnEmptyForEmpty() {
