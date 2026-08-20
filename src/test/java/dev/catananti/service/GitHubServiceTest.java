@@ -1,8 +1,8 @@
 package dev.catananti.service;
 
 import dev.catananti.dto.GitHubRepoResponse;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,15 +45,16 @@ class GitHubServiceTest {
     }
 
     @AfterEach
-    void tearDown() throws IOException {
-        server.shutdown();
+    void tearDown() {
+        // okhttp 5 / mockwebserver3: MockWebServer is Closeable; shutdown() is gone.
+        server.close();
     }
 
     @Test
     void fetchesAndMapsReposIgnoringUnknownFields() {
-        server.enqueue(new MockResponse()
+        server.enqueue(new MockResponse.Builder()
                 .setHeader("Content-Type", "application/json")
-                .setBody("""
+                .body("""
                         [{
                           "id": 1,
                           "name": "demo",
@@ -70,7 +71,8 @@ class GitHubServiceTest {
                           "pushed_at": "2026-01-01T00:00:00Z",
                           "unmapped_field": "ignored"
                         }]
-                        """));
+                        """)
+                .build());
 
         StepVerifier.create(service.getRepos(6).collectList())
                 .assertNext(repos -> {
@@ -88,7 +90,7 @@ class GitHubServiceTest {
 
     @Test
     void returnsEmptyOnGitHubError() {
-        server.enqueue(new MockResponse().setResponseCode(504));
+        server.enqueue(new MockResponse.Builder().code(504).build());
 
         StepVerifier.create(service.getRepos(6).collectList())
                 .assertNext(repos -> assertThat(repos).isEmpty())

@@ -55,6 +55,14 @@
 		  Grep for the old version before changing it and update all four together.
 		-->
 		<playwright.version>1.62.0</playwright.version>
+		<!--
+		  okhttp arrives twice: transitively via resend-java (runtime, main) and via
+		  mockwebserver3 (test). They must be the SAME version — mockwebserver3 5.5.0
+		  against okhttp 5.4.0 is a NoSuchMethodError waiting to happen, and Maven's
+		  nearest-wins would otherwise silently pick resend's copy for both. Managing
+		  it explicitly pins both sides to one version.
+		-->
+		<okhttp.version>5.5.0</okhttp.version>
 		<testcontainers.version>1.21.3</testcontainers.version>
 		<!-- Spring Cloud Oakwood. 2025.1.1 supports Boot 4.0.x ONLY — the train's
 		     compatibility matrix lists Boot 4.1.x from 2025.1.2 onwards, so moving to
@@ -80,6 +88,13 @@
 			    pgjdbc            42.7.11+ CVE-2026-42198             — 4.1.1 manages 42.7.13
 			  The overrides below are the ones Boot still does NOT cover.
 			-->
+			<!-- Align okhttp across resend-java (main, runtime) and mockwebserver3
+			     (test) — see the ${okhttp.version} note in <properties>. -->
+			<dependency>
+				<groupId>com.squareup.okhttp3</groupId>
+				<artifactId>okhttp</artifactId>
+				<version>${okhttp.version}</version>
+			</dependency>
 			<!-- scram comes transitively from r2dbc-postgresql at 3.2:
 			     CVE-2026-53712 (timing side channel, fixed in 3.3). -->
 			<dependency>
@@ -282,11 +297,14 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-mail</artifactId>
 		</dependency>
-		<!-- Email (Resend HTTP API — preferred) -->
+		<!-- Email (Resend HTTP API — preferred).
+		     4.19.0 moves its transitive okhttp from 4.12.0 to 5.4.0. That is what makes
+		     the mockwebserver3 5.x upgrade below coherent: main and test code now agree
+		     on a single okhttp major instead of straddling 4.x and 5.x. -->
 		<dependency>
 			<groupId>com.resend</groupId>
 			<artifactId>resend-java</artifactId>
-			<version>4.13.0</version>
+			<version>4.19.0</version>
 		</dependency>
 
 		<!-- F-172: Thymeleaf for HTML email templates -->
@@ -398,11 +416,17 @@
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
 		</dependency>
-		<!-- MockWebServer for HTTP client testing -->
+		<!-- MockWebServer for HTTP client testing.
+		     okhttp 5 relocated this to the `mockwebserver3` artifact/package. The old
+		     `com.squareup.okhttp3:mockwebserver` coordinate is still published at 5.x
+		     as a deprecated wrapper, but it drags in JUnit 4 (this project is on
+		     JUnit 6) — so the real artifact is used instead.
+		     Pinned to the same okhttp version resolved for main code; see the
+		     okhttp alignment note in <dependencyManagement>. -->
 		<dependency>
 			<groupId>com.squareup.okhttp3</groupId>
-			<artifactId>mockwebserver</artifactId>
-			<version>4.12.0</version>
+			<artifactId>mockwebserver3</artifactId>
+			<version>${okhttp.version}</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>

@@ -3,8 +3,8 @@ package dev.catananti.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.catananti.config.ResilienceConfig;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
+import mockwebserver3.MockResponse;
+import mockwebserver3.MockWebServer;
 import org.junit.jupiter.api.*;
 import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
@@ -51,8 +51,9 @@ class CloudflareEmailRoutingServiceTest {
     }
 
     @AfterEach
-    void tearDown() throws IOException {
-        mockServer.shutdown();
+    void tearDown() {
+        // okhttp 5 / mockwebserver3: MockWebServer is Closeable; shutdown() is gone.
+        mockServer.close();
     }
 
     @Nested
@@ -66,9 +67,10 @@ class CloudflareEmailRoutingServiceTest {
                     true,
                     new CloudflareEmailRoutingService.CfRuleResult("rule-abc", "test", true, null),
                     null, null);
-            mockServer.enqueue(new MockResponse()
-                    .setBody(objectMapper.writeValueAsString(response))
-                    .setHeader("Content-Type", "application/json"));
+            mockServer.enqueue(new MockResponse.Builder()
+                    .body(objectMapper.writeValueAsString(response))
+                    .setHeader("Content-Type", "application/json")
+                    .build());
 
             StepVerifier.create(service.createForwardingRule("john", "john@example.com"))
                     .expectNext("rule-abc")
@@ -82,9 +84,10 @@ class CloudflareEmailRoutingServiceTest {
                     false, null,
                     List.of(new CloudflareEmailRoutingService.CfError(1001, "Invalid zone")),
                     null);
-            mockServer.enqueue(new MockResponse()
-                    .setBody(objectMapper.writeValueAsString(response))
-                    .setHeader("Content-Type", "application/json"));
+            mockServer.enqueue(new MockResponse.Builder()
+                    .body(objectMapper.writeValueAsString(response))
+                    .setHeader("Content-Type", "application/json")
+                    .build());
 
             StepVerifier.create(service.createForwardingRule("john", "john@example.com"))
                     .expectError(RuntimeException.class)
@@ -93,8 +96,8 @@ class CloudflareEmailRoutingServiceTest {
 
         @Test
         @DisplayName("should return empty when network error occurs")
-        void shouldReturnEmptyOnNetworkError() throws IOException {
-            mockServer.shutdown(); // Force connection failure
+        void shouldReturnEmptyOnNetworkError() {
+            mockServer.close(); // Force connection failure
 
             StepVerifier.create(service.createForwardingRule("john", "john@example.com"))
                     .verifyComplete();
@@ -125,9 +128,10 @@ class CloudflareEmailRoutingServiceTest {
         void shouldDeleteRule() throws JsonProcessingException {
             var response = new CloudflareEmailRoutingService.CfRuleResponse(
                     true, null, null, null);
-            mockServer.enqueue(new MockResponse()
-                    .setBody(objectMapper.writeValueAsString(response))
-                    .setHeader("Content-Type", "application/json"));
+            mockServer.enqueue(new MockResponse.Builder()
+                    .body(objectMapper.writeValueAsString(response))
+                    .setHeader("Content-Type", "application/json")
+                    .build());
 
             StepVerifier.create(service.deleteForwardingRule("rule-abc"))
                     .verifyComplete();
