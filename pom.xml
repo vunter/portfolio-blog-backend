@@ -45,6 +45,16 @@
 		<project.build.outputTimestamp>2026-05-12T00:00:00Z</project.build.outputTimestamp>
 		<lombok.version>1.18.42</lombok.version>
 		<jjwt.version>0.13.0</jjwt.version>
+		<!--
+		  PLAYWRIGHT VERSION LOCKSTEP — this version MUST be kept identical in
+		  four places or the PDF sidecar fails its client/server version handshake:
+		    1. this property                      (Java client)
+		    2. Dockerfile                         `npx -y playwright@<v> install`
+		    3. env/prod/playwright/Dockerfile     `FROM mcr.microsoft.com/playwright:v<v>-noble`
+		    4. env/prod/playwright/Dockerfile     `npm install ... playwright@<v>`
+		  Grep for the old version before changing it and update all four together.
+		-->
+		<playwright.version>1.62.0</playwright.version>
 		<testcontainers.version>1.21.3</testcontainers.version>
 		<!-- Spring Cloud Oakwood. 2025.1.1 supports Boot 4.0.x ONLY — the train's
 		     compatibility matrix lists Boot 4.1.x from 2025.1.2 onwards, so moving to
@@ -296,11 +306,12 @@
 			<version>3.3.4</version>
 		</dependency>
 
-		<!-- HTML to PDF Conversion using Playwright (browser-based, perfect CSS support) -->
+		<!-- HTML to PDF Conversion using Playwright (browser-based, perfect CSS support).
+		     Version lives in ${playwright.version} — see the lockstep note in <properties>. -->
 		<dependency>
 			<groupId>com.microsoft.playwright</groupId>
 			<artifactId>playwright</artifactId>
-			<version>1.51.0</version>
+			<version>${playwright.version}</version>
 		</dependency>
 		<!-- JSoup for HTML parsing/cleaning.
 		     1.23.1 closes CVE-2026-71497, which affects 1.14.3-1.23.0: Cleaner can

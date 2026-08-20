@@ -7,13 +7,13 @@
 # The main backend image is built with PLAYWRIGHT_REMOTE=true so it skips the
 # Chromium install and connects here over WebSocket via APP_PDF_BROWSER_WS_ENDPOINT.
 
-FROM mcr.microsoft.com/playwright:v1.51.0-noble
+FROM mcr.microsoft.com/playwright:v1.62.0-noble
 
 WORKDIR /app
 
 # We only need the playwright library + a tiny server script. playwright is
 # already present in the base image, but we pin the version to match the client.
-RUN npm install --omit=dev playwright@1.51.0 \
+RUN npm install --omit=dev playwright@1.62.0 \
     && npm cache clean --force
 
 COPY server.js .

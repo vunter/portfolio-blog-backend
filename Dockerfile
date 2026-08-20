@@ -80,9 +80,12 @@ RUN echo "apt security refresh: ${APT_SECURITY_REFRESH}" \
 
 # Install Playwright's compatible Chromium + all system dependencies
 # Skipped when using remote browser sidecar (PLAYWRIGHT_REMOTE=true)
+# NOTE: this version MUST match <playwright.version> in pom.xml and both
+# playwright@ references in env/prod/playwright/Dockerfile — a mismatch fails
+# the client/server version handshake against the sidecar.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN if [ "$PLAYWRIGHT_REMOTE" = "false" ]; then \
-      npx -y playwright@1.51.0 install --with-deps chromium; \
+      npx -y playwright@1.62.0 install --with-deps chromium; \
     else \
       echo "Skipping Chromium install (PLAYWRIGHT_REMOTE=true — using sidecar)"; \
       mkdir -p /ms-playwright; \
