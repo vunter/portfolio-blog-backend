@@ -49,6 +49,7 @@
 		     only creates a chance for the dependency and the annotation processor to
 		     drift apart. -->
 		<jjwt.version>0.13.0</jjwt.version>
+		<commonmark.version>0.30.0</commonmark.version>
 		<!--
 		  PLAYWRIGHT VERSION LOCKSTEP — this version MUST be kept identical in
 		  four places or the PDF sidecar fails its client/server version handshake:
@@ -281,27 +282,27 @@
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark</artifactId>
-			<version>0.24.0</version>
+			<version>${commonmark.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark-ext-gfm-tables</artifactId>
-			<version>0.24.0</version>
+			<version>${commonmark.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark-ext-autolink</artifactId>
-			<version>0.24.0</version>
+			<version>${commonmark.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark-ext-gfm-strikethrough</artifactId>
-			<version>0.24.0</version>
+			<version>${commonmark.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.commonmark</groupId>
 			<artifactId>commonmark-ext-task-list-items</artifactId>
-			<version>0.24.0</version>
+			<version>${commonmark.version}</version>
 		</dependency>
 
 		<!-- Email (SMTP fallback) -->
