@@ -10,7 +10,10 @@
     <!-- ============================================================
          DEV / LOCAL: human-readable console (default Spring Boot)
          ============================================================ -->
-    <springProfile name="dev,local,e2e">
+    <!-- qa belongs here: it is a real deployed stack (env/qa) but matched no
+         springProfile block, so logback configured no appender for it and a QA
+         run produced no logs at all — including the reason for a failed start. -->
+    <springProfile name="dev,local,e2e,qa">
         <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
         <root level="INFO">
             <appender-ref ref="CONSOLE"/>
