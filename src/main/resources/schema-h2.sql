@@ -54,7 +54,12 @@ CREATE TABLE IF NOT EXISTS articles (
     seo_description VARCHAR(500),
     seo_keywords VARCHAR(500),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- V18: optimistic-locking counter; every ArticleRepository select lists it,
+    -- so its absence made the whole H2 dev profile fail on the blog listing.
+    version BIGINT NOT NULL DEFAULT 0,
+    -- V14: source language of the article, read by the translation overlay
+    original_locale VARCHAR(10) DEFAULT 'en'
 );
 
 -- Tags table
@@ -668,8 +673,24 @@ CREATE TABLE IF NOT EXISTS article_reviews (
     reviewer_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
     status VARCHAR(30) NOT NULL,
     feedback TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- V19: email verification tokens. The table was added to Flyway but never to
+-- this mirror, so the dev profile had no place to store a verification token.
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    token VARCHAR(255) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT FALSE,
+    used_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_token ON email_verification_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_id ON email_verification_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_article_reviews_article ON article_reviews(article_id);
 
 -- ============================================
