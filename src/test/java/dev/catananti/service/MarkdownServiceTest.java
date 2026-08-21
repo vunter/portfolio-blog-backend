@@ -359,4 +359,52 @@ class MarkdownServiceTest {
         assertThat(html).contains("type=\"checkbox\"");
         assertThat(html).contains("checked");
     }
+
+    // ===== Rendering behaviours that changed in commonmark 0.25.0 - 0.30.0 =====
+    // These three cases were NOT covered before the 0.24.0 -> 0.30.0 upgrade, so the
+    // suite went green while the rendered output of published articles actually
+    // changed. Pinned here so any future commonmark bump has to face them explicitly.
+
+    @Test
+    @DisplayName("Bare www. text stays plain — AutolinkType.WWW is deliberately not enabled")
+    void shouldNotAutolinkBareWwwText() {
+        // commonmark 0.27.0 added WWW to AutolinkExtension.create()'s defaults.
+        // MarkdownService opts out to keep already-published articles rendering
+        // the way they did. Flip this test together with that decision.
+        String html = markdownService.renderToHtml("Visit www.example.com for details.");
+
+        assertThat(html).contains("www.example.com");
+        assertThat(html).doesNotContain("<a href=\"http://www.example.com\"");
+    }
+
+    @Test
+    @DisplayName("Explicit http:// URLs and emails still autolink")
+    void shouldStillAutolinkUrlsAndEmails() {
+        assertThat(markdownService.renderToHtml("Visit http://example.com now."))
+                .contains("<a href=\"http://example.com\">");
+        assertThat(markdownService.renderToHtml("Mail bob@example.com please."))
+                .contains("<a href=\"mailto:bob@example.com\">");
+    }
+
+    @Test
+    @DisplayName("A table no longer needs a blank line after a paragraph (commonmark 0.25.0, matches GFM)")
+    void shouldRenderTableWithoutPrecedingBlankLine() {
+        String markdown = "Some intro paragraph\n| A | B |\n| - | - |\n| 1 | 2 |";
+        String html = markdownService.renderToHtml(markdown);
+
+        // Pre-0.25.0 this whole block rendered as one <p>. GitHub renders it as a
+        // table, and commonmark now matches — accepted as a fix, not reverted.
+        assertThat(html).contains("<table>");
+        assertThat(html).contains("<th>A</th>");
+        assertThat(html).contains("<td>1</td>");
+    }
+
+    @Test
+    @DisplayName("Image alt text includes code-span contents (commonmark 0.26.0 fix)")
+    void shouldIncludeCodeSpanTextInImageAlt() {
+        String html = markdownService.renderToHtml("![a `b` c](https://example.com/x.png)");
+
+        // Pre-0.26.0 the code span was dropped, producing alt="a  c".
+        assertThat(html).contains("alt=\"a b c\"");
+    }
 }

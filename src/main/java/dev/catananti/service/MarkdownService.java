@@ -4,6 +4,7 @@ import dev.catananti.util.HtmlUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.commonmark.Extension;
 import org.commonmark.ext.autolink.AutolinkExtension;
+import org.commonmark.ext.autolink.AutolinkType;
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension;
 import org.commonmark.ext.gfm.tables.TablesExtension;
 import org.commonmark.ext.task.list.items.TaskListItemsExtension;
@@ -40,7 +41,15 @@ public class MarkdownService {
         List<Extension> extensions = List.of(
                 TablesExtension.create(),
                 StrikethroughExtension.create(),
-                AutolinkExtension.create(),
+                // commonmark 0.27.0 added AutolinkType.WWW to AutolinkExtension.create()'s
+                // defaults, which silently turns bare "www.example.com" text in ALREADY
+                // PUBLISHED articles into a link. Listing URL + EMAIL explicitly keeps
+                // rendering identical to commonmark 0.24.0 and pre-0.27.0 behaviour.
+                // To opt into GitHub-style bare-www linking, add AutolinkType.WWW here —
+                // that is a deliberate content decision, not a dependency upgrade.
+                AutolinkExtension.builder()
+                        .linkTypes(AutolinkType.URL, AutolinkType.EMAIL)
+                        .build(),
                 TaskListItemsExtension.create()
         );
 
