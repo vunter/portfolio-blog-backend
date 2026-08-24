@@ -127,7 +127,7 @@ jobs:
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache OWASP NVD database
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .dependency-check/data
           key: nvd-data-v12-${{ steps.nvdkey.outputs.week }}
