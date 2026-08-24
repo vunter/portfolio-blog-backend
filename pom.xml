@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.7</version>
+		<version>4.1.1</version>
 		<relativePath/>
 	</parent>
 	<groupId>dev.catananti</groupId>
@@ -46,7 +46,7 @@
 		<lombok.version>1.18.42</lombok.version>
 		<jjwt.version>0.13.0</jjwt.version>
 		<testcontainers.version>1.21.3</testcontainers.version>
-		<spring-cloud.version>2025.1.1</spring-cloud.version>
+		<spring-cloud.version>2025.1.3</spring-cloud.version>
 		<!-- Override Boot-managed pgjdbc (4.0.6 manages 42.7.10, still vulnerable):
 		     42.7.11 fixes CVE-2026-42198 (SCRAM PBKDF2 iteration client-side DoS). -->
 		<postgresql.version>42.7.13</postgresql.version>
@@ -60,7 +60,7 @@
 			<dependency>
 				<groupId>org.springframework</groupId>
 				<artifactId>spring-framework-bom</artifactId>
-				<version>7.0.8</version>
+				<version>7.0.9</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
