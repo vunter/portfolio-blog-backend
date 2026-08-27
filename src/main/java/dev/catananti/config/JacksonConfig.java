@@ -37,13 +37,25 @@ public class JacksonConfig {
             .appendLiteral('Z')
             .toFormatter();
 
+    /**
+     * The date handling above, as a module other mappers can adopt.
+     *
+     * <p>Not every mapper in the system comes from this factory: Spring Data Redis
+     * builds its own inside {@code GenericJackson2JsonRedisSerializer}. Sharing the
+     * module keeps the UTC 'Z' format identical in the cache and on the wire, so a
+     * value read back from Redis is indistinguishable from a freshly built one.</p>
+     */
+    static JavaTimeModule utcJavaTimeModule() {
+        JavaTimeModule javaTimeModule = new JavaTimeModule();
+        javaTimeModule.addSerializer(LocalDateTime.class, new LocalDateTimeSerializer(UTC_INSTANT_FORMAT));
+        return javaTimeModule;
+    }
+
     @Bean
     @Primary
     public ObjectMapper objectMapper() {
         ObjectMapper objectMapper = new ObjectMapper();
-        JavaTimeModule javaTimeModule = new JavaTimeModule();
-        javaTimeModule.addSerializer(LocalDateTime.class, new LocalDateTimeSerializer(UTC_INSTANT_FORMAT));
-        objectMapper.registerModule(javaTimeModule);
+        objectMapper.registerModule(utcJavaTimeModule());
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         return objectMapper;
