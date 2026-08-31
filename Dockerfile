@@ -11,7 +11,7 @@
 # ============================================
 
 # Stage 1: Build with Maven cache
-FROM eclipse-temurin:25-jdk-alpine@sha256:5ecfde8e5ecde5954ea3721155b345ef56c1d579b940c761318ad4c05959a151 AS builder
+FROM eclipse-temurin:25-jdk-alpine@sha256:09349d79941fd53bb3d487b393ca118d8853c08c09193f416fe6a8718df9e732 AS builder
 WORKDIR /app
 
 COPY mvnw .
@@ -54,7 +54,7 @@ RUN wget -q -O /tmp/dd-java-agent.jar \
     echo "${DD_JAVA_AGENT_SHA256}  /tmp/dd-java-agent.jar" | sha256sum -c -
 
 # Stage 2: Runtime (Debian — Playwright's Chromium requires glibc)
-FROM eclipse-temurin:25-jre-noble@sha256:d062925a8ef2d71547b3ef558ee10037b60cf8a325d6b4575c6b0c4e9acabd08 AS runtime
+FROM eclipse-temurin:25-jre-noble@sha256:b4c93a50fc67612798db73d68ca3b0ee4ebdd51736e59cca370e689b9797037e AS runtime
 
 LABEL org.opencontainers.image.title="Portfolio Blog API" \
       org.opencontainers.image.version="2.0.0" \
