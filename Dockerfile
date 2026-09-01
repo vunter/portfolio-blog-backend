@@ -94,8 +94,19 @@ RUN if [ "$PLAYWRIGHT_REMOTE" = "false" ]; then \
 # Datadog APM agent (copied from builder — no curl needed at runtime)
 COPY --from=builder /tmp/dd-java-agent.jar /opt/datadog/dd-java-agent.jar
 
-# Playwright: system Node.js for Playwright driver
-ENV PLAYWRIGHT_NODEJS_PATH=/usr/bin/node
+# Playwright's driver runs on Node, and 1.62.0 refuses anything below 20 —
+# Ubuntu noble's apt tops out at 18.19, so after the version bump the driver
+# died on startup with "Playwright requires Node.js 20 or higher" and every PDF
+# request answered 503. The binary comes from the official image instead;
+# /usr/local/bin precedes /usr/bin on PATH, so npx resolves to it too.
+#
+# The alternative was dropping PLAYWRIGHT_NODEJS_PATH so playwright-java uses
+# the node inside driver-bundle, which is version-matched by construction. That
+# binary is 126 MB and gets extracted to java.io.tmpdir, which here is a 256 MB
+# tmpfs — too tight, and paid in RAM on every start.
+COPY --from=node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e \
+     /usr/local/bin/node /usr/local/bin/node
+ENV PLAYWRIGHT_NODEJS_PATH=/usr/local/bin/node
 # Prevent Playwright Java from re-downloading browsers at runtime
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
