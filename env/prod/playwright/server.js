@@ -11,10 +11,23 @@ const { chromium } = require('playwright');
 const PORT = parseInt(process.env.PLAYWRIGHT_PORT || '3000', 10);
 const WS_PATH = process.env.PLAYWRIGHT_WS_PATH || 'playwright';
 
+// launchServer's host defaults to 'localhost', which resolves to [::1] and
+// accepts connections only from inside this container — the API, reaching us
+// by service name over the compose network, gets ECONNREFUSED and every PDF
+// request fails. 1.51.0 bound broadly and hid this; the 1.62.0 upgrade did not
+// change the default so much as start honouring it.
+//
+// Playwright's own types warn that an explicit address exposes the browser RPC
+// to anything that can reach the port. Port 3000 is exposed but never
+// published (`"3000/tcp": null`), so the blast radius is the compose network,
+// which is exactly who needs to connect.
+const HOST = process.env.PLAYWRIGHT_HOST || '0.0.0.0';
+
 (async () => {
     try {
         const server = await chromium.launchServer({
             headless: true,
+            host: HOST,
             port: PORT,
             wsPath: WS_PATH,
             args: [
