@@ -334,7 +334,7 @@
 		<dependency>
 			<groupId>ognl</groupId>
 			<artifactId>ognl</artifactId>
-			<version>3.3.4</version>
+			<version>3.4.12</version>
 		</dependency>
 
 		<!-- HTML to PDF Conversion using Playwright (browser-based, perfect CSS support).
