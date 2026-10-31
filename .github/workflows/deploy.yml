@@ -28,7 +28,9 @@ env:
   FE_IMAGE: ghcr.io/vunter/portfolio-blog-frontend
   PW_IMAGE: ghcr.io/vunter/portfolio-blog-playwright
   CONFIG_OCI: ghcr.io/vunter/portfolio-blog-config
-  NEXUS_URL: https://vunter.tplinkdns.com/nexus
+  # Home Nexus via Cloudflare tunnel. nexus-api only exposes /nexus/repository and the
+  # search/assets REST API, and Cloudflare Access rejects requests without the CI service token.
+  NEXUS_URL: https://nexus-api.catananti.me/nexus
   CONFIG_REPO: builds
 
 jobs:
@@ -340,17 +342,21 @@ jobs:
 
       - name: Mirror config bundle to Nexus (best-effort)
         continue-on-error: true
+        env:
+          NEXUS_ACCESS_ID: ${{ secrets.NEXUS_ACCESS_CLIENT_ID }}
+          NEXUS_ACCESS_SECRET: ${{ secrets.NEXUS_ACCESS_CLIENT_SECRET }}
         run: |
+          NEXUS_ACCESS=(-H "CF-Access-Client-Id: ${NEXUS_ACCESS_ID}" -H "CF-Access-Client-Secret: ${NEXUS_ACCESS_SECRET}")
           SHA="${{ needs.prepare.outputs.sha }}"
           UPLOAD_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/config/${BUNDLE}"
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
-            -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" "${NEXUS_ACCESS[@]}" \
             --upload-file "$BUNDLE" \
             "$UPLOAD_URL" || echo "000")
           echo "Nexus mirror upload HTTP $HTTP_CODE (non-fatal — GHCR is the source of truth)"
           LATEST_URL="${{ env.NEXUS_URL }}/repository/${{ env.CONFIG_REPO }}/portfolio-blog/config/portfolio-blog-config-latest.tar.gz"
           curl -s -o /dev/null --max-time 60 \
-            -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -u "${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}" "${NEXUS_ACCESS[@]}" \
             --upload-file "$BUNDLE" \
             "$LATEST_URL" || true
 
@@ -390,7 +396,11 @@ jobs:
           ./mvnw clean package -Dmaven.test.skip=true -B -Prelease-jar $MAVEN_SETTINGS
 
       - name: Upload JAR to Nexus
+        env:
+          NEXUS_ACCESS_ID: ${{ secrets.NEXUS_ACCESS_CLIENT_ID }}
+          NEXUS_ACCESS_SECRET: ${{ secrets.NEXUS_ACCESS_CLIENT_SECRET }}
         run: |
+          NEXUS_ACCESS=(-H "CF-Access-Client-Id: ${NEXUS_ACCESS_ID}" -H "CF-Access-Client-Secret: ${NEXUS_ACCESS_SECRET}")
           JAR_FILE=$(ls target/*.jar | grep -v original | head -1)
           TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
           SHA_SHORT="${{ needs.prepare.outputs.sha_short }}"
@@ -403,7 +413,7 @@ jobs:
           upload_with_progress() {
             local URL="$1" LABEL="$2"
             curl -s -o /dev/null -w "%{http_code}" \
-              -u "$NEXUS_AUTH" \
+              -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
               --upload-file "$JAR_FILE" \
               "$URL" > /tmp/upload_code &
             local PID=$!
@@ -451,7 +461,11 @@ jobs:
 
       - name: Cleanup old JARs (keep 5 days)
         continue-on-error: true
+        env:
+          NEXUS_ACCESS_ID: ${{ secrets.NEXUS_ACCESS_CLIENT_ID }}
+          NEXUS_ACCESS_SECRET: ${{ secrets.NEXUS_ACCESS_CLIENT_SECRET }}
         run: |
+          NEXUS_ACCESS=(-H "CF-Access-Client-Id: ${NEXUS_ACCESS_ID}" -H "CF-Access-Client-Secret: ${NEXUS_ACCESS_SECRET}")
           NEXUS_URL="${{ env.NEXUS_URL }}"
           NEXUS_AUTH="${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}"
           CUTOFF=$(date -u -d '5 days ago' +%Y-%m-%dT%H:%M:%S)
@@ -463,10 +477,10 @@ jobs:
           DELETED=0
           while true; do
             if [ -n "$CONTINUATION" ]; then
-              RESPONSE=$(curl -s -u "$NEXUS_AUTH" \
+              RESPONSE=$(curl -s -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
                 "${NEXUS_URL}/service/rest/v1/search/assets?repository=builds&group=/portfolio-blog/jars&continuationToken=${CONTINUATION}")
             else
-              RESPONSE=$(curl -s -u "$NEXUS_AUTH" \
+              RESPONSE=$(curl -s -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
                 "${NEXUS_URL}/service/rest/v1/search/assets?repository=builds&group=/portfolio-blog/jars")
             fi
 
@@ -476,7 +490,7 @@ jobs:
               if [[ "$BLOB_DATE_TRIMMED" < "$CUTOFF" ]]; then
                 echo "Deleting old JAR: $ASSET_ID (created: $BLOB_DATE_TRIMMED)"
                 curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                  -u "$NEXUS_AUTH" \
+                  -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
                   "${NEXUS_URL}/service/rest/v1/assets/${ASSET_ID}"
                 DELETED=$((DELETED + 1))
               fi
@@ -519,7 +533,11 @@ jobs:
           npx ng build --configuration=production
 
       - name: Package & upload to Nexus
+        env:
+          NEXUS_ACCESS_ID: ${{ secrets.NEXUS_ACCESS_CLIENT_ID }}
+          NEXUS_ACCESS_SECRET: ${{ secrets.NEXUS_ACCESS_CLIENT_SECRET }}
         run: |
+          NEXUS_ACCESS=(-H "CF-Access-Client-Id: ${NEXUS_ACCESS_ID}" -H "CF-Access-Client-Secret: ${NEXUS_ACCESS_SECRET}")
           TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
           SHA_SHORT="${{ needs.prepare.outputs.sha_short }}"
           DIST_NAME="portfolio-blog-frontend-${TIMESTAMP}-${SHA_SHORT}.tar.gz"
@@ -533,7 +551,7 @@ jobs:
           upload_with_progress() {
             local URL="$1" LABEL="$2"
             curl -s -o /dev/null -w "%{http_code}" \
-              -u "$NEXUS_AUTH" \
+              -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
               --upload-file "$DIST_FILE" \
               "$URL" > /tmp/upload_code &
             local PID=$!
@@ -581,7 +599,11 @@ jobs:
 
       - name: Cleanup old frontend dists (keep 5 days)
         continue-on-error: true
+        env:
+          NEXUS_ACCESS_ID: ${{ secrets.NEXUS_ACCESS_CLIENT_ID }}
+          NEXUS_ACCESS_SECRET: ${{ secrets.NEXUS_ACCESS_CLIENT_SECRET }}
         run: |
+          NEXUS_ACCESS=(-H "CF-Access-Client-Id: ${NEXUS_ACCESS_ID}" -H "CF-Access-Client-Secret: ${NEXUS_ACCESS_SECRET}")
           NEXUS_URL="${{ env.NEXUS_URL }}"
           NEXUS_AUTH="${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }}"
           CUTOFF=$(date -u -d '5 days ago' +%Y-%m-%dT%H:%M:%S)
@@ -590,10 +612,10 @@ jobs:
           CONTINUATION=""
           while true; do
             if [ -n "$CONTINUATION" ]; then
-              RESPONSE=$(curl -s -u "$NEXUS_AUTH" \
+              RESPONSE=$(curl -s -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
                 "${NEXUS_URL}/service/rest/v1/search/assets?repository=builds&group=/portfolio-blog/frontend&continuationToken=${CONTINUATION}")
             else
-              RESPONSE=$(curl -s -u "$NEXUS_AUTH" \
+              RESPONSE=$(curl -s -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
                 "${NEXUS_URL}/service/rest/v1/search/assets?repository=builds&group=/portfolio-blog/frontend")
             fi
 
@@ -602,7 +624,7 @@ jobs:
               if [[ "$BLOB_DATE_TRIMMED" < "$CUTOFF" ]]; then
                 echo "Deleting old dist: $ASSET_ID (created: $BLOB_DATE_TRIMMED)"
                 curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                  -u "$NEXUS_AUTH" \
+                  -u "$NEXUS_AUTH" "${NEXUS_ACCESS[@]}" \
                   "${NEXUS_URL}/service/rest/v1/assets/${ASSET_ID}"
               fi
             done
@@ -634,11 +656,13 @@ jobs:
           NEXUS_USER: ${{ secrets.NEXUS_USER }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
           NEXUS_URL: ${{ env.NEXUS_URL }}
+          NEXUS_ACCESS_ID: ${{ secrets.NEXUS_ACCESS_CLIENT_ID }}
+          NEXUS_ACCESS_SECRET: ${{ secrets.NEXUS_ACCESS_CLIENT_SECRET }}
         with:
           host: ${{ secrets.DROPLET_IP }}
           username: vunter
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: DEPLOY_SHA,GHCR_TOKEN,NEXUS_USER,NEXUS_PASSWORD,NEXUS_URL
+          envs: DEPLOY_SHA,GHCR_TOKEN,NEXUS_USER,NEXUS_PASSWORD,NEXUS_URL,NEXUS_ACCESS_ID,NEXUS_ACCESS_SECRET
           command_timeout: 10m
           script: |
             set -e
@@ -727,6 +751,8 @@ jobs:
               echo "=== Falling back to Nexus mirror ==="
               HTTP_CODE=$(curl -s -o "$BUNDLE_NAME" -w "%{http_code}" --max-time 60 \
                 -u "${NEXUS_USER}:${NEXUS_PASSWORD}" \
+                -H "CF-Access-Client-Id: ${NEXUS_ACCESS_ID}" \
+                -H "CF-Access-Client-Secret: ${NEXUS_ACCESS_SECRET}" \
                 "$BUNDLE_URL" || echo "000")
               if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
                 echo "Failed to download config from Nexus (HTTP $HTTP_CODE), aborting"

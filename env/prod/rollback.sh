@@ -44,7 +44,16 @@ docker tag "ghcr.io/vunter/portfolio-blog-frontend:${SHA}" portfolio-blog-fronte
 # Try to download a matching config bundle from Nexus. We extract into an
 # isolated staging dir, verify file paths stay within REPO_ROOT (no path
 # traversal), and only then move into place.
-NEXUS_URL="${NEXUS_URL:-https://vunter.tplinkdns.com/nexus}"
+NEXUS_URL="${NEXUS_URL:-https://nexus-api.catananti.me/nexus}"
+# nexus-api sits behind Cloudflare Access: without the service token every request is a 403.
+# Same values as the NEXUS_* secrets of the deploy workflow; unset ones are simply skipped.
+NEXUS_CURL=()
+if [ -n "${NEXUS_USER:-}" ]; then
+    NEXUS_CURL+=(-u "${NEXUS_USER}:${NEXUS_PASSWORD:-}")
+fi
+if [ -n "${NEXUS_ACCESS_ID:-}" ]; then
+    NEXUS_CURL+=(-H "CF-Access-Client-Id: ${NEXUS_ACCESS_ID}" -H "CF-Access-Client-Secret: ${NEXUS_ACCESS_SECRET:-}")
+fi
 BUNDLE_URL="${NEXUS_URL}/repository/builds/portfolio-blog/config/portfolio-blog-config-${SHA}.tar.gz"
 BUNDLE_FILE="$(mktemp -t portfolio-rollback-bundle-XXXXXX.tar.gz)"
 BUNDLE_SIG_FILE="${BUNDLE_FILE}.sig"
@@ -56,14 +65,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-HTTP_CODE=$(curl -s -o "${BUNDLE_FILE}" -w "%{http_code}" "${BUNDLE_URL}" || echo "000")
+HTTP_CODE=$(curl -s "${NEXUS_CURL[@]}" -o "${BUNDLE_FILE}" -w "%{http_code}" "${BUNDLE_URL}" || echo "000")
 if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
     # Bundle signature verification is MANDATORY by default. If it cannot run
     # (COSIGN_PUBLIC_KEY unset), fail loudly instead of silently extracting an
     # unverified bundle — the operator must pass --no-verify to accept the risk.
     if [ -n "${COSIGN_PUBLIC_KEY:-}" ]; then
         SIG_URL="${BUNDLE_URL}.sig"
-        if ! curl -sf -o "${BUNDLE_SIG_FILE}" "${SIG_URL}"; then
+        if ! curl -sf "${NEXUS_CURL[@]}" -o "${BUNDLE_SIG_FILE}" "${SIG_URL}"; then
             echo "Signature ${SIG_URL} not found - refusing to extract unverified bundle"
             exit 1
         fi

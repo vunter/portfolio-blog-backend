@@ -165,7 +165,9 @@ push to main
 |-------------------|----------------------------------|
 | `DROPLET_IP`      | Droplet IP address               |
 | `SSH_PRIVATE_KEY`  | SSH key for `vunter@droplet`    |
-| `NEXUS_HOST`      | Nexus Maven proxy (optional)     |
+| `NEXUS_HOST`      | Nexus Maven proxy (optional, LAN `host:port`; context path `/nexus` is added by `.mvn/nexus-settings.xml`) |
+| `NEXUS_USER` / `NEXUS_PASSWORD` | Nexus account for the `builds` raw repo (JAR, frontend and config archive) |
+| `NEXUS_ACCESS_CLIENT_ID` / `NEXUS_ACCESS_CLIENT_SECRET` | Cloudflare Access service token `github-ci-nexus`; required by `nexus-api.catananti.me` (expires 2027-10-31) |
 | `DOPPLER_TOKEN`   | Doppler service token (backup)   |
 
 ### Deploy Script (SSH step)

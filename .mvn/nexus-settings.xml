@@ -2,7 +2,8 @@
 <!--
   Maven settings for Docker builds.
   Routes all dependency resolution through a Nexus proxy to cache artifacts.
-  The placeholder __NEXUS_HOST__ is replaced at Docker build time via sed.
+  The placeholder __NEXUS_HOST__ (host[:port] on the LAN, e.g. 192.168.1.214:30081) is replaced
+  at Docker build time via sed. Nexus serves under the /nexus context path.
 -->
 <settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -14,7 +15,7 @@
     <mirror>
       <id>nexus</id>
       <name>Nexus Proxy</name>
-      <url>http://__NEXUS_HOST__/repository/maven-public/</url>
+      <url>http://__NEXUS_HOST__/nexus/repository/maven-public/</url>
       <mirrorOf>*</mirrorOf>
     </mirror>
   </mirrors>
@@ -25,7 +26,7 @@
       <repositories>
         <repository>
           <id>central</id>
-          <url>http://__NEXUS_HOST__/repository/maven-public/</url>
+          <url>http://__NEXUS_HOST__/nexus/repository/maven-public/</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>true</enabled></snapshots>
         </repository>
@@ -33,7 +34,7 @@
       <pluginRepositories>
         <pluginRepository>
           <id>central</id>
-          <url>http://__NEXUS_HOST__/repository/maven-public/</url>
+          <url>http://__NEXUS_HOST__/nexus/repository/maven-public/</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>true</enabled></snapshots>
         </pluginRepository>
