@@ -210,7 +210,7 @@ jobs:
       # the image with cosign, which gives downstream consumers a verifiable
       # dependency manifest.
       - name: Generate SBOM (syft)
-        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: portfolio-blog-backend:${{ github.sha }}
           format: 'cyclonedx-json'
